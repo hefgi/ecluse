@@ -19,7 +19,7 @@ Each git worktree gets its own slot — isolated ports, its own services, nothin
 ![Cursor](https://img.shields.io/badge/Cursor-000?style=flat-square)
 ![Codex](https://img.shields.io/badge/Codex-10a37f?style=flat-square)
 ![OpenCode](https://img.shields.io/badge/OpenCode-6366f1?style=flat-square)
-![Pи](https://img.shields.io/badge/Pi-111?style=flat-square)
+![Pi](https://img.shields.io/badge/Pi-111?style=flat-square)
 
 and any agent that can run shell commands.
 
