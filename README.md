@@ -167,6 +167,8 @@ Compared to alternatives:
 
 Issues and PRs are welcome. Check the [open issues](https://github.com/hefgi/ecluse/issues) for ideas — good first issues are tagged. If you're adding a new isolation mode or provider, open an issue first to discuss the approach.
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, how to run tests, and the PR process.
+
 ## License
 
 Apache 2.0. See [LICENSE](LICENSE).

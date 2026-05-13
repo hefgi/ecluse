@@ -1,0 +1,34 @@
+version: "3"
+
+tasks:
+  default:
+    desc: Run fmt, lint, and test
+    deps: [fmt, lint, test]
+
+  build:
+    desc: Build the project
+    cmd: cargo build
+
+  test:
+    desc: Run all tests
+    cmd: cargo test
+
+  test:watch:
+    desc: Re-run tests on file changes (requires cargo-watch)
+    cmd: cargo watch -x test
+
+  lint:
+    desc: Run Clippy with warnings as errors
+    cmd: cargo clippy -- -D warnings
+
+  fmt:
+    desc: Check formatting
+    cmd: cargo fmt --check
+
+  fmt:fix:
+    desc: Auto-format all source files
+    cmd: cargo fmt
+
+  clean:
+    desc: Remove build artifacts
+    cmd: cargo clean
