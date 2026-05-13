@@ -31,7 +31,11 @@ You're running 4 Claude Code sessions in parallel. Each agent finishes its task 
 
 ecluse gives each agent its own slot: isolated ports, its own services, its own infra. All 4 agents spin up, verify, and tear down independently. The full AI verification loop — build, migrate, test, e2e — runs in parallel, without collisions, without waiting.
 
+<div align="center">
+
 **Create worktree → Spin up env → Do work → Verify → PR → Teardown**
+
+</div>
 
 ```bash
 ecluse up feat-foo    # new worktree, isolated ports, isolated services
