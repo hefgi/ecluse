@@ -1,8 +1,14 @@
 # ecluse
 
+[![CI](https://github.com/hefgi/ecluse/actions/workflows/ci.yml/badge.svg)](https://github.com/hefgi/ecluse/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/ecluse.svg)](https://crates.io/crates/ecluse)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+
 **Per-worktree isolation. Pick what you need isolated.**
 
-ecluse (French for "canal lock") gives you a parallel isolated development environment for each git worktree. Like canal lock chambers — each session gets its own slot, and nothing leaks between them.
+You're mid-way through a feature branch. A colleague asks you to review their PR. You switch branches — and now you have to kill your dev server, run migrations, and hope nothing collides on port 3000. Switch back: same pain in reverse.
+
+ecluse fixes this. Each git worktree gets its own isolated slot: unique ports, its own database, its own services. Switch between branches instantly. Run them in parallel. Nothing leaks, nothing collides.
 
 ```bash
 ecluse up feat-foo    # new worktree, isolated ports, isolated database
@@ -10,52 +16,11 @@ ecluse up fix-bar     # parallel session, different slot, zero collisions
 ecluse down feat-foo  # clean teardown, nothing left behind
 ```
 
-## Choosing a mode
-
-ecluse supports three isolation modes. Pick the one that fits your stack:
-
-| Mode | What gets isolated | Best for |
-|---|---|---|
-| `container` | Everything — app and data run in Docker | Fully containerized stacks, devcontainer repos |
-| `host` | Ports and databases — app runs natively | Pure native stacks (`npm run dev`, `bin/rails server`) |
-| `hybrid` | Data services in containers, app on host | Rails/Django/Node apps with a postgres+redis compose file |
-
-`ecluse init` detects the right mode automatically. You confirm before anything is written.
-
-For a full decision guide: `ecluse skills show choosing-a-mode`
-
-## Install
-
-**macOS (Homebrew — recommended):**
-
-```bash
-brew install ecluse/tap/ecluse
-```
-
-**From source:**
-
-```bash
-cargo install --git https://github.com/hefgi/ecluse
-```
-
-Requires Rust 1.85+. For macOS, [OrbStack](https://orbstack.dev) is recommended over Docker Desktop for container and hybrid modes — it's faster and uses less memory.
-
-## Quick start
-
-```bash
-cd my-project
-ecluse init              # detects mode, writes .ecluse.toml
-ecluse up feat-foo       # creates worktree + slot
-cd .ecluse/worktrees/feat-foo
-source .env.ecluse       # loads PORT, DATABASE_URL, etc.
-npm run dev              # or bin/dev, bin/rails server, etc.
-```
-
-That's it. Your app runs on a unique port. If database isolation is configured, it has its own database. Other sessions run in parallel without touching yours.
+ecluse (French for "canal lock") treats each session like a lock chamber — everything gets its own slot, and nothing leaks between them.
 
 ## For coding agents
 
-ecluse is designed as a first-class tool for coding agents running tasks in parallel.
+ecluse is built as a first-class tool for coding agents running tasks in parallel. Each agent gets an isolated environment — same codebase, different worktree, zero port or database collisions.
 
 Canonical agent loop:
 
@@ -78,13 +43,54 @@ The `.env.ecluse` file in every worktree contains everything the agent needs:
 | `DATABASE_URL` | Postgres connection string |
 | `REDIS_URL` | Redis connection string (if redis present) |
 
-## Agent harness integration
-
-Install the ecluse skill into your coding agent:
+Install the ecluse skill into your coding agent harness:
 
 ```bash
 npx skills add hefgi/ecluse -y
 ```
+
+## Choosing a mode
+
+ecluse supports three isolation modes. Pick the one that fits your stack:
+
+| Mode | What gets isolated | Best for |
+|---|---|---|
+| `container` | Everything — app and data run in Docker | Fully containerized stacks, devcontainer repos |
+| `host` | Ports and databases — app runs natively | Pure native stacks (`npm run dev`, `bin/rails server`) |
+| `hybrid` | Data services in containers, app on host | Rails/Django/Node apps with a postgres+redis compose file |
+
+`ecluse init` detects the right mode automatically. You confirm before anything is written.
+
+For a full decision guide: `npx skills add hefgi/ecluse -y`
+
+## Install
+
+**macOS (Homebrew — recommended):**
+
+```bash
+brew install hefgi/tap/ecluse
+```
+
+**From source:**
+
+```bash
+cargo install --git https://github.com/hefgi/ecluse
+```
+
+Requires Rust 1.85+. For macOS, [OrbStack](https://orbstack.dev) is recommended over Docker Desktop for container and hybrid modes — it's faster and uses less memory.
+
+## Quick start
+
+```bash
+cd my-project
+ecluse init              # detects mode, writes .ecluse.toml
+ecluse up feat-foo       # creates worktree + slot
+cd .ecluse/worktrees/feat-foo
+source .env.ecluse       # loads PORT, DATABASE_URL, etc.
+npm run dev              # or bin/dev, bin/rails server, etc.
+```
+
+Your app runs on a unique port. If database isolation is configured, it has its own database. Other sessions run in parallel without touching yours.
 
 ## How it works
 
@@ -155,6 +161,10 @@ ecluse is not "Docker for worktrees" — container mode is just one option. It's
 Compared to alternatives:
 - **[branchbox](https://github.com/branchbox/branchbox):** container-only, devcontainer-focused. ecluse supports host and hybrid modes that branchbox doesn't treat as first-class.
 - **[Sub-Xaero/wtenv](https://github.com/Sub-Xaero/wtenv):** macOS-only, DNS/HTTPS focus. ecluse is cross-platform and uses `localhost:<port>` — simpler, more portable.
+
+## Contributing
+
+Issues and PRs are welcome. Check the [open issues](https://github.com/hefgi/ecluse/issues) for ideas — good first issues are tagged. If you're adding a new isolation mode or provider, open an issue first to discuss the approach.
 
 ## License
 

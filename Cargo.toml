@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Per-worktree isolation. Pick what you need isolated."
 license = "Apache-2.0"
+homepage = "https://github.com/hefgi/ecluse"
+repository = "https://github.com/hefgi/ecluse"
+keywords = ["worktree", "isolation", "docker", "cli", "devtools"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "ecluse"
