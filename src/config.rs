@@ -251,4 +251,103 @@ on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_DATABASE'"
         assert_eq!(loaded.stride, 200);
         assert_eq!(loaded.prefix, "test");
     }
+
+    #[test]
+    fn config_invalid_toml_returns_error() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = invalid_value_not_quoted\n");
+        assert!(Config::load(dir.path()).is_err());
+    }
+
+    #[test]
+    fn config_invalid_mode_value_returns_error() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"unknown\"\n");
+        assert!(Config::load(dir.path()).is_err());
+    }
+
+    #[test]
+    fn config_ports_load_from_toml() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            r#"
+mode = "host"
+[ports]
+api = 0
+worker = 1
+frontend = 2
+"#,
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.ports.len(), 3);
+        assert_eq!(config.ports["api"], 0);
+        assert_eq!(config.ports["worker"], 1);
+        assert_eq!(config.ports["frontend"], 2);
+    }
+
+    #[test]
+    fn hook_is_empty_both_none() {
+        let h = HookConfig::default();
+        assert!(h.is_empty());
+    }
+
+    #[test]
+    fn hook_is_not_empty_when_on_up_set() {
+        let h = HookConfig {
+            on_up: Some("echo hi".into()),
+            on_down: None,
+        };
+        assert!(!h.is_empty());
+    }
+
+    #[test]
+    fn hook_is_not_empty_when_on_down_set() {
+        let h = HookConfig {
+            on_up: None,
+            on_down: Some("echo bye".into()),
+        };
+        assert!(!h.is_empty());
+    }
+
+    #[test]
+    fn config_container_mode_display() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"container\"\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.mode.to_string(), "container");
+    }
+
+    #[test]
+    fn config_default_worktree_dir() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.worktree_dir, ".ecluse/worktrees");
+    }
+
+    #[test]
+    fn config_default_app_label_and_value() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.app_label, "ecluse.role");
+        assert_eq!(config.app_label_value, "app");
+    }
+
+    #[test]
+    fn mode_from_str_case_sensitive() {
+        assert!("Container".parse::<Mode>().is_err());
+        assert!("HOST".parse::<Mode>().is_err());
+        assert!("Hybrid".parse::<Mode>().is_err());
+    }
+
+    #[test]
+    fn find_and_load_errors_without_config() {
+        // Can only test when current dir has no .ecluse.toml traversal up
+        // Use a temp dir as the cwd substitute — we test via Config::load directly
+        let dir = TempDir::new().unwrap();
+        let result = Config::load(dir.path());
+        assert!(result.is_err());
+    }
 }

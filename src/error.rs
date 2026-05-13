@@ -1,3 +1,115 @@
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slug_invalid_message_contains_slug() {
+        let e = EcluseError::SlugInvalid("BAD_SLUG!".into());
+        assert!(e.to_string().contains("BAD_SLUG!"));
+    }
+
+    #[test]
+    fn slots_exhausted_message_contains_count() {
+        let e = EcluseError::SlotsExhausted(8);
+        assert!(e.to_string().contains("8"));
+    }
+
+    #[test]
+    fn session_exists_message_contains_slug() {
+        let e = EcluseError::SessionExists("my-feat".into());
+        assert!(e.to_string().contains("my-feat"));
+    }
+
+    #[test]
+    fn session_not_found_message_contains_slug() {
+        let e = EcluseError::SessionNotFound("ghost".into());
+        assert!(e.to_string().contains("ghost"));
+    }
+
+    #[test]
+    fn lock_timeout_message() {
+        let e = EcluseError::LockTimeout;
+        assert!(e.to_string().contains("10s"));
+    }
+
+    #[test]
+    fn state_corrupt_message_contains_detail() {
+        let e = EcluseError::StateCorrupt("unexpected EOF".into());
+        assert!(e.to_string().contains("unexpected EOF"));
+    }
+
+    #[test]
+    fn config_missing_message_suggests_init() {
+        let e = EcluseError::ConfigMissing;
+        assert!(e.to_string().contains("ecluse init"));
+    }
+
+    #[test]
+    fn config_invalid_message_contains_detail() {
+        let e = EcluseError::ConfigInvalid("bad field".into());
+        assert!(e.to_string().contains("bad field"));
+    }
+
+    #[test]
+    fn compose_file_not_found_message_contains_path() {
+        let e = EcluseError::ComposeFileNotFound("/some/path".into());
+        assert!(e.to_string().contains("/some/path"));
+    }
+
+    #[test]
+    fn compose_parse_failed_message_contains_path() {
+        let e = EcluseError::ComposeParseFailed("/other/path".into());
+        assert!(e.to_string().contains("/other/path"));
+    }
+
+    #[test]
+    fn docker_failed_message_contains_stderr() {
+        let e = EcluseError::DockerFailed {
+            stderr: "connection refused".into(),
+        };
+        assert!(e.to_string().contains("connection refused"));
+    }
+
+    #[test]
+    fn port_in_use_message_contains_port_and_pid() {
+        let e = EcluseError::PortInUse { port: 3100, pid: 42 };
+        let msg = e.to_string();
+        assert!(msg.contains("3100"));
+        assert!(msg.contains("42"));
+    }
+
+    #[test]
+    fn app_label_missing_message() {
+        let e = EcluseError::AppLabelMissing;
+        assert!(e.to_string().contains("ecluse.role=app"));
+    }
+
+    #[test]
+    fn hook_failed_message_contains_cmd_and_code() {
+        let e = EcluseError::HookFailed {
+            cmd: "npm install".into(),
+            code: 1,
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("npm install"));
+        assert!(msg.contains('1'));
+    }
+
+    #[test]
+    fn not_a_git_repo_message() {
+        let e = EcluseError::NotAGitRepo;
+        assert!(e.to_string().contains("git"));
+    }
+
+    #[test]
+    fn mode_invalid_message_contains_mode_and_valid_list() {
+        let e = EcluseError::ModeInvalid("garbage".into());
+        let msg = e.to_string();
+        assert!(msg.contains("garbage"));
+        assert!(msg.contains("valid:"));
+    }
+}
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]
