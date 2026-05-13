@@ -8,42 +8,42 @@ pub const ALL_SKILLS: &[Skill] = &[
     Skill {
         name: "getting-started",
         description: "Install, init, the three commands. Five-minute on-ramp.",
-        content: include_str!("skills/getting-started.md"),
+        content: include_str!("../skills/ecluse/getting-started/SKILL.md"),
     },
     Skill {
         name: "choosing-a-mode",
         description: "Decision guide: container, host, or hybrid. Signal table.",
-        content: include_str!("skills/choosing-a-mode.md"),
+        content: include_str!("../skills/ecluse/choosing-a-mode/SKILL.md"),
     },
     Skill {
         name: "agent-workflow",
         description: "Canonical loop for coding agents using ecluse.",
-        content: include_str!("skills/agent-workflow.md"),
+        content: include_str!("../skills/ecluse/agent-workflow/SKILL.md"),
     },
     Skill {
         name: "container-mode",
         description: "Full-stack containerized sessions. Port offsets and volume namespacing.",
-        content: include_str!("skills/container-mode.md"),
+        content: include_str!("../skills/ecluse/container-mode/SKILL.md"),
     },
     Skill {
         name: "host-mode",
         description: "Native dev stack with database provisioning. No Docker required.",
-        content: include_str!("skills/host-mode.md"),
+        content: include_str!("../skills/ecluse/host-mode/SKILL.md"),
     },
     Skill {
         name: "hybrid-mode",
         description: "Data in containers, app on host. The ecluse.role label.",
-        content: include_str!("skills/hybrid-mode.md"),
+        content: include_str!("../skills/ecluse/hybrid-mode/SKILL.md"),
     },
     Skill {
         name: "troubleshooting",
         description: "Port in use, Docker down, stale state, Postgres unreachable, and more.",
-        content: include_str!("skills/troubleshooting.md"),
+        content: include_str!("../skills/ecluse/troubleshooting/SKILL.md"),
     },
     Skill {
         name: "limits",
         description: "What ecluse intentionally does not do in v0.",
-        content: include_str!("skills/limits.md"),
+        content: include_str!("../skills/ecluse/limits/SKILL.md"),
     },
 ];
 

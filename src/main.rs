@@ -365,9 +365,10 @@ fn cmd_skills(args: cli::SkillsArgs) -> Result<()> {
         Some(cli::SkillsCommand::Install) => {
             let (_, root) = config::Config::find_and_load()?;
             let skills_dir = root.join(".ecluse").join("skills");
-            std::fs::create_dir_all(&skills_dir)?;
             for skill in skills::ALL_SKILLS {
-                let path = skills_dir.join(format!("{}.md", skill.name));
+                let skill_dir = skills_dir.join(skill.name);
+                std::fs::create_dir_all(&skill_dir)?;
+                let path = skill_dir.join("SKILL.md");
                 std::fs::write(&path, skill.content)?;
                 println!("Wrote {}", path.display());
             }
