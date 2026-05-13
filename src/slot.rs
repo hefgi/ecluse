@@ -9,17 +9,15 @@ mod tests {
     use crate::config::{Config, HookConfig, Mode};
     use crate::state::{Session, State};
 
-    fn make_config(max_slots: u8, stride: u16) -> Config {
+    fn make_config(max_slots: u8) -> Config {
         Config {
             mode: Mode::Host,
             max_slots,
-            base_port: 3000,
-            stride,
             prefix: "ecluse".into(),
             worktree_dir: ".ecluse/worktrees".into(),
             app_label: "ecluse.role".into(),
             app_label_value: "app".into(),
-            ports: Default::default(),
+            services: vec![],
             hooks: HookConfig::default(),
         }
     }
@@ -33,7 +31,6 @@ mod tests {
                     slug: format!("sess-{}", slot),
                     mode: Mode::Host,
                     slot,
-                    offset: slot as u16 * 100,
                     branch: format!("branch-{}", slot),
                     worktree_path: format!("/tmp/wt-{}", slot),
                     compose_project: None,
@@ -47,7 +44,7 @@ mod tests {
 
     #[test]
     fn allocates_first_slot_when_empty() {
-        let config = make_config(8, 100);
+        let config = make_config(8);
         let state = make_state(&[]);
         let allocator = SlotAllocator::new(&config, &state);
         assert_eq!(allocator.allocate_next().unwrap(), 1);
@@ -55,7 +52,7 @@ mod tests {
 
     #[test]
     fn allocates_next_free_slot() {
-        let config = make_config(8, 100);
+        let config = make_config(8);
         let state = make_state(&[1, 2, 4]);
         let allocator = SlotAllocator::new(&config, &state);
         assert_eq!(allocator.allocate_next().unwrap(), 3);
@@ -63,7 +60,7 @@ mod tests {
 
     #[test]
     fn fails_when_all_slots_full() {
-        let config = make_config(3, 100);
+        let config = make_config(3);
         let state = make_state(&[1, 2, 3]);
         let allocator = SlotAllocator::new(&config, &state);
         let err = allocator.allocate_next().unwrap_err();
@@ -71,27 +68,8 @@ mod tests {
     }
 
     #[test]
-    fn offset_is_slot_times_stride() {
-        let config = make_config(8, 100);
-        let state = make_state(&[]);
-        let allocator = SlotAllocator::new(&config, &state);
-        assert_eq!(allocator.offset(1), 100);
-        assert_eq!(allocator.offset(3), 300);
-        assert_eq!(allocator.offset(8), 800);
-    }
-
-    #[test]
-    fn offset_respects_custom_stride() {
-        let config = make_config(8, 50);
-        let state = make_state(&[]);
-        let allocator = SlotAllocator::new(&config, &state);
-        assert_eq!(allocator.offset(2), 100);
-        assert_eq!(allocator.offset(5), 250);
-    }
-
-    #[test]
     fn allocates_slot_1_after_slots_2_and_3_used() {
-        let config = make_config(8, 100);
+        let config = make_config(8);
         let state = make_state(&[2, 3]);
         let allocator = SlotAllocator::new(&config, &state);
         assert_eq!(allocator.allocate_next().unwrap(), 1);
@@ -99,7 +77,7 @@ mod tests {
 
     #[test]
     fn allocates_last_slot_when_all_before_used() {
-        let config = make_config(4, 100);
+        let config = make_config(4);
         let state = make_state(&[1, 2, 3]);
         let allocator = SlotAllocator::new(&config, &state);
         assert_eq!(allocator.allocate_next().unwrap(), 4);
@@ -107,7 +85,7 @@ mod tests {
 
     #[test]
     fn exhausted_error_message_contains_max_slots() {
-        let config = make_config(2, 100);
+        let config = make_config(2);
         let state = make_state(&[1, 2]);
         let allocator = SlotAllocator::new(&config, &state);
         let err = allocator.allocate_next().unwrap_err();
@@ -120,7 +98,7 @@ mod tests {
 
     #[test]
     fn max_slots_one_allocates_correctly() {
-        let config = make_config(1, 100);
+        let config = make_config(1);
         let state = make_state(&[]);
         let allocator = SlotAllocator::new(&config, &state);
         assert_eq!(allocator.allocate_next().unwrap(), 1);
@@ -128,26 +106,10 @@ mod tests {
 
     #[test]
     fn max_slots_one_exhausted_after_one_session() {
-        let config = make_config(1, 100);
+        let config = make_config(1);
         let state = make_state(&[1]);
         let allocator = SlotAllocator::new(&config, &state);
         assert!(allocator.allocate_next().is_err());
-    }
-
-    #[test]
-    fn offset_zero_stride() {
-        let config = make_config(8, 0);
-        let state = make_state(&[]);
-        let allocator = SlotAllocator::new(&config, &state);
-        assert_eq!(allocator.offset(5), 0);
-    }
-
-    #[test]
-    fn offset_slot_zero() {
-        let config = make_config(8, 100);
-        let state = make_state(&[]);
-        let allocator = SlotAllocator::new(&config, &state);
-        assert_eq!(allocator.offset(0), 0);
     }
 }
 
@@ -169,9 +131,5 @@ impl<'a> SlotAllocator<'a> {
             }
         }
         Err(crate::error::EcluseError::SlotsExhausted(self.config.max_slots).into())
-    }
-
-    pub fn offset(&self, slot: u8) -> u16 {
-        slot as u16 * self.config.stride
     }
 }

@@ -33,7 +33,6 @@ pub struct Session {
     pub slug: String,
     pub mode: Mode,
     pub slot: u8,
-    pub offset: u16,
     pub branch: String,
     pub worktree_path: String,
     pub compose_project: Option<String>,
@@ -137,7 +136,6 @@ mod tests {
             slug: slug.to_string(),
             mode: Mode::Host,
             slot,
-            offset: slot as u16 * 100,
             branch: format!("branch/{}", slug),
             worktree_path: format!("/tmp/{}", slug),
             compose_project: None,
@@ -280,7 +278,10 @@ mod tests {
         guard.commit().unwrap();
 
         let tmp = dir.path().join(".ecluse").join("state.json.tmp");
-        assert!(!tmp.exists(), ".json.tmp should be removed after atomic rename");
+        assert!(
+            !tmp.exists(),
+            ".json.tmp should be removed after atomic rename"
+        );
     }
 
     #[test]
@@ -306,12 +307,11 @@ mod tests {
                 slug: "compose-sess".into(),
                 mode: Mode::Container,
                 slot: 1,
-                offset: 100,
                 branch: "branch/compose-sess".into(),
                 worktree_path: "/tmp/wt".into(),
                 compose_project: Some("ecluse_compose-sess".into()),
                 overlay_file: Some("/tmp/overlay.yml".into()),
-                app_port: Some(3100),
+                app_port: Some(3001),
                 started_at: "2026-01-01T00:00:00Z".into(),
             });
             guard.commit().unwrap();
@@ -319,6 +319,6 @@ mod tests {
         let guard2 = StateGuard::acquire(dir.path()).unwrap();
         let s = &guard2.state.sessions[0];
         assert_eq!(s.compose_project.as_deref(), Some("ecluse_compose-sess"));
-        assert_eq!(s.app_port, Some(3100));
+        assert_eq!(s.app_port, Some(3001));
     }
 }
