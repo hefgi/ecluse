@@ -4,7 +4,7 @@
 
 **Per-worktree isolation. Pick what you need isolated.**
 
-Each git worktree gets its own slot — isolated ports, its own database, its own infra.
+Each git worktree gets its own slot — isolated ports, its own services, nothing shared.
 
 [![CI](https://github.com/hefgi/ecluse/actions/workflows/ci.yml/badge.svg)](https://github.com/hefgi/ecluse/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/ecluse.svg)](https://crates.io/crates/ecluse)
@@ -29,10 +29,10 @@ and any agent that can run shell commands.
 
 You're running 4 Claude Code sessions in parallel. Each agent finishes its task and wants to verify — run the test suite, spin up the app, hit the endpoints. But port 3000 is taken. Agent 2 kills agent 1's server. Agent 3 waits. The verification loop that was supposed to run in parallel is now sequential. You're paying for 4 agents and getting the throughput of one.
 
-ecluse gives each agent its own slot: isolated ports, its own database, its own infra. All 4 agents spin up, verify, and tear down independently. The full AI verification loop — build, migrate, test, e2e — runs in parallel, without collisions, without waiting.
+ecluse gives each agent its own slot: isolated ports, its own services, its own infra. All 4 agents spin up, verify, and tear down independently. The full AI verification loop — build, migrate, test, e2e — runs in parallel, without collisions, without waiting.
 
 ```bash
-ecluse up feat-foo    # new worktree, isolated ports, isolated database
+ecluse up feat-foo    # new worktree, isolated ports, isolated services
 ecluse up fix-bar     # parallel session, different slot, zero collisions
 ecluse down feat-foo  # clean teardown, nothing left behind
 ```
@@ -108,7 +108,7 @@ The `.env.ecluse` file in every worktree contains everything the agent needs:
 | `ECLUSE_OFFSET` | Port offset (`slot × stride`) |
 | `ECLUSE_MODE` | Active mode |
 | `PORT` | App port (host and hybrid modes) |
-| `DATABASE_URL` | Postgres connection string |
+| `DATABASE_URL` | Database connection string (set when compose has a postgres/pg service) |
 | `REDIS_URL` | Redis connection string (if redis present) |
 
 ## Choosing a mode
