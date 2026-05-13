@@ -7,9 +7,9 @@
 
 **Per-worktree isolation. Pick what you need isolated.**
 
-You're mid-way through a feature branch. A colleague asks you to review their PR. You switch branches — and now you have to kill your dev server, run migrations, and hope nothing collides on port 3000. Switch back: same pain in reverse.
+You're running 4 Claude Code sessions in parallel. Each agent finishes its task and wants to verify — run the test suite, spin up the app, hit the endpoints. But port 3000 is taken. Agent 2 kills agent 1's server. Agent 3 waits. The verification loop that was supposed to run in parallel is now sequential. You're paying for 4 agents and getting the throughput of one.
 
-ecluse fixes this. Each git worktree gets its own isolated slot: unique ports, its own database, its own services. Switch between branches instantly. Run them in parallel. Nothing leaks, nothing collides.
+ecluse gives each agent its own slot: isolated ports, its own database, its own infra. All 4 agents spin up, verify, and tear down independently. The full AI verification loop — build, migrate, test, e2e — runs in parallel, without collisions, without waiting.
 
 ```bash
 ecluse up feat-foo    # new worktree, isolated ports, isolated database
@@ -17,7 +17,7 @@ ecluse up fix-bar     # parallel session, different slot, zero collisions
 ecluse down feat-foo  # clean teardown, nothing left behind
 ```
 
-ecluse (French for "canal lock") treats each session like a lock chamber — everything gets its own slot, and nothing leaks between them.
+> ecluse is French for "canal lock" — each session gets its own chamber, everything is isolated, nothing leaks between them.
 
 ## For coding agents
 
