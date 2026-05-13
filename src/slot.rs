@@ -39,6 +39,7 @@ mod tests {
                     overlay_file: None,
                     app_port: None,
                     started_at: "2026-01-01T00:00:00Z".into(),
+                    port_overrides: std::collections::HashMap::new(),
                 })
                 .collect(),
         }

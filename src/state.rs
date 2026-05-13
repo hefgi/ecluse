@@ -39,6 +39,10 @@ pub struct Session {
     pub overlay_file: Option<String>,
     pub app_port: Option<u16>,
     pub started_at: String,
+    /// Actual allocated ports (may differ from nominal if auto-bump kicked in).
+    /// Stored so `ecluse env` always reflects what was really assigned.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub port_overrides: std::collections::HashMap<String, u16>,
 }
 
 impl State {
@@ -142,6 +146,7 @@ mod tests {
             overlay_file: None,
             app_port: None,
             started_at: "2026-01-01T00:00:00Z".into(),
+            port_overrides: std::collections::HashMap::new(),
         }
     }
 
@@ -313,6 +318,7 @@ mod tests {
                 overlay_file: Some("/tmp/overlay.yml".into()),
                 app_port: Some(3001),
                 started_at: "2026-01-01T00:00:00Z".into(),
+                port_overrides: std::collections::HashMap::new(),
             });
             guard.commit().unwrap();
         }
