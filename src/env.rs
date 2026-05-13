@@ -184,6 +184,99 @@ mod tests {
         sorted.sort();
         assert_eq!(lines, sorted);
     }
+
+    #[test]
+    fn effective_named_ports_empty_config_falls_back_to_app() {
+        let cfg: IndexMap<String, u8> = IndexMap::new();
+        let ports = super::effective_named_ports(&cfg, 3000, 100);
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports["app"], 3100);
+    }
+
+    #[test]
+    fn effective_named_ports_with_config_uses_config() {
+        let mut cfg: IndexMap<String, u8> = IndexMap::new();
+        cfg.insert("api".into(), 0);
+        cfg.insert("worker".into(), 1);
+        let ports = super::effective_named_ports(&cfg, 3000, 200);
+        assert_eq!(ports["api"], 3200);
+        assert_eq!(ports["worker"], 3201);
+        assert!(!ports.contains_key("app"));
+    }
+
+    #[test]
+    fn resolve_named_ports_zero_offset() {
+        let mut cfg: IndexMap<String, u8> = IndexMap::new();
+        cfg.insert("api".into(), 0);
+        let resolved = super::resolve_named_ports(&cfg, 3000, 0);
+        assert_eq!(resolved["api"], 3000);
+    }
+
+    #[test]
+    fn resolve_named_ports_index_stacks() {
+        let mut cfg: IndexMap<String, u8> = IndexMap::new();
+        cfg.insert("a".into(), 0);
+        cfg.insert("b".into(), 5);
+        let resolved = super::resolve_named_ports(&cfg, 3000, 100);
+        assert_eq!(resolved["a"], 3100);
+        assert_eq!(resolved["b"], 3105);
+    }
+
+    #[test]
+    fn service_env_key_mixed_separators() {
+        // Test via data_services path in build_env
+        let env = build_env(
+            1,
+            "s",
+            0,
+            "hybrid",
+            &IndexMap::new(),
+            &[("my-db.local".into(), 5432)],
+        );
+        assert_eq!(env["ECLUSE_MY_DB_LOCAL_PORT"], "5432");
+    }
+
+    #[test]
+    fn build_env_multiple_named_ports_port_alias_is_first() {
+        let mut np: IndexMap<String, u16> = IndexMap::new();
+        np.insert("api".into(), 3100);
+        np.insert("worker".into(), 3101);
+        np.insert("frontend".into(), 3102);
+        let env = build_env(1, "s", 100, "host", &np, &[]);
+        // PORT should be set to first entry only
+        assert_eq!(env["PORT"], "3100");
+    }
+
+    #[test]
+    fn build_env_slot_zero_and_empty_slug() {
+        let env = build_env(0, "", 0, "host", &IndexMap::new(), &[]);
+        assert_eq!(env["ECLUSE_SLOT"], "0");
+        assert_eq!(env["ECLUSE_SLUG"], "");
+        assert_eq!(env["ECLUSE_OFFSET"], "0");
+    }
+
+    #[test]
+    fn write_env_file_overwrites_existing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Write first
+        let env1 = build_env(1, "a", 100, "host", &IndexMap::new(), &[]);
+        write_env_file(dir.path(), &env1).unwrap();
+        // Write second (different slug)
+        let env2 = build_env(2, "b", 200, "container", &IndexMap::new(), &[]);
+        write_env_file(dir.path(), &env2).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".env.ecluse")).unwrap();
+        assert!(content.contains("ECLUSE_SLUG=b"));
+        assert!(!content.contains("ECLUSE_SLUG=a"));
+    }
+
+    #[test]
+    fn write_env_file_ends_with_newline() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let env = build_env(1, "x", 100, "host", &IndexMap::new(), &[]);
+        write_env_file(dir.path(), &env).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(".env.ecluse")).unwrap();
+        assert!(content.ends_with('\n'));
+    }
 }
 
 pub fn write_env_file(worktree: &Path, env: &HashMap<String, String>) -> Result<()> {
