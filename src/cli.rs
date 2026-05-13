@@ -27,6 +27,8 @@ pub enum Command {
     Ls(LsArgs),
     /// Open a shell inside a session's worktree with its env loaded
     Shell(ShellArgs),
+    /// Print a session's environment variables (worktree path + all env vars)
+    Env(EnvArgs),
 }
 
 #[derive(Args)]
@@ -72,6 +74,10 @@ pub struct UpArgs {
     /// Enable compose watch mode
     #[arg(long)]
     pub watch: bool,
+
+    /// Output session info as JSON (useful for agents)
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
@@ -82,10 +88,6 @@ pub struct DownArgs {
     /// Keep named volumes (do not pass -v to docker compose down)
     #[arg(long)]
     pub keep_volumes: bool,
-
-    /// Keep the provisioned database (do not DROP DATABASE)
-    #[arg(long)]
-    pub keep_database: bool,
 
     /// Keep the git branch after tearing down the worktree (no-op in v0; branches are never deleted)
     #[arg(long)]
@@ -102,5 +104,11 @@ pub struct LsArgs {
 #[derive(Args)]
 pub struct ShellArgs {
     /// Session slug to enter
+    pub slug: String,
+}
+
+#[derive(Args)]
+pub struct EnvArgs {
+    /// Session slug
     pub slug: String,
 }

@@ -5,8 +5,8 @@ mod detect;
 mod docker;
 mod env;
 mod error;
+mod hooks;
 mod modes;
-mod postgres;
 mod slot;
 mod state;
 mod worktree;
@@ -40,6 +40,7 @@ fn run(cli: cli::Cli) -> Result<()> {
         cli::Command::Down(args) => cmd_down(args),
         cli::Command::Ls(args) => cmd_ls(args),
         cli::Command::Shell(args) => cmd_shell(args),
+        cli::Command::Env(args) => cmd_env(args),
     }
 }
 
@@ -115,7 +116,7 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         worktree_dir: ".ecluse/worktrees".into(),
         app_label: "ecluse.role".into(),
         app_label_value: "app".into(),
-        database: config::DatabaseConfig::default(),
+        hooks: config::HookConfig::default(),
     };
     cfg.save(&cwd)?;
 
@@ -217,7 +218,11 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         &args.slug, slot, offset, &branch, &config, &root, args.watch,
     )?;
 
-    print_up_summary(&session, &config);
+    if args.json {
+        print_up_json(&session, &root)?;
+    } else {
+        print_up_summary(&session, &config);
+    }
 
     guard.state.add_session(session);
     guard.commit()?;
@@ -246,16 +251,36 @@ fn print_up_summary(session: &state::Session, _config: &config::Config) {
             if let Some(port) = session.app_port {
                 println!("App port:   {}", port);
             }
-            if let Some(db) = &session.database_name {
-                println!("Database:   {}", db);
-            }
             println!();
             println!("Next step:");
-            println!("  cd {} && source .env.ecluse", session.worktree_path);
+            println!("  ecluse shell {}", session.slug);
             println!("  <your dev command>  # e.g. npm run dev, bin/dev, bin/rails server");
         }
     }
     println!();
+}
+
+fn print_up_json(session: &state::Session, _root: &std::path::Path) -> Result<()> {
+    let env_file = std::path::Path::new(&session.worktree_path).join(".env.ecluse");
+    let mut env_vars: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+    if env_file.exists() {
+        for line in std::fs::read_to_string(&env_file)?.lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                env_vars.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+            }
+        }
+    }
+    let out = serde_json::json!({
+        "slug": session.slug,
+        "slot": session.slot,
+        "mode": session.mode.to_string(),
+        "branch": session.branch,
+        "worktree_path": session.worktree_path,
+        "env_file": env_file.display().to_string(),
+        "env": env_vars,
+    });
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
 }
 
 // ── down ──────────────────────────────────────────────────────────────────────
@@ -271,19 +296,12 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         .clone();
 
     let handler = modes::get_handler(&config);
-    handler.bring_down(
-        &session,
-        &config,
-        &root,
-        args.keep_volumes,
-        args.keep_database,
-    )?;
+    handler.bring_down(&session, &config, &root, args.keep_volumes)?;
 
     guard.state.remove_session(&args.slug);
     guard.commit()?;
 
     if args.keep_branch {
-        // v0: branches are never deleted anyway; flag noted for future use
         tracing::debug!(
             "--keep-branch is a no-op in v0; branch '{}' is kept",
             session.branch
@@ -306,8 +324,6 @@ struct SessionRow {
     slot: u8,
     #[tabled(rename = "PORT")]
     port: String,
-    #[tabled(rename = "DATABASE")]
-    database: String,
     #[tabled(rename = "BRANCH")]
     branch: String,
     #[tabled(rename = "STARTED")]
@@ -341,7 +357,6 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
                 .app_port
                 .map(|p| p.to_string())
                 .unwrap_or_else(|| "-".into()),
-            database: s.database_name.clone().unwrap_or_else(|| "-".into()),
             branch: s.branch.clone(),
             started: s.started_at[..16].replace('T', " "),
         })
@@ -386,7 +401,10 @@ fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
 
-    println!("Entering ecluse session '{}' (slot {}).", session.slug, session.slot);
+    println!(
+        "Entering ecluse session '{}' (slot {}).",
+        session.slug, session.slot
+    );
     println!("Type 'exit' to leave.\n");
 
     let status = std::process::Command::new(&shell)
@@ -396,4 +414,40 @@ fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
         .with_context(|| format!("failed to launch shell: {}", shell))?;
 
     std::process::exit(status.code().unwrap_or(0));
+}
+
+// ── env ───────────────────────────────────────────────────────────────────────
+
+fn cmd_env(args: cli::EnvArgs) -> Result<()> {
+    let (_, root) = config::Config::find_and_load()?;
+    let guard = state::StateGuard::acquire(&root)?;
+
+    let session = guard
+        .state
+        .find_session(&args.slug)
+        .ok_or_else(|| error::EcluseError::SessionNotFound(args.slug.clone()))?
+        .clone();
+
+    let env_file = std::path::Path::new(&session.worktree_path).join(".env.ecluse");
+
+    let mut env_vars: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+    if env_file.exists() {
+        for line in std::fs::read_to_string(&env_file)?.lines() {
+            if let Some((k, v)) = line.split_once('=') {
+                env_vars.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+            }
+        }
+    }
+
+    let out = serde_json::json!({
+        "slug": session.slug,
+        "slot": session.slot,
+        "mode": session.mode.to_string(),
+        "branch": session.branch,
+        "worktree_path": session.worktree_path,
+        "env_file": env_file.display().to_string(),
+        "env": env_vars,
+    });
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
 }
