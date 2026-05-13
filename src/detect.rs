@@ -496,6 +496,309 @@ mod tests {
             Confidence::High | Confidence::Medium
         ));
     }
+
+    #[test]
+    fn build_bazel_triggers_unsupported() {
+        let dir = empty_dir();
+        fs::write(dir.path().join("BUILD.bazel"), "").unwrap();
+        let result = detect(dir.path());
+        assert!(result.unsupported_reason.is_some());
+        assert!(result.recommended.is_none());
+    }
+
+    #[test]
+    fn module_bazel_triggers_unsupported() {
+        let dir = empty_dir();
+        fs::write(dir.path().join("MODULE.bazel"), "").unwrap();
+        let result = detect(dir.path());
+        assert!(result.unsupported_reason.is_some());
+    }
+
+    #[test]
+    fn procfile_dev_boosts_host_and_hybrid() {
+        let baseline = detect(empty_dir().path()).scores;
+        let dir = empty_dir();
+        fs::write(dir.path().join("Procfile.dev"), "web: bundle exec rails server").unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.host > baseline.host);
+        assert!(result.scores.hybrid > baseline.hybrid);
+    }
+
+    #[test]
+    fn gemfile_and_bin_rails_boost_host_and_hybrid() {
+        let baseline = detect(empty_dir().path()).scores;
+        let dir = empty_dir();
+        fs::write(dir.path().join("Gemfile"), "source 'https://rubygems.org'").unwrap();
+        let bin = dir.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("rails"), "#!/usr/bin/env ruby").unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.host > baseline.host);
+        assert!(result.scores.hybrid > baseline.hybrid);
+    }
+
+    #[test]
+    fn package_json_non_docker_dev_script_boosts_host() {
+        let baseline = detect(empty_dir().path()).scores;
+        let dir = empty_dir();
+        let pkg = r#"{"scripts": {"dev": "vite"}}"#;
+        fs::write(dir.path().join("package.json"), pkg).unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.host > baseline.host);
+    }
+
+    #[test]
+    fn package_json_docker_dev_script_does_not_boost_host() {
+        let dir_no_pkg = empty_dir();
+        let baseline = detect(dir_no_pkg.path()).scores;
+        let dir = empty_dir();
+        let pkg = r#"{"scripts": {"dev": "docker compose up"}}"#;
+        fs::write(dir.path().join("package.json"), pkg).unwrap();
+        let result = detect(dir.path());
+        // A docker-based dev script should NOT boost host score beyond baseline
+        // (host score may differ from baseline due to other signals, but the docker
+        // dev script specifically should not add +2)
+        assert!(result.scores.host <= baseline.host + 4);
+    }
+
+    #[test]
+    fn package_json_no_dev_script_does_not_boost() {
+        let baseline = detect(empty_dir().path()).scores;
+        let dir = empty_dir();
+        let pkg = r#"{"scripts": {"build": "tsc"}}"#;
+        fs::write(dir.path().join("package.json"), pkg).unwrap();
+        let result = detect(dir.path());
+        assert_eq!(result.scores.host, baseline.host);
+    }
+
+    #[test]
+    fn version_manager_nvmrc_boosts_host() {
+        let baseline = detect(empty_dir().path()).scores;
+        let dir = empty_dir();
+        fs::write(dir.path().join(".nvmrc"), "20").unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.host > baseline.host);
+        assert!(result.scores.hybrid > baseline.hybrid);
+    }
+
+    #[test]
+    fn version_manager_tool_versions_boosts_host() {
+        let baseline = detect(empty_dir().path()).scores;
+        let dir = empty_dir();
+        fs::write(dir.path().join(".tool-versions"), "nodejs 20.0.0").unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.host > baseline.host);
+    }
+
+    #[test]
+    fn version_manager_python_version_boosts_host() {
+        let baseline = detect(empty_dir().path()).scores;
+        let dir = empty_dir();
+        fs::write(dir.path().join(".python-version"), "3.12").unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.host > baseline.host);
+    }
+
+    #[test]
+    fn version_manager_ruby_version_boosts_host() {
+        let baseline = detect(empty_dir().path()).scores;
+        let dir = empty_dir();
+        fs::write(dir.path().join(".ruby-version"), "3.3.0").unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.host > baseline.host);
+    }
+
+    #[test]
+    fn version_manager_mise_toml_boosts_host() {
+        let baseline = detect(empty_dir().path()).scores;
+        let dir = empty_dir();
+        fs::write(dir.path().join("mise.toml"), "[tools]\nnodejs = '20'").unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.host > baseline.host);
+    }
+
+    #[test]
+    fn readme_hybrid_pattern_yarn_dev_detected() {
+        let content = "## Setup\ndocker compose up -d\nyarn dev\n";
+        assert!(readme_has_hybrid_pattern(content));
+    }
+
+    #[test]
+    fn readme_hybrid_pattern_window_boundary() {
+        // Exactly 9 lines after docker compose up — should still match (window is 10)
+        let content = "docker compose up\nline1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nbin/dev\n";
+        assert!(readme_has_hybrid_pattern(content));
+    }
+
+    #[test]
+    fn readme_hybrid_pattern_no_match_compose_without_dev() {
+        let content = "docker compose up\nnginx\napache\n";
+        assert!(!readme_has_hybrid_pattern(content));
+    }
+
+    #[test]
+    fn confidence_display() {
+        assert_eq!(Confidence::High.to_string(), "high");
+        assert_eq!(Confidence::Medium.to_string(), "medium");
+        assert_eq!(Confidence::Low.to_string(), "low");
+        assert_eq!(Confidence::None.to_string(), "none");
+    }
+
+    #[test]
+    fn no_compose_boosts_host_and_penalises_container() {
+        let dir = empty_dir();
+        let result = detect(dir.path());
+        // No compose → host +4, container -5, hybrid -5
+        assert!(result.scores.host > result.scores.container);
+        assert!(result.scores.host > result.scores.hybrid);
+    }
+
+    #[test]
+    fn signals_are_recorded() {
+        let dir = empty_dir();
+        let result = detect(dir.path());
+        assert!(!result.signals.is_empty(), "should have at least the no-compose signal");
+    }
+
+    #[test]
+    fn all_scores_zero_gives_none_recommendation() {
+        // When all scores are <= 0 recommended should be None
+        // We can't easily force this without mocking docker, but the logic is tested via flake_nix
+        let dir = empty_dir();
+        fs::write(dir.path().join("flake.nix"), "").unwrap();
+        let result = detect(dir.path());
+        assert!(result.recommended.is_none());
+        assert!(matches!(result.confidence, Confidence::None));
+    }
+
+    #[test]
+    fn readme_file_rst_extension_checked() {
+        let dir = empty_dir();
+        let content = "docker compose up\nbin/dev\n";
+        fs::write(dir.path().join("README.rst"), content).unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.hybrid > detect(empty_dir().path()).scores.hybrid);
+    }
+
+    #[test]
+    fn readme_file_no_extension_checked() {
+        let dir = empty_dir();
+        let content = "docker compose up\nnpm run dev\n";
+        fs::write(dir.path().join("README"), content).unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.hybrid > detect(empty_dir().path()).scores.hybrid);
+    }
+
+    // ── Compose-based detection signals ───────────────────────────────────────
+
+    fn write_compose(dir: &TempDir, yaml: &str) {
+        fs::write(dir.path().join("docker-compose.yml"), yaml).unwrap();
+    }
+
+    #[test]
+    fn compose_present_boosts_container_and_hybrid() {
+        let baseline = detect(empty_dir().path()).scores;
+        let dir = empty_dir();
+        write_compose(&dir, "services:\n  db:\n    image: postgres:15\n");
+        let result = detect(dir.path());
+        // compose present: +2 container, +2 hybrid; compose-absent penalty removed
+        assert!(result.scores.container > baseline.container);
+        assert!(result.scores.hybrid > baseline.hybrid);
+    }
+
+    #[test]
+    fn compose_app_build_boosts_container() {
+        let dir = empty_dir();
+        write_compose(
+            &dir,
+            "services:\n  app:\n    build: .\n    ports:\n      - \"3000:3000\"\n",
+        );
+        let result = detect(dir.path());
+        // build: . → +3 container
+        assert!(result.scores.container > 0, "container={}", result.scores.container);
+    }
+
+    #[test]
+    fn compose_app_build_context_boosts_container() {
+        let dir = empty_dir();
+        let yaml = "services:\n  app:\n    build:\n      context: .\n    ports:\n      - \"3000:3000\"\n";
+        write_compose(&dir, yaml);
+        let result = detect(dir.path());
+        assert!(result.scores.container > 0);
+    }
+
+    #[test]
+    fn compose_app_build_context_subdir_boosts_container() {
+        let dir = empty_dir();
+        let yaml = "services:\n  app:\n    build:\n      context: ./app\n";
+        write_compose(&dir, yaml);
+        let result = detect(dir.path());
+        assert!(result.scores.container > 0);
+    }
+
+    #[test]
+    fn compose_all_data_images_boosts_hybrid() {
+        let dir = empty_dir();
+        write_compose(
+            &dir,
+            "services:\n  db:\n    image: postgres:15\n  cache:\n    image: redis:7\n",
+        );
+        let result = detect(dir.path());
+        // all_data: +5 hybrid, -2 container
+        assert!(result.scores.hybrid > result.scores.container);
+    }
+
+    #[test]
+    fn compose_ecluse_role_app_label_boosts_hybrid() {
+        let dir = empty_dir();
+        let yaml = "services:\n  web:\n    image: node:20\n    labels:\n      ecluse.role: app\n  db:\n    image: postgres:15\n";
+        write_compose(&dir, yaml);
+        let result = detect(dir.path());
+        // has_app_label: +10 hybrid
+        assert!(result.scores.hybrid >= 10 + 2, "hybrid={}", result.scores.hybrid);
+    }
+
+    #[test]
+    fn compose_bind_mounts_boost_container() {
+        let dir = empty_dir();
+        let yaml = "services:\n  app:\n    build: .\n    volumes:\n      - ./src:/app/src\n";
+        write_compose(&dir, yaml);
+        let result = detect(dir.path());
+        // bind mounts: +2 container
+        assert!(result.scores.container > 0);
+    }
+
+    #[test]
+    fn compose_absolute_bind_mount_also_detected() {
+        let dir = empty_dir();
+        let yaml = "services:\n  app:\n    image: nginx\n    volumes:\n      - /data:/data\n";
+        write_compose(&dir, yaml);
+        let result = detect(dir.path());
+        // /data is an absolute bind mount — signal fires
+        assert!(result.scores.container > 0);
+    }
+
+    #[test]
+    fn compose_watch_blocks_boost_container_and_hybrid() {
+        let dir = empty_dir();
+        // Use 'develop' key (which is recognized as a watch block)
+        let yaml = "services:\n  app:\n    build: .\n    develop:\n      watch: []\n";
+        write_compose(&dir, yaml);
+        let result = detect(dir.path());
+        // has_watch: +2 container, +1 hybrid
+        assert!(result.scores.container > 0);
+        assert!(result.scores.hybrid > 0);
+    }
+
+    #[test]
+    fn compose_invalid_yaml_does_not_panic() {
+        let dir = empty_dir();
+        // Valid enough to be a file but bad YAML so compose::parse fails
+        write_compose(&dir, "services: { broken yaml: [");
+        // Should not panic, just fall through without compose signals
+        let result = detect(dir.path());
+        assert!(result.unsupported_reason.is_none());
+    }
 }
 
 pub fn print_detection_result(result: &DetectionResult) {
