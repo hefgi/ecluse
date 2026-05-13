@@ -1,0 +1,9 @@
+mode = "host"
+max_slots = 4
+base_port = 8080
+stride = 100
+prefix = "ecluse"
+
+[hooks]
+on_up = "k3d cluster create ecluse-$ECLUSE_SLUG --port \"$PORT:80@loadbalancer\""
+on_down = "k3d cluster delete ecluse-$ECLUSE_SLUG"

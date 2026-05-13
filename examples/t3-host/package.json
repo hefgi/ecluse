@@ -1,0 +1,31 @@
+{
+  "name": "t3-host",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p $PORT",
+    "build": "next build",
+    "start": "next start -p $PORT",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio"
+  },
+  "dependencies": {
+    "next": "^14.0.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "@prisma/client": "^5.0.0",
+    "@trpc/server": "^11.0.0",
+    "@trpc/client": "^11.0.0",
+    "@trpc/react-query": "^11.0.0",
+    "@tanstack/react-query": "^5.0.0",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.0.0",
+    "prisma": "^5.0.0",
+    "typescript": "^5.2.0"
+  }
+}

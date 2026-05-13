@@ -1,0 +1,9 @@
+mode = "hybrid"
+max_slots = 6
+base_port = 3000
+stride = 100
+prefix = "ecluse"
+
+[hooks]
+on_up = "bin/rails db:prepare"
+on_down = "bin/rails db:drop DISABLE_DATABASE_ENVIRONMENT_CHECK=1"

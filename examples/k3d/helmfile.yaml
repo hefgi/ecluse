@@ -1,0 +1,27 @@
+# helmfile.yaml — deploy your app into the per-slot k3d cluster.
+#
+# Run after `ecluse up <slug>` has created the cluster:
+#   ecluse shell <slug>
+#   helmfile apply
+#
+# KUBECONFIG is set by k3d; the cluster name matches ecluse-$ECLUSE_SLUG.
+
+environments:
+  default:
+    values:
+      - cluster: "ecluse-{{ env \"ECLUSE_SLUG\" }}"
+      - ingressPort: "{{ env \"PORT\" }}"
+
+releases:
+  - name: myapp
+    namespace: default
+    chart: ./charts/myapp
+    values:
+      - replicaCount: 1
+      - ingress:
+          enabled: true
+          port: "{{ .Values.ingressPort }}"
+      - image:
+          repository: myapp
+          tag: dev
+          pullPolicy: Never

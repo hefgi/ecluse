@@ -1,0 +1,8 @@
+mode = "hybrid"
+max_slots = 6
+base_port = 8080
+stride = 100
+prefix = "ecluse"
+
+[hooks]
+on_up = "migrate -path ./migrations -database \"$DATABASE_URL\" up"
