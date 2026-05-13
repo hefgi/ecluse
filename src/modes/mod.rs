@@ -9,6 +9,7 @@ use crate::config::{Config, Mode};
 use crate::state::Session;
 
 pub trait ModeHandler {
+    #[allow(clippy::too_many_arguments)]
     fn bring_up(
         &self,
         slug: &str,

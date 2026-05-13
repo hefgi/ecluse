@@ -154,23 +154,7 @@ pub fn detect(root: &Path) -> DetectionResult {
             }
 
             // Any service has ecluse.role: app label
-            let has_app_label = compose.services.values().any(|svc| {
-                crate::compose::app_services(
-                    &crate::compose::ComposeFile {
-                        services: {
-                            let mut m = std::collections::HashMap::new();
-                            m.insert("_".into(), svc.clone());
-                            m
-                        },
-                        volumes: std::collections::HashMap::new(),
-                        networks: std::collections::HashMap::new(),
-                        other: std::collections::HashMap::new(),
-                    },
-                    "ecluse.role",
-                    "app",
-                )
-                .len() > 0
-            });
+            let has_app_label = !crate::compose::app_services(&compose, "ecluse.role", "app").is_empty();
             if has_app_label {
                 let sig = Signal::new("Compose has a service with label ecluse.role=app", 0, 0, 10);
                 scores.hybrid += sig.hybrid_delta;
@@ -313,7 +297,7 @@ pub fn detect(root: &Path) -> DetectionResult {
         ("host", scores.host),
         ("hybrid", scores.hybrid),
     ];
-    sorted.sort_by(|a, b| b.1.cmp(&a.1));
+    sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
     let gap = sorted[0].1 - sorted[1].1;
 
     let confidence = match (recommended.is_some(), gap) {

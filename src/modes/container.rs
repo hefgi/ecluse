@@ -70,8 +70,8 @@ impl super::ModeHandler for ContainerMode {
         // Find the main web port for display
         let app_port = compose_data
             .services
-            .iter()
-            .filter_map(|(_, svc)| compose::service_host_port(svc, offset))
+            .values()
+            .filter_map(|svc| compose::service_host_port(svc, offset))
             .next();
 
         Ok(Session {

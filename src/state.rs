@@ -75,6 +75,7 @@ impl StateGuard {
         let lock_path = ecluse_dir.join("state.lock");
         let lock_file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .write(true)
             .open(&lock_path)
             .with_context(|| format!("failed to open lock file {}", lock_path.display()))?;

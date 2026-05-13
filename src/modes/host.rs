@@ -111,8 +111,7 @@ fn check_port_free(port: u16) -> Result<()> {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let pid: u32 = stdout
             .lines()
-            .skip(1) // header
-            .next()
+            .nth(1)
             .and_then(|line| line.split_whitespace().nth(1))
             .and_then(|p| p.parse().ok())
             .unwrap_or(0);
