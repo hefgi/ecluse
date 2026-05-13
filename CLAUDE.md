@@ -14,12 +14,13 @@ Three **modes** determine what gets isolated:
 ## Commands
 
 ```
-ecluse init     # detect mode, write .ecluse.toml
-ecluse up       # create worktree + allocate slot + bring up services
-ecluse down     # teardown session, free slot, remove worktree
-ecluse ls       # list active sessions
-ecluse env      # print session env vars as JSON
-ecluse shell    # drop into worktree with env loaded (interactive use only)
+ecluse init       # detect mode, write .ecluse.toml
+ecluse up         # create worktree + allocate slot + bring up services
+ecluse down       # teardown session, free slot, remove worktree
+ecluse ls         # list active sessions
+ecluse env        # print session env vars as JSON
+ecluse shell      # drop into worktree with env loaded (interactive use only)
+ecluse validate   # validate .ecluse.toml port ranges and service gaps
 ```
 
 ## Dev workflow

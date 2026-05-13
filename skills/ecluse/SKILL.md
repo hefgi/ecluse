@@ -368,6 +368,10 @@ ecluse down feat-foo --keep-volumes   # keeps volumes
 
 ### Port already in use
 
+By default ecluse auto-bumps to a free port if the nominal one is taken — you'll see a log line like `port 3001 in use; using 3009 for service 'api'`. No action needed unless you want a specific port.
+
+If `strict_port = true` is set (or all alternatives are exhausted):
+
 **Error:** `port 3001 is already in use by PID 12345; stop that process first`
 
 ```bash
@@ -376,7 +380,7 @@ lsof -iTCP:3001 -sTCP:LISTEN   # verify port is free
 ecluse up                       # retry
 ```
 
-Persistent conflict: change `base_port` in the relevant `[[services]]` block to a less-contested range.
+Persistent conflict: change `base_port` in the relevant `[[services]]` block, or increase `port_search_range` and run `ecluse validate` to confirm no overlaps.
 
 ### Docker not running
 
@@ -478,6 +482,13 @@ max_slots = 8           # max parallel sessions
 prefix = "ecluse"       # prefix for compose project names and volume names
 worktree_dir = ".ecluse/worktrees"
 
+# Port collision handling (both optional)
+# strict_port = false        # default: search for a free port on collision
+# port_search_range = 10     # how many alternatives to try (bump by max_slots each time)
+#                            # Guard: port_search_range × max_slots must not exceed
+#                            # the gap between adjacent service base_ports.
+#                            # Run `ecluse validate` to check.
+
 # One [[services]] block per service.
 # port = base_port + slot  (slot 1 → +1, slot 2 → +2, …)
 # run = "native" (default) runs on host; run = "docker" runs in a container.
@@ -513,6 +524,9 @@ ecluse up <slug> [--branch <name>] [--watch] [--json]
 ecluse env [<slug>]
 ecluse down <slug> [--keep-volumes] [--keep-branch]
 ecluse ls [--json]
+ecluse validate [--ports]
 ```
 
 `ecluse shell` exists but is human-only — it spawns an interactive subshell that blocks non-interactive execution. Agents must not use it.
+
+`ecluse validate` checks your `.ecluse.toml` for port range safety (ensures `port_search_range` doesn't create overlaps between services) and prints the current config. Pass `--ports` to see the full port allocation table across all slots.

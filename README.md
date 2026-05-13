@@ -145,6 +145,7 @@ ecluse shell <slug>
 ecluse env [<slug>]
 ecluse down <slug> [--keep-volumes] [--keep-branch]
 ecluse ls [--json]
+ecluse validate [--ports]
 ```
 
 ## Configuration
@@ -156,8 +157,10 @@ mode = "hybrid"
 max_slots = 8
 prefix = "ecluse"
 worktree_dir = ".ecluse/worktrees"
-app_label = "ecluse.role"
-app_label_value = "app"
+
+# Port collision handling (both optional)
+# strict_port = false        # default: search for a free port on collision
+# port_search_range = 10     # how many alternatives to try (bump by max_slots each time)
 
 # One [[services]] block per service. port = base_port + slot.
 # Native services run on the host; docker services run in containers.
@@ -179,6 +182,8 @@ on_down = "npx prisma migrate reset --force"
 ```
 
 **`[[services]]` for monorepos and multi-service stacks:** define one block per service. Each gets a stable, collision-free port per slot (`base_port + slot`). Omit `[[services]]` entirely for single-service projects — ecluse falls back to a single `PORT = 3000 + slot`.
+
+**Port collision handling** — by default ecluse searches for a free port if the nominal one is taken, trying `nominal + i × max_slots` to stay out of other slots' territory. Set `strict_port = true` to fail immediately instead. Run `ecluse validate` to check your config and preview the full port allocation table.
 
 Hooks run as shell commands inside the worktree directory with all `.env.ecluse` variables pre-loaded. Use them for migrations, seeding, or teardown. ecluse doesn't manage databases directly — your app's own tooling handles that via `on_up`.
 
