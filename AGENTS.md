@@ -44,15 +44,9 @@ The `rust-toolchain.toml` pins to stable. Do not add nightly features.
 - **Same CLI surface across all modes.** No mode-specific subcommands or flags. If you find yourself adding `--container-only-flag`, stop and reconsider.
 - **LoC budget: 2500 lines of Rust** (`src/**/*.rs`). Check with `find src -name '*.rs' | xargs wc -l`.
 
-## Skills are in `skills/`, not `src/skills/`
+## Skills are in `skills/`, not `src/`
 
-The canonical skill content lives in `skills/<name>/SKILL.md`. The files in `src/skills.rs` use `include_str!` from there. When editing skill content, edit `skills/` — the binary re-embeds automatically on next build.
-
-If you add a new skill:
-1. Create `skills/<name>/SKILL.md` with proper frontmatter
-2. Add a corresponding `include_str!` entry in `src/skills.rs`
-3. Register it in `skills::ALL_SKILLS`
-4. Add the path to `.claude-plugin/plugin.json`
+The canonical skill content lives in `skills/ecluse/SKILL.md` — one consolidated skill covering everything. Edit that file directly; there is no build step for skills.
 
 ## Error messages
 

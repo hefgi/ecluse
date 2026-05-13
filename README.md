@@ -78,19 +78,15 @@ The `.env.ecluse` file in every worktree contains everything the agent needs:
 | `DATABASE_URL` | Postgres connection string |
 | `REDIS_URL` | Redis connection string (if redis present) |
 
-Full agent workflow: `ecluse skills show agent-workflow`
-
 ## Agent harness integration
 
-ecluse ships a `.claude-plugin/plugin.json` manifest. Claude Code and Cursor pick this up automatically when you open the repo — skills are loaded without any manual setup.
+ecluse ships a `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` manifest. Claude Code and Cursor pick this up automatically when you open the repo — no setup needed.
 
-For other harnesses, install the skills locally:
+For other harnesses, install the skill via npx:
 
 ```bash
-ecluse skills install   # writes skills/<name>/SKILL.md to .ecluse/skills/
+npx skills add ecluse/ecluse -y
 ```
-
-Skills live in `skills/ecluse/` in this repo. Each skill has a `SKILL.md` with YAML frontmatter (trigger descriptions, tags) and optional `references/` subdocs.
 
 ## OrbStack note
 
@@ -114,20 +110,6 @@ ecluse init [--mode container|host|hybrid] [--explain] [--yes]
 ecluse up <slug> [--branch <name>] [--watch]
 ecluse down <slug> [--keep-volumes] [--keep-database] [--keep-branch]
 ecluse ls [--json]
-ecluse skills [list | show <name> | install]
-```
-
-## Skills
-
-ecluse embeds documentation for humans and agents:
-
-```
-ecluse skills list              # list all 8 skills
-ecluse skills show agent-workflow
-ecluse skills show choosing-a-mode
-ecluse skills show hybrid-mode
-ecluse skills show troubleshooting
-ecluse skills install           # write to .ecluse/skills/ for agent harness access
 ```
 
 ## Configuration
