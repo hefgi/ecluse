@@ -1,7 +1,8 @@
 use anyhow::Result;
+use std::collections::HashSet;
 use std::process::Command;
 
-use crate::config::{Config, ServiceConfig};
+use crate::config::{Config, Mode, ServiceConfig, ServiceRun};
 
 /// Check if a TCP port is currently listening on localhost.
 /// Returns the PID of the process holding the port, or 0 if unknown.
@@ -72,48 +73,120 @@ pub fn find_free_port(config: &Config, service: &ServiceConfig, slot: u8) -> Res
     .into())
 }
 
-/// Validate that `port_search_range` is safe given the service layout.
-///
-/// For every pair of adjacent services (sorted by base_port), the highest port
-/// that slot 1 of the lower service could reach must not reach the lowest port
-/// that slot 1 of the upper service could have.
-///
-/// Upper bound of lower service's search space:
-///   lower.base_port + max_slots + port_search_range * max_slots
-///   = lower.base_port + max_slots * (port_search_range + 1)
-///
-/// Must be < upper.base_port + 1  (i.e., strictly below slot 1 of upper)
+/// Validate that the config is structurally sound and that `port_search_range`
+/// is safe given the service layout.
 pub fn validate_config(config: &Config) -> Result<Vec<String>> {
     let mut warnings: Vec<String> = vec![];
     let mut errors: Vec<String> = vec![];
 
-    if config.services.is_empty() {
-        return Ok(warnings);
+    let name_re = regex_lite::Regex::new(r"^[a-z0-9][a-z0-9_-]*$").unwrap();
+
+    // prefix
+    if config.prefix.is_empty() {
+        errors.push("prefix must not be empty".into());
+    } else if !name_re.is_match(&config.prefix) {
+        errors.push(format!(
+            "prefix '{}' contains invalid characters; only [a-z0-9_-] allowed",
+            config.prefix
+        ));
     }
 
-    let mut sorted: Vec<&ServiceConfig> = config.services.iter().collect();
-    sorted.sort_by_key(|s| s.base_port);
+    // max_slots
+    if config.max_slots == 0 {
+        errors.push("max_slots must be at least 1".into());
+    } else if config.max_slots > 64 {
+        warnings.push(format!(
+            "max_slots is {} which is unusually high; verify this is intentional",
+            config.max_slots
+        ));
+    }
 
-    let max_slots = config.max_slots as u32;
-    let range = config.port_search_range as u32;
-
-    for window in sorted.windows(2) {
-        let lower = window[0];
-        let upper = window[1];
-
-        // Highest port the lower service could ever use (any slot, any bump)
-        let lower_max = lower.base_port as u32 + max_slots + range * max_slots;
-        // Lowest port the upper service uses (slot 1 nominal)
-        let upper_min = upper.base_port as u32 + 1;
-
-        if lower_max >= upper_min {
+    // per-service checks
+    for (i, svc) in config.services.iter().enumerate() {
+        if svc.name.is_empty() {
+            errors.push(format!("service at index {} has an empty name", i));
+        } else if !name_re.is_match(&svc.name) {
             errors.push(format!(
-                "service '{}' (base_port={}) search space reaches port {} which overlaps service '{}' (base_port={}); \
-                 increase the gap between base_port values or reduce port_search_range (currently {})",
-                lower.name, lower.base_port, lower_max,
-                upper.name, upper.base_port,
-                config.port_search_range,
+                "service name '{}' contains invalid characters; only [a-z0-9_-] allowed",
+                svc.name
             ));
+        }
+
+        if svc.base_port == 0 {
+            errors.push(format!("service '{}': base_port must not be 0", svc.name));
+        } else if svc.base_port < 1024 {
+            warnings.push(format!(
+                "service '{}': base_port {} is a privileged port (< 1024); binding may require elevated privileges",
+                svc.name, svc.base_port
+            ));
+        }
+
+        if svc.run == ServiceRun::Docker && svc.compose.is_none() {
+            errors.push(format!(
+                "service '{}': run is 'docker' but no compose file is specified",
+                svc.name
+            ));
+        }
+        if svc.run == ServiceRun::Native && svc.compose.is_some() {
+            warnings.push(format!(
+                "service '{}': compose is set but run is 'native'; the compose field will be ignored",
+                svc.name
+            ));
+        }
+
+        if config.mode == Mode::Host && svc.run == ServiceRun::Docker {
+            errors.push(format!(
+                "service '{}': run is 'docker' but mode is 'host'; host mode does not run containers",
+                svc.name
+            ));
+        }
+    }
+
+    // duplicate service names
+    let mut seen_names: HashSet<&str> = HashSet::new();
+    for svc in &config.services {
+        if !seen_names.insert(svc.name.as_str()) {
+            errors.push(format!("duplicate service name '{}'", svc.name));
+        }
+    }
+
+    // duplicate base_ports (skip port 0, already reported above)
+    let mut seen_ports: HashSet<u16> = HashSet::new();
+    for svc in &config.services {
+        if svc.base_port != 0 && !seen_ports.insert(svc.base_port) {
+            errors.push(format!(
+                "duplicate base_port {}: multiple services share the same base port",
+                svc.base_port
+            ));
+        }
+    }
+
+    // adjacent gap check
+    if !config.services.is_empty() {
+        let mut sorted: Vec<&ServiceConfig> = config.services.iter().collect();
+        sorted.sort_by_key(|s| s.base_port);
+
+        let max_slots = config.max_slots as u32;
+        let range = config.port_search_range as u32;
+
+        for window in sorted.windows(2) {
+            let lower = window[0];
+            let upper = window[1];
+
+            // Highest port the lower service could ever use (any slot, any bump)
+            let lower_max = lower.base_port as u32 + max_slots + range * max_slots;
+            // Lowest port the upper service uses (slot 1 nominal)
+            let upper_min = upper.base_port as u32 + 1;
+
+            if lower_max >= upper_min {
+                errors.push(format!(
+                    "service '{}' (base_port={}) search space reaches port {} which overlaps service '{}' (base_port={}); \
+                     increase the gap between base_port values or reduce port_search_range (currently {})",
+                    lower.name, lower.base_port, lower_max,
+                    upper.name, upper.base_port,
+                    config.port_search_range,
+                ));
+            }
         }
     }
 
@@ -164,6 +237,17 @@ mod tests {
             compose: None,
         }
     }
+
+    fn svc_docker(name: &str, base_port: u16, compose: Option<&str>) -> ServiceConfig {
+        ServiceConfig {
+            name: name.into(),
+            base_port,
+            run: ServiceRun::Docker,
+            compose: compose.map(|s| s.into()),
+        }
+    }
+
+    // --- existing tests (unchanged) ---
 
     #[test]
     fn no_services_is_valid() {
@@ -234,5 +318,211 @@ mod tests {
         // 3016 >= 3016 ✗
         let config = make_config(4, 3, vec![svc("api", 3000), svc("web", 3015)]);
         assert!(validate_config(&config).is_err());
+    }
+
+    // --- prefix ---
+
+    #[test]
+    fn prefix_empty_is_error() {
+        let mut config = make_config(8, 10, vec![]);
+        config.prefix = "".into();
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("prefix"));
+    }
+
+    #[test]
+    fn prefix_with_space_is_error() {
+        let mut config = make_config(8, 10, vec![]);
+        config.prefix = "my app".into();
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("my app"));
+    }
+
+    #[test]
+    fn prefix_with_uppercase_is_error() {
+        let mut config = make_config(8, 10, vec![]);
+        config.prefix = "MyApp".into();
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn prefix_with_hyphen_is_ok() {
+        let mut config = make_config(8, 10, vec![]);
+        config.prefix = "my-app".into();
+        assert!(validate_config(&config).is_ok());
+    }
+
+    // --- max_slots ---
+
+    #[test]
+    fn max_slots_zero_is_error() {
+        let config = make_config(0, 10, vec![]);
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("max_slots"));
+    }
+
+    #[test]
+    fn max_slots_65_warns() {
+        let config = make_config(65, 0, vec![]);
+        let warnings = validate_config(&config).unwrap();
+        assert!(warnings.iter().any(|w| w.contains("unusually high")));
+    }
+
+    #[test]
+    fn max_slots_64_no_high_warning() {
+        let mut config = make_config(64, 10, vec![]);
+        config.strict_port = true;
+        let warnings = validate_config(&config).unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("unusually high")));
+    }
+
+    // --- service names ---
+
+    #[test]
+    fn service_name_empty_is_error() {
+        let config = make_config(8, 10, vec![svc("", 3000)]);
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("empty name"));
+    }
+
+    #[test]
+    fn service_name_with_space_is_error() {
+        let config = make_config(8, 10, vec![svc("my service", 3000)]);
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("my service"));
+    }
+
+    #[test]
+    fn service_name_with_uppercase_is_error() {
+        let config = make_config(8, 10, vec![svc("Api", 3000)]);
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn service_name_valid_with_underscore_is_ok() {
+        let config = make_config(8, 10, vec![svc("api_v2", 3000)]);
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn service_name_valid_with_hyphen_is_ok() {
+        let config = make_config(8, 10, vec![svc("my-api", 3000)]);
+        assert!(validate_config(&config).is_ok());
+    }
+
+    // --- base_port ---
+
+    #[test]
+    fn base_port_zero_is_error() {
+        let config = make_config(8, 10, vec![svc("api", 0)]);
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("base_port"));
+    }
+
+    #[test]
+    fn base_port_1023_warns() {
+        let mut config = make_config(8, 0, vec![svc("api", 1023)]);
+        config.strict_port = true;
+        let warnings = validate_config(&config).unwrap();
+        assert!(warnings.iter().any(|w| w.contains("privileged")));
+    }
+
+    #[test]
+    fn base_port_1024_no_privileged_warning() {
+        let mut config = make_config(8, 0, vec![svc("api", 1024)]);
+        config.strict_port = true;
+        let warnings = validate_config(&config).unwrap();
+        assert!(!warnings.iter().any(|w| w.contains("privileged")));
+    }
+
+    // --- compose consistency ---
+
+    #[test]
+    fn docker_run_without_compose_is_error() {
+        let config = make_config(8, 10, vec![svc_docker("db", 5432, None)]);
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("compose"));
+    }
+
+    #[test]
+    fn docker_run_with_compose_is_ok() {
+        let config = make_config(
+            8,
+            0,
+            vec![svc_docker("db", 5432, Some("docker-compose.yml"))],
+        );
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn native_run_with_compose_warns() {
+        let config = make_config(
+            8,
+            10,
+            vec![ServiceConfig {
+                name: "api".into(),
+                base_port: 3000,
+                run: ServiceRun::Native,
+                compose: Some("docker-compose.yml".into()),
+            }],
+        );
+        let warnings = validate_config(&config).unwrap();
+        assert!(warnings.iter().any(|w| w.contains("ignored")));
+    }
+
+    // --- mode × run ---
+
+    #[test]
+    fn host_mode_with_docker_service_is_error() {
+        let mut config = make_config(
+            8,
+            10,
+            vec![svc_docker("db", 5432, Some("docker-compose.yml"))],
+        );
+        config.mode = Mode::Host;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("host"));
+    }
+
+    #[test]
+    fn hybrid_mode_with_docker_service_is_ok() {
+        let mut config = make_config(
+            8,
+            0,
+            vec![svc_docker("db", 5432, Some("docker-compose.yml"))],
+        );
+        config.mode = Mode::Hybrid;
+        config.strict_port = true;
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn container_mode_with_docker_service_is_ok() {
+        let mut config = make_config(
+            8,
+            0,
+            vec![svc_docker("db", 5432, Some("docker-compose.yml"))],
+        );
+        config.mode = Mode::Container;
+        config.strict_port = true;
+        assert!(validate_config(&config).is_ok());
+    }
+
+    // --- duplicates ---
+
+    #[test]
+    fn duplicate_service_names_is_error() {
+        let config = make_config(8, 10, vec![svc("api", 3000), svc("api", 4000)]);
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("duplicate service name"));
+        assert!(err.to_string().contains("api"));
+    }
+
+    #[test]
+    fn duplicate_base_ports_is_error() {
+        let config = make_config(8, 10, vec![svc("api", 3000), svc("web", 3000)]);
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("duplicate base_port"));
+        assert!(err.to_string().contains("3000"));
     }
 }
