@@ -495,6 +495,31 @@ on_down = "npx prisma migrate reset --force"
 
 Hooks run as shell commands inside the worktree directory. All `.env.ecluse` variables (`PORT`, `ECLUSE_SLUG`, `ECLUSE_<NAME>_PORT`, etc.) are available. ecluse does not manage databases directly — use `on_up` for migrations, `on_down` for teardown.
 
+## Examples
+
+Ready-to-use config templates live in `examples/` at the repo root. When a user asks how to configure ecluse for a specific stack, read the relevant `.ecluse.toml` and `docker-compose.yml` directly — they are the authoritative reference.
+
+| Directory | Mode | Stack | Ports |
+|---|---|---|---|
+| `examples/rails-hybrid` | hybrid | Rails 7 + Angular + Postgres + Redis | `api`, `frontend` |
+| `examples/rails-monorepo` | hybrid | Rails 7 + Sidekiq + Blazer admin + Postgres + Redis | `web`, `sidekiq`, `admin` |
+| `examples/node-hybrid` | hybrid | Express + React + Postgres | `api`, `frontend` |
+| `examples/node-container` | container | Node.js fully containerized | from compose |
+| `examples/nextjs-hybrid` | hybrid | Next.js + Prisma + Postgres | `app` |
+| `examples/t3-host` | host | T3 (Next.js + tRPC + Prisma), no Docker | `app` |
+| `examples/t3-monorepo` | hybrid | Turborepo (API + Web + Worker + Email) + Postgres + Redis | `api`, `web`, `worker`, `email` |
+| `examples/fastapi-hybrid` | hybrid | FastAPI + Vue + Postgres | `api`, `frontend` |
+| `examples/go-hybrid` | hybrid | Go HTTP server + Postgres | `api` |
+| `examples/mongo-hybrid` | hybrid | Node.js + MongoDB | `api` |
+| `examples/k3d` | host | Kubernetes via k3d (all services inside cluster) | `http`, `https` |
+
+Key patterns to know:
+
+- **Single service** (`app = 0` or `api = 0`) — one port, `PORT` alias set automatically
+- **Frontend + backend** (`api = 0`, `frontend = 1`) — two ports, each app reads its own var
+- **Full monorepo** (`api`, `web`, `worker`, `email`) — four ports, Turborepo starts all
+- **Kubernetes** (`http`, `https`) — two ingress ports only; services communicate inside the cluster via DNS
+
 ## Commands
 
 ```
