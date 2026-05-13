@@ -1,0 +1,5 @@
+mode = "container"
+max_slots = 6
+base_port = 3000
+stride = 100
+prefix = "ecluse"

@@ -1,0 +1,12 @@
+mode = "hybrid"
+max_slots = 6
+base_port = 8080
+stride = 100
+prefix = "ecluse"
+
+# Go HTTP server on index 0 → ECLUSE_API_PORT + PORT alias (e.g. 8180 for slot 1)
+[ports]
+api = 0
+
+[hooks]
+on_up = "migrate -path ./migrations -database \"$ECLUSE_POSTGRES_PORT\" up"
