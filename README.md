@@ -111,12 +111,10 @@ The `.env.ecluse` file in every worktree contains everything the agent needs:
 | Variable | Description |
 |---|---|
 | `ECLUSE_SLOT` | Slot number |
-| `ECLUSE_OFFSET` | Port offset (`slot × stride`) |
 | `ECLUSE_MODE` | Active mode |
 | `ECLUSE_SLUG` | Session name |
-| `PORT` | Alias for the first port in `[ports]` (backward-compatible) |
-| `ECLUSE_<NAME>_PORT` | Per-service port — one per entry in `[ports]` |
-| `ECLUSE_<SERVICE>_PORT` | Data service ports from compose (hybrid/container modes) |
+| `PORT` | Alias for the first native `[[services]]` entry (framework-compatible) |
+| `ECLUSE_<NAME>_PORT` | Per-service port — one per `[[services]]` entry |
 
 ## Choosing a mode
 
@@ -132,7 +130,7 @@ The `.env.ecluse` file in every worktree contains everything the agent needs:
 
 The central concept is a **slot** — an integer from 1 to `max_slots`. Every resource is derived from the slot:
 
-- Port block: `base_port + slot × stride` (defaults: base 3000, stride 100 → slot 1 gets ports 3100–3199)
+- Per-service port: `base_port + slot` (e.g. `api` at `base_port=3000`, slot 1 → 3001, slot 2 → 3002)
 - Compose project name: `<prefix>_<slug>`
 - Named volumes: `<volume>_<prefix>_<slug>`
 
@@ -156,19 +154,23 @@ ecluse ls [--json]
 ```toml
 mode = "hybrid"
 max_slots = 8
-base_port = 3000
-stride = 100
 prefix = "ecluse"
 worktree_dir = ".ecluse/worktrees"
 app_label = "ecluse.role"
 app_label_value = "app"
 
-# Named ports within each slot's range.
-# index 0 → base_port + slot*stride + 0, index 1 → +1, etc.
-# Each entry generates ECLUSE_<NAME>_PORT. The first entry also sets PORT.
-[ports]
-api = 0        # → ECLUSE_API_PORT + PORT alias
-frontend = 1   # → ECLUSE_FRONTEND_PORT
+# One [[services]] block per service. port = base_port + slot.
+# Native services run on the host; docker services run in containers.
+# The first native entry also sets the PORT alias for framework compatibility.
+
+[[services]]
+name = "api"
+base_port = 3000   # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
+
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432   # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
 
 # Optional: lifecycle hooks — run in the worktree with all env vars set
 [hooks]
@@ -176,7 +178,7 @@ on_up = "npx prisma migrate deploy"
 on_down = "npx prisma migrate reset --force"
 ```
 
-**`[ports]` for monorepos and multi-service stacks:** define one entry per native service. Each gets a stable, collision-free port within the slot's range. Omit `[ports]` for single-service projects — ecluse falls back to a single `PORT = base_port + slot * stride`.
+**`[[services]]` for monorepos and multi-service stacks:** define one block per service. Each gets a stable, collision-free port per slot (`base_port + slot`). Omit `[[services]]` entirely for single-service projects — ecluse falls back to a single `PORT = 3000 + slot`.
 
 Hooks run as shell commands inside the worktree directory with all `.env.ecluse` variables pre-loaded. Use them for migrations, seeding, or teardown. ecluse doesn't manage databases directly — your app's own tooling handles that via `on_up`.
 
@@ -197,7 +199,9 @@ services:
     image: redis:7
 ```
 
-`ecluse up feat-foo` starts postgres and redis in containers with offset ports, creates the worktree, and writes `.env.ecluse` with connection strings pointing at the containerized data services. You run the app yourself.
+Or define `run = "docker"` services in `[[services]]` to explicitly control which services stay in containers. Either approach works — the label is the simpler default for single-app stacks.
+
+`ecluse up feat-foo` starts postgres and redis in containers with per-slot ports, creates the worktree, and writes `.env.ecluse` with `ECLUSE_POSTGRES_PORT` and `ECLUSE_REDIS_PORT` pointing at the containerized data services. You run the app yourself.
 
 ## Contributing
 
