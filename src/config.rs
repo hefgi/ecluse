@@ -120,7 +120,6 @@ impl Config {
             }
         }
     }
-
 }
 
 #[cfg(test)]
@@ -210,10 +209,7 @@ on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_DATABASE'"
 "#,
         );
         let config = Config::load(dir.path()).unwrap();
-        assert_eq!(
-            config.hooks.on_up.as_deref(),
-            Some("prisma migrate deploy")
-        );
+        assert_eq!(config.hooks.on_up.as_deref(), Some("prisma migrate deploy"));
         assert!(config.hooks.on_down.is_some());
     }
 

@@ -64,8 +64,7 @@ impl super::ModeHandler for ContainerMode {
             })
             .collect();
 
-        let env_map =
-            env::build_env(slot, slug, offset, "container", None, &data_service_ports);
+        let env_map = env::build_env(slot, slug, offset, "container", None, &data_service_ports);
         env::write_env_file(&worktree_path, &env_map)?;
 
         if let Some(cmd) = &config.hooks.on_up {
