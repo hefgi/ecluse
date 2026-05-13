@@ -18,8 +18,8 @@ Each git worktree gets its own slot — isolated ports, its own database, its ow
 ![Claude Code](https://img.shields.io/badge/Claude_Code-d97706?style=flat-square)
 ![Cursor](https://img.shields.io/badge/Cursor-000?style=flat-square)
 ![Codex](https://img.shields.io/badge/Codex-10a37f?style=flat-square)
-![Windsurf](https://img.shields.io/badge/Windsurf-0ea5e9?style=flat-square)
-![Copilot](https://img.shields.io/badge/Copilot-2b3137?style=flat-square)
+![OpenCode](https://img.shields.io/badge/OpenCode-6366f1?style=flat-square)
+![Pи](https://img.shields.io/badge/Pi-111?style=flat-square)
 
 and any agent that can run shell commands.
 
@@ -53,6 +53,12 @@ brew install hefgi/tap/ecluse
 cargo install ecluse
 ```
 
+Then install the agent skill:
+
+```bash
+npx skills add hefgi/ecluse -y
+```
+
 Requires Rust 1.85+. For container and hybrid modes, [OrbStack](https://orbstack.dev) is recommended over Docker Desktop on macOS — faster, less memory.
 
 ## Get started
@@ -69,15 +75,11 @@ Your app runs on a unique port. Other sessions run in parallel without touching 
 
 ## Agent skills
 
-Install the ecluse skill into your agent harness once — your agent learns every command and workflow automatically:
+The skill teaches your agent every command, mode, and workflow. Install globally or project-local:
 
-```bash
-npx skills add hefgi/ecluse -y
-```
-
-| Agent | Install |
+| | Command |
 |---|---|
-| Any agent | `npx skills add hefgi/ecluse -y` |
+| Global | `npx skills add hefgi/ecluse -y` |
 | Project-local | `npx skills add hefgi/ecluse -y --out .` |
 
 Canonical agent loop:
