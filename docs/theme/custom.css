@@ -1,0 +1,11 @@
+:root {
+  --sidebar-width: 260px;
+}
+
+.content main {
+  max-width: 800px;
+}
+
+code {
+  font-size: 0.88em;
+}
