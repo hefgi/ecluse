@@ -25,6 +25,8 @@ pub enum Command {
     Down(DownArgs),
     /// List active sessions
     Ls(LsArgs),
+    /// Open a shell inside a session's worktree with its env loaded
+    Shell(ShellArgs),
 }
 
 #[derive(Args)]
@@ -95,4 +97,10 @@ pub struct LsArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Args)]
+pub struct ShellArgs {
+    /// Session slug to enter
+    pub slug: String,
 }

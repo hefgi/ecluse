@@ -39,6 +39,7 @@ fn run(cli: cli::Cli) -> Result<()> {
         cli::Command::Up(args) => cmd_up(args),
         cli::Command::Down(args) => cmd_down(args),
         cli::Command::Ls(args) => cmd_ls(args),
+        cli::Command::Shell(args) => cmd_shell(args),
     }
 }
 
@@ -348,4 +349,51 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
 
     println!("{}", Table::new(rows));
     Ok(())
+}
+
+// ── shell ─────────────────────────────────────────────────────────────────────
+
+fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
+    let (_, root) = config::Config::find_and_load()?;
+    let guard = state::StateGuard::acquire(&root)?;
+
+    let session = guard
+        .state
+        .find_session(&args.slug)
+        .ok_or_else(|| error::EcluseError::SessionNotFound(args.slug.clone()))?
+        .clone();
+
+    let worktree = std::path::Path::new(&session.worktree_path);
+    let env_file = worktree.join(".env.ecluse");
+
+    // Parse .env.ecluse into key=value pairs
+    let env_vars: Vec<(String, String)> = if env_file.exists() {
+        std::fs::read_to_string(&env_file)
+            .context("failed to read .env.ecluse")?
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.is_empty() || line.starts_with('#') {
+                    return None;
+                }
+                let (k, v) = line.split_once('=')?;
+                Some((k.to_string(), v.to_string()))
+            })
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+
+    println!("Entering ecluse session '{}' (slot {}).", session.slug, session.slot);
+    println!("Type 'exit' to leave.\n");
+
+    let status = std::process::Command::new(&shell)
+        .current_dir(worktree)
+        .envs(env_vars)
+        .status()
+        .with_context(|| format!("failed to launch shell: {}", shell))?;
+
+    std::process::exit(status.code().unwrap_or(0));
 }
