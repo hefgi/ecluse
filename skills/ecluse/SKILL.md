@@ -206,7 +206,8 @@ Confidence: gap ≥ 4 = High (auto-accept), 2–3 = Medium, 0–1 = Low (full br
 
 - **Nix flake** — use `nix develop`; ecluse doesn't understand `flake.nix`
 - **Bazel** — use Bazel's native sandbox
-- **Monorepo with multiple compose files** — run `ecluse init` separately per subdirectory
+- **Monorepo, single compose at root** — the common case; use `[ports]` to allocate one port per native service (see `t3-monorepo` example)
+- **Monorepo, each service has its own compose file** — ecluse only reads one compose file per repo root; run `ecluse init` inside each service subdirectory, giving each its own `.ecluse.toml`, slot pool, and state; the agent must `cd` into the right subdirectory before running ecluse commands
 
 ---
 
