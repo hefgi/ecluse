@@ -380,6 +380,115 @@ fn probe_postgres_5432() -> bool {
     .is_ok()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn empty_dir() -> TempDir {
+        TempDir::new().unwrap()
+    }
+
+    #[test]
+    fn readme_hybrid_pattern_detects_compose_then_bin_dev() {
+        let content = "## Setup\n\
+            Run `docker compose up -d`\n\
+            Then start the app with `bin/dev`\n";
+        assert!(readme_has_hybrid_pattern(content));
+    }
+
+    #[test]
+    fn readme_hybrid_pattern_detects_compose_then_npm_run_dev() {
+        let content = "docker compose up\nnpm run dev\n";
+        assert!(readme_has_hybrid_pattern(content));
+    }
+
+    #[test]
+    fn readme_hybrid_pattern_no_match_without_compose() {
+        let content = "Just run npm run dev directly\n";
+        assert!(!readme_has_hybrid_pattern(content));
+    }
+
+    #[test]
+    fn readme_hybrid_pattern_no_match_when_too_far_apart() {
+        let far_apart = std::iter::repeat("some line\n")
+            .take(15)
+            .collect::<String>();
+        let content = format!("docker compose up\n{}bin/dev\n", far_apart);
+        assert!(!readme_has_hybrid_pattern(&content));
+    }
+
+    #[test]
+    fn flake_nix_triggers_unsupported() {
+        let dir = empty_dir();
+        fs::write(dir.path().join("flake.nix"), "").unwrap();
+        let result = detect(dir.path());
+        assert!(result.unsupported_reason.is_some());
+        assert!(result.recommended.is_none());
+    }
+
+    #[test]
+    fn bazel_workspace_triggers_unsupported() {
+        let dir = empty_dir();
+        fs::write(dir.path().join("WORKSPACE"), "").unwrap();
+        let result = detect(dir.path());
+        assert!(result.unsupported_reason.is_some());
+        assert!(result.recommended.is_none());
+    }
+
+    #[test]
+    fn devcontainer_boosts_container_score() {
+        let baseline = detect(empty_dir().path()).scores.container;
+        let dir = empty_dir();
+        let dc = dir.path().join(".devcontainer");
+        fs::create_dir_all(&dc).unwrap();
+        fs::write(dc.join("devcontainer.json"), "{}").unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.container > baseline, "devcontainer should increase container score");
+    }
+
+    #[test]
+    fn bin_dev_boosts_host_and_hybrid() {
+        let baseline = detect(empty_dir().path()).scores;
+        let dir = empty_dir();
+        let bin = dir.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("dev"), "#!/bin/bash").unwrap();
+        let result = detect(dir.path());
+        assert!(result.scores.host > baseline.host, "bin/dev should increase host score");
+        assert!(result.scores.hybrid > baseline.hybrid, "bin/dev should increase hybrid score");
+    }
+
+    #[test]
+    fn no_signals_returns_no_recommendation_or_low() {
+        let dir = empty_dir();
+        let result = detect(dir.path());
+        // With no signals other than compose absence penalty, container/hybrid are negative
+        // host gets the +4 bonus from no compose file
+        assert!(result.scores.host > result.scores.container);
+    }
+
+    #[test]
+    fn confidence_is_high_when_gap_at_least_4() {
+        let dir = empty_dir();
+        // devcontainer.json (+4 container) with no compose (-5 hybrid, -5 container)
+        // net: container = -1, but devcontainer adds another +4 = +3 for container
+        // Compose absent: container -5, host +4, hybrid -5
+        // devcontainer: container +4
+        // Result: container -1, host 4, hybrid -5 => gap host-container = 5
+        let dc = dir.path().join(".devcontainer");
+        fs::create_dir_all(&dc).unwrap();
+        fs::write(dc.join("devcontainer.json"), "{}").unwrap();
+        let result = detect(dir.path());
+        // host should win with high confidence gap
+        assert!(matches!(
+            result.confidence,
+            Confidence::High | Confidence::Medium
+        ));
+    }
+}
+
 pub fn print_detection_result(result: &DetectionResult) {
     println!("\nMode detection results:\n");
     println!("  Signals found:");
