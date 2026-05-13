@@ -39,14 +39,11 @@ pub enum EcluseError {
     #[error("port {port} is already in use by PID {pid}; stop that process first")]
     PortInUse { port: u16, pid: u32 },
 
-    #[error("host Postgres is unreachable; check your [database] config in .ecluse.toml")]
-    PostgresUnreachable,
-
-    #[error("failed to create database: {stderr}")]
-    DatabaseCreateFailed { stderr: String },
-
     #[error("compose file has no service labeled ecluse.role=app; all services treated as data")]
     AppLabelMissing,
+
+    #[error("hook failed with exit code {code}: {cmd}")]
+    HookFailed { cmd: String, code: i32 },
 
     #[error("not inside a git repository")]
     NotAGitRepo,

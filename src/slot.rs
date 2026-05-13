@@ -6,7 +6,7 @@ use crate::state::State;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, DatabaseConfig, Mode};
+    use crate::config::{Config, HookConfig, Mode};
     use crate::state::{Session, State};
 
     fn make_config(max_slots: u8, stride: u16) -> Config {
@@ -19,7 +19,7 @@ mod tests {
             worktree_dir: ".ecluse/worktrees".into(),
             app_label: "ecluse.role".into(),
             app_label_value: "app".into(),
-            database: DatabaseConfig::default(),
+            hooks: HookConfig::default(),
         }
     }
 
@@ -38,7 +38,6 @@ mod tests {
                     compose_project: None,
                     overlay_file: None,
                     app_port: None,
-                    database_name: None,
                     started_at: "2026-01-01T00:00:00Z".into(),
                 })
                 .collect(),

@@ -27,7 +27,6 @@ pub trait ModeHandler {
         config: &Config,
         root: &Path,
         keep_volumes: bool,
-        keep_database: bool,
     ) -> Result<()>;
 }
 

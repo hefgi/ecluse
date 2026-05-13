@@ -49,22 +49,22 @@ pub struct Config {
     pub app_label: String,
     #[serde(default = "default_app_label_value")]
     pub app_label_value: String,
-    #[serde(default, skip_serializing_if = "DatabaseConfig::is_none")]
-    pub database: DatabaseConfig,
+    #[serde(default, skip_serializing_if = "HookConfig::is_empty")]
+    pub hooks: HookConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub struct DatabaseConfig {
-    #[serde(default = "default_db_provider")]
-    pub provider: String,
-    #[serde(default = "default_db_host")]
-    pub host: String,
-    #[serde(default = "default_db_port")]
-    pub port: u16,
-    #[serde(default = "default_db_user")]
-    pub user: String,
-    #[serde(default)]
-    pub base: String,
+pub struct HookConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_up: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_down: Option<String>,
+}
+
+impl HookConfig {
+    pub fn is_empty(&self) -> bool {
+        self.on_up.is_none() && self.on_down.is_none()
+    }
 }
 
 fn default_max_slots() -> u8 {
@@ -87,18 +87,6 @@ fn default_app_label() -> String {
 }
 fn default_app_label_value() -> String {
     "app".into()
-}
-fn default_db_provider() -> String {
-    "none".into()
-}
-fn default_db_host() -> String {
-    "localhost".into()
-}
-fn default_db_port() -> u16 {
-    5432
-}
-fn default_db_user() -> String {
-    "postgres".into()
 }
 
 impl Config {
@@ -133,15 +121,6 @@ impl Config {
         }
     }
 
-    pub fn is_db_enabled(&self) -> bool {
-        self.database.provider == "postgres-host"
-    }
-}
-
-impl DatabaseConfig {
-    pub fn is_none(&self) -> bool {
-        self.provider.is_empty() || self.provider == "none"
-    }
 }
 
 #[cfg(test)]
@@ -219,27 +198,32 @@ app_label_value = "web"
     }
 
     #[test]
-    fn is_db_enabled_true_for_postgres_host() {
+    fn hooks_load_from_toml() {
         let dir = TempDir::new().unwrap();
         write_toml(
             &dir,
             r#"
 mode = "host"
-[database]
-provider = "postgres-host"
-base = "myapp"
+[hooks]
+on_up = "prisma migrate deploy"
+on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_DATABASE'"
 "#,
         );
         let config = Config::load(dir.path()).unwrap();
-        assert!(config.is_db_enabled());
+        assert_eq!(
+            config.hooks.on_up.as_deref(),
+            Some("prisma migrate deploy")
+        );
+        assert!(config.hooks.on_down.is_some());
     }
 
     #[test]
-    fn is_db_enabled_false_by_default() {
+    fn hooks_are_optional() {
         let dir = TempDir::new().unwrap();
         write_toml(&dir, "mode = \"host\"\n");
         let config = Config::load(dir.path()).unwrap();
-        assert!(!config.is_db_enabled());
+        assert!(config.hooks.on_up.is_none());
+        assert!(config.hooks.on_down.is_none());
     }
 
     #[test]
@@ -254,7 +238,7 @@ base = "myapp"
             worktree_dir: ".ecluse/worktrees".into(),
             app_label: "ecluse.role".into(),
             app_label_value: "app".into(),
-            database: DatabaseConfig::default(),
+            hooks: HookConfig::default(),
         };
         original.save(dir.path()).unwrap();
         let loaded = Config::load(dir.path()).unwrap();

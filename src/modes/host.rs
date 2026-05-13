@@ -5,7 +5,7 @@ use std::process::Command;
 
 use crate::config::Config;
 use crate::env;
-use crate::postgres::PgClient;
+use crate::hooks;
 use crate::state::Session;
 use crate::worktree::WorktreeManager;
 
@@ -26,39 +26,19 @@ impl super::ModeHandler for HostMode {
         let worktree_path = wt.worktree_path(config, slug);
 
         let app_port = config.base_port + offset;
-
-        // Check port is free
         check_port_free(app_port)?;
 
-        // Create worktree
         wt.create(&worktree_path, branch)?;
 
-        // Provision database if configured
-        let database_name = if config.is_db_enabled() {
-            let pg = PgClient::from_config(&config.database);
-            if !pg.is_reachable() {
-                let _ = wt.remove(&worktree_path);
-                return Err(crate::error::EcluseError::PostgresUnreachable.into());
-            }
-            let db_name = PgClient::db_name(&config.database.base, slug);
-            if let Err(e) = pg.create_db(&db_name) {
+        let env_map = env::build_env(slot, slug, offset, "host", Some(app_port), &[]);
+        env::write_env_file(&worktree_path, &env_map)?;
+
+        if let Some(cmd) = &config.hooks.on_up {
+            if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
                 let _ = wt.remove(&worktree_path);
                 return Err(e);
             }
-            Some(db_name)
-        } else {
-            None
-        };
-
-        let env_map = env::build_env(
-            slot,
-            offset,
-            "host",
-            Some(app_port),
-            database_name.as_deref(),
-            &[],
-        );
-        env::write_env_file(&worktree_path, &env_map)?;
+        }
 
         Ok(Session {
             slug: slug.to_string(),
@@ -70,7 +50,6 @@ impl super::ModeHandler for HostMode {
             compose_project: None,
             overlay_file: None,
             app_port: Some(app_port),
-            database_name,
             started_at: Utc::now().to_rfc3339(),
         })
     }
@@ -81,17 +60,19 @@ impl super::ModeHandler for HostMode {
         config: &Config,
         root: &Path,
         _keep_volumes: bool,
-        keep_database: bool,
     ) -> Result<()> {
-        // Drop database unless --keep-database
-        if !keep_database {
-            if let Some(db) = &session.database_name {
-                let pg = PgClient::from_config(&config.database);
-                pg.drop_db(db)?;
-            }
+        if let Some(cmd) = &config.hooks.on_down {
+            let env_map = env::build_env(
+                session.slot,
+                &session.slug,
+                session.offset,
+                "host",
+                session.app_port,
+                &[],
+            );
+            hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
         }
 
-        // Remove worktree
         let wt = WorktreeManager::new(root.to_owned());
         let wt_path = std::path::PathBuf::from(&session.worktree_path);
         wt.remove(&wt_path)?;
@@ -107,7 +88,6 @@ fn check_port_free(port: u16) -> Result<()> {
         .context("failed to run lsof")?;
 
     if output.status.success() && !output.stdout.is_empty() {
-        // Parse PID from lsof output
         let stdout = String::from_utf8_lossy(&output.stdout);
         let pid: u32 = stdout
             .lines()
@@ -115,7 +95,6 @@ fn check_port_free(port: u16) -> Result<()> {
             .and_then(|line| line.split_whitespace().nth(1))
             .and_then(|p| p.parse().ok())
             .unwrap_or(0);
-
         return Err(crate::error::EcluseError::PortInUse { port, pid }.into());
     }
     Ok(())

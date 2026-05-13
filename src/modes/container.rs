@@ -6,6 +6,7 @@ use crate::compose;
 use crate::config::Config;
 use crate::docker;
 use crate::env;
+use crate::hooks;
 use crate::state::Session;
 use crate::worktree::WorktreeManager;
 
@@ -63,8 +64,18 @@ impl super::ModeHandler for ContainerMode {
             })
             .collect();
 
-        let env_map = env::build_env(slot, offset, "container", None, None, &data_service_ports);
+        let env_map =
+            env::build_env(slot, slug, offset, "container", None, &data_service_ports);
         env::write_env_file(&worktree_path, &env_map)?;
+
+        if let Some(cmd) = &config.hooks.on_up {
+            if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
+                let _ = docker::compose_down(&project, &compose_str, Some(&overlay_str), true);
+                let _ = wt.remove(&worktree_path);
+                let _ = std::fs::remove_file(&overlay_path);
+                return Err(e);
+            }
+        }
 
         // Find the main web port for display
         let app_port = compose_data
@@ -83,7 +94,6 @@ impl super::ModeHandler for ContainerMode {
             compose_project: Some(project),
             overlay_file: Some(overlay_str),
             app_port,
-            database_name: None,
             started_at: Utc::now().to_rfc3339(),
         })
     }
@@ -94,7 +104,6 @@ impl super::ModeHandler for ContainerMode {
         _config: &Config,
         root: &Path,
         keep_volumes: bool,
-        _keep_database: bool,
     ) -> Result<()> {
         // Bring down compose
         if let Some(project) = &session.compose_project {

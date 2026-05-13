@@ -39,7 +39,6 @@ pub struct Session {
     pub compose_project: Option<String>,
     pub overlay_file: Option<String>,
     pub app_port: Option<u16>,
-    pub database_name: Option<String>,
     pub started_at: String,
 }
 
