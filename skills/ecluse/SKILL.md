@@ -56,10 +56,9 @@ Or from source: `cargo install --git https://github.com/hefgi/ecluse`
 cd my-project
 ecluse init              # auto-detects mode, prompts to confirm
 ecluse up feat-foo       # creates worktree + slot
-cd .ecluse/worktrees/feat-foo
-source .env.ecluse       # loads PORT, DATABASE_URL, etc.
-npm run dev              # or bin/dev, bin/rails server, etc.
-ecluse ls                # see active sessions
+ecluse shell feat-foo    # drops into worktree with env loaded
+npm run dev              # PORT, DATABASE_URL, etc. already set
+ecluse ls                # see active sessions (from another terminal)
 ecluse down feat-foo     # clean teardown
 ```
 
@@ -455,6 +454,7 @@ What ecluse intentionally does not do in v0. These are design decisions, not bug
 - **`localhost:<port>` only** — no public URLs; use cloudflared or ngrok alongside ecluse
 - **No agent process sandboxing** — container mode isolates services, not the agent's filesystem
 - **No process lifecycle management** — ecluse does not start dev servers or manage tmux sessions; it sets up the environment and writes `.env.ecluse`
+- **`ecluse shell` is for humans, not agents** — agents should `cd <worktree_path> && source .env.ecluse` directly; `ecluse shell` spawns an interactive subshell which blocks non-interactive execution
 - **macOS and Linux only** — WSL2 acceptable but untested; native Windows not supported
 - **Postgres only for database provisioning** — MySQL, MongoDB, SQLite not supported in v0
 - **No background daemon** — every ecluse command is a short-lived process
@@ -490,7 +490,7 @@ base = "myapp"          # database name prefix; slug is appended
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
 ecluse up <slug> [--branch <name>] [--watch]
+ecluse shell <slug>
 ecluse down <slug> [--keep-volumes] [--keep-database] [--keep-branch]
 ecluse ls [--json]
-ecluse skills [list | show <name> | install]
 ```
