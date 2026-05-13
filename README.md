@@ -61,12 +61,11 @@ Requires Rust 1.85+. For container and hybrid modes, [OrbStack](https://orbstack
 cd my-project
 ecluse init              # detects mode, writes .ecluse.toml
 ecluse up feat-foo       # creates worktree + slot
-cd .ecluse/worktrees/feat-foo
-source .env.ecluse       # loads PORT, DATABASE_URL, etc.
-npm run dev              # or bin/dev, bin/rails server, etc.
+ecluse shell feat-foo    # drops into worktree with env loaded
+npm run dev              # PORT, DATABASE_URL, etc. already set
 ```
 
-Your app runs on a unique port. Other sessions run in parallel without touching yours.
+Your app runs on a unique port. Other sessions run in parallel without touching yours. Type `exit` to leave the session.
 
 ## Agent skills
 
@@ -86,7 +85,7 @@ Canonical agent loop:
 ```bash
 ecluse up <task-slug>
 cd $(ecluse ls --json | jq -r '.[] | select(.slug=="<task-slug>") | .worktree_path')
-source .env.ecluse
+source .env.ecluse   # PORT, DATABASE_URL, etc. now in env
 # do work, run tests, verify
 ecluse down <task-slug>
 ```
@@ -128,6 +127,7 @@ Three thin mode implementations share this slot primitive. Mode is selected once
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
 ecluse up <slug> [--branch <name>] [--watch]
+ecluse shell <slug>
 ecluse down <slug> [--keep-volumes] [--keep-database] [--keep-branch]
 ecluse ls [--json]
 ```
