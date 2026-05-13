@@ -471,6 +471,7 @@ What ecluse intentionally does not do in v0. These are design decisions, not bug
 ```toml
 mode = "hybrid"         # container | host | hybrid
 max_slots = 8           # max parallel sessions
+base_port = 3000        # slot 1 = base_port + stride, slot 2 = base_port + 2*stride
 stride = 100            # port offset per slot
 prefix = "ecluse"       # prefix for compose project names and volume names
 worktree_dir = ".ecluse/worktrees"

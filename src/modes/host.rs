@@ -25,7 +25,7 @@ impl super::ModeHandler for HostMode {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
 
-        let app_port = 3000 + offset;
+        let app_port = config.base_port + offset;
 
         // Check port is free
         check_port_free(app_port)?;

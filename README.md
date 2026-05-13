@@ -119,6 +119,7 @@ ecluse ls [--json]
 ```toml
 mode = "hybrid"
 max_slots = 8
+base_port = 3000
 stride = 100
 prefix = "ecluse"
 worktree_dir = ".ecluse/worktrees"

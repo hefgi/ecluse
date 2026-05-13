@@ -91,7 +91,7 @@ impl super::ModeHandler for HybridMode {
             None
         };
 
-        let app_port = Some(3000 + offset);
+        let app_port = Some(config.base_port + offset);
 
         // Build data service port mapping
         let data_service_ports: Vec<(String, u16)> = compose_data

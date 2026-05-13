@@ -104,6 +104,7 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
     let cfg = config::Config {
         mode: mode.clone(),
         max_slots: args.max_slots,
+        base_port: args.base_port,
         stride: args.stride,
         prefix: args.prefix.clone(),
         worktree_dir: ".ecluse/worktrees".into(),

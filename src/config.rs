@@ -37,6 +37,8 @@ pub struct Config {
     pub mode: Mode,
     #[serde(default = "default_max_slots")]
     pub max_slots: u8,
+    #[serde(default = "default_base_port")]
+    pub base_port: u16,
     #[serde(default = "default_stride")]
     pub stride: u16,
     #[serde(default = "default_prefix")]
@@ -66,6 +68,7 @@ pub struct DatabaseConfig {
 }
 
 fn default_max_slots() -> u8 { 8 }
+fn default_base_port() -> u16 { 3000 }
 fn default_stride() -> u16 { 100 }
 fn default_prefix() -> String { "ecluse".into() }
 fn default_worktree_dir() -> String { ".ecluse/worktrees".into() }
