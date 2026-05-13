@@ -1,0 +1,3 @@
+web:     bin/rails server -p $ECLUSE_WEB_PORT
+sidekiq: bundle exec sidekiq
+admin:   bin/rails server -p $ECLUSE_ADMIN_PORT -P tmp/pids/admin.pid

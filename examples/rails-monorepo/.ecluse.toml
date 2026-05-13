@@ -1,0 +1,16 @@
+mode = "hybrid"
+max_slots = 6
+base_port = 3000
+stride = 100
+prefix = "ecluse"
+
+# Three native processes, each needs its own host port.
+# slot 1 → 3100–3102, slot 2 → 3200–3202, etc.
+[ports]
+web     = 0   # → ECLUSE_WEB_PORT + PORT alias  Rails Puma server
+sidekiq = 1   # → ECLUSE_SIDEKIQ_PORT           Sidekiq Web UI (mounted at /sidekiq)
+admin   = 2   # → ECLUSE_ADMIN_PORT             Blazer / ActiveAdmin on a separate Rack process
+
+[hooks]
+on_up  = "bin/rails db:prepare"
+on_down = "bin/rails db:drop DISABLE_DATABASE_ENVIRONMENT_CHECK=1"
