@@ -86,10 +86,6 @@ Install the ecluse skill into your coding agent:
 npx skills add hefgi/ecluse -y
 ```
 
-## OrbStack note
-
-On macOS, [OrbStack](https://orbstack.dev) is the recommended Docker runtime for ecluse. It provides faster container startup (~200ms vs ~2s for Docker Desktop) and lower memory overhead. Both runtimes are supported; OrbStack is preferred for developer workstations running multiple parallel sessions.
-
 ## How it works
 
 The central concept is a **slot** — an integer from 1 to `max_slots`. Every resource is derived from the slot:
