@@ -445,7 +445,10 @@ mod tests {
         fs::create_dir_all(&dc).unwrap();
         fs::write(dc.join("devcontainer.json"), "{}").unwrap();
         let result = detect(dir.path());
-        assert!(result.scores.container > baseline, "devcontainer should increase container score");
+        assert!(
+            result.scores.container > baseline,
+            "devcontainer should increase container score"
+        );
     }
 
     #[test]
@@ -456,8 +459,14 @@ mod tests {
         fs::create_dir_all(&bin).unwrap();
         fs::write(bin.join("dev"), "#!/bin/bash").unwrap();
         let result = detect(dir.path());
-        assert!(result.scores.host > baseline.host, "bin/dev should increase host score");
-        assert!(result.scores.hybrid > baseline.hybrid, "bin/dev should increase hybrid score");
+        assert!(
+            result.scores.host > baseline.host,
+            "bin/dev should increase host score"
+        );
+        assert!(
+            result.scores.hybrid > baseline.hybrid,
+            "bin/dev should increase hybrid score"
+        );
     }
 
     #[test]
