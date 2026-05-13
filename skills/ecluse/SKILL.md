@@ -66,8 +66,8 @@ ecluse down feat-foo     # clean teardown
 
 1. Allocates a slot (integer 1–N) and computes port offset (`slot × stride`)
 2. Creates a git worktree at `.ecluse/worktrees/<slug>` on branch `ecluse/<slug>`
-3. Depending on mode: starts containers, provisions a database, or both
-4. Writes `.env.ecluse` in the worktree
+3. Depending on mode: starts containers, writes `.env.ecluse`, runs `on_up` hook if configured
+4. `on_up` runs in the worktree with all env vars set — use it for migrations, seeding, etc.
 
 ### Common first-time failures
 
@@ -79,74 +79,79 @@ ecluse down feat-foo     # clean teardown
 
 ## Agent Workflow
 
-You're in a repo with `.ecluse.toml`. Use ecluse. Every task gets its own isolated slot — no port collisions, no shared database state, clean teardown when done.
+You're in a repo with `.ecluse.toml`. Use ecluse. Every task gets its own isolated slot — no port collisions, clean teardown when done.
 
 ### The canonical loop
 
 ```bash
-# 1. Create a session — slug should be short, task-scoped, lowercase
-ecluse up <slug>          # e.g. feat-auth, fix-login, refactor-api
+# 1. Create session — get everything you need in one JSON call
+ecluse up <slug> --json
+# Returns:
+# {
+#   "slug": "feat-auth",
+#   "slot": 1,
+#   "mode": "hybrid",
+#   "branch": "ecluse/feat-auth",
+#   "worktree_path": "/path/to/.ecluse/worktrees/feat-auth",
+#   "env_file": "/path/to/.ecluse/worktrees/feat-auth/.env.ecluse",
+#   "env": {
+#     "PORT": "3100",
+#     "ECLUSE_SLOT": "1",
+#     "ECLUSE_SLUG": "feat-auth",
+#     "ECLUSE_MODE": "hybrid",
+#     "DATABASE_URL": "postgres://localhost:5532/postgres",
+#     "REDIS_URL": "redis://localhost:6479",
+#     ...
+#   }
+# }
 
-# 2. Read the output — it tells you everything
-#    Session:   feat-auth (slot 1)
-#    Worktree:  .ecluse/worktrees/feat-auth
-#    Mode:      hybrid
-#    App port:  3100
-#    Database:  myapp_feat_auth
-#    Next step: cd .ecluse/worktrees/feat-auth && source .env.ecluse
+# 2. Work in the worktree — edit files at worktree_path
+# Use env vars from the JSON for config, curl endpoints, running commands
 
-# 3. Go to the worktree
-cd <worktree_path>
+# 3. Run commands in the worktree with env loaded
+cd <worktree_path> && PORT=<port> npm test
+# or source the env file before running commands:
+cd <worktree_path> && source .env.ecluse && npm test
 
-# 4. Load environment
-source .env.ecluse
-
-# 5. Start dev server (host/hybrid only — container mode starts everything automatically)
-npm run dev    # or: bin/dev / bin/rails server / python manage.py runserver
-
-# 6. Do the work — normal git workflow, commits stay on ecluse/<slug> branch
-
-# 7. Verify
-npm test
-curl http://localhost:$PORT/health
-
-# 8. Tear down
+# 4. Tear down
 ecluse down <slug>
 ```
 
-### If you don't know the worktree path
+### Query an existing session anytime
 
 ```bash
-ecluse ls --json | jq -r '.[] | select(.slug=="<slug>") | .worktree_path'
+ecluse env <slug>   # same JSON as up --json: worktree_path + all env vars
 ```
 
-### Environment variables in `.env.ecluse`
+### Environment variables
+
+All vars are in the JSON from `ecluse up --json` or `ecluse env <slug>`.
 
 | Variable | Example | Description |
 |---|---|---|
-| `PORT` | `3100` | App port — use this, not a hardcoded 3000 |
-| `DATABASE_URL` | `postgres://localhost:5532/myapp_feat_auth` | Postgres connection string |
-| `REDIS_URL` | `redis://localhost:6479` | Redis connection string (if redis present) |
+| `PORT` | `3100` | App port — never hardcode 3000 |
+| `DATABASE_URL` | `postgres://localhost:5532/postgres` | Set if compose has a postgres service |
+| `REDIS_URL` | `redis://localhost:6479` | Set if compose has a redis service |
 | `ECLUSE_SLOT` | `1` | Slot number |
+| `ECLUSE_SLUG` | `feat-auth` | Session slug |
 | `ECLUSE_OFFSET` | `100` | Port offset (`slot × stride`) |
 | `ECLUSE_MODE` | `hybrid` | `container`, `host`, or `hybrid` |
-| `ECLUSE_<SERVICE>_PORT` | `ECLUSE_POSTGRES_PORT=5532` | Offset host port per service |
+| `ECLUSE_<SERVICE>_PORT` | `ECLUSE_POSTGRES_PORT=5532` | Offset port per compose service |
 
 ### Parallel sessions
 
 ```bash
-ecluse up feat-auth    # slot 1, port 3100, db myapp_feat_auth
-ecluse up feat-cache   # slot 2, port 3200, db myapp_feat_cache
-ecluse ls              # see both
+ecluse up feat-auth --json   # slot 1, port 3100
+ecluse up feat-cache --json  # slot 2, port 3200
+ecluse ls                    # see both
 ```
 
-Each session is a separate git branch. They don't interfere.
+Each session is a separate git branch and worktree. They don't interfere.
 
 ### Common failures
 
 - **"session already exists"** — use a different slug or `ecluse down <slug>` first
 - **"all slots in use"** — `ecluse ls` to find stale sessions, `ecluse down` the oldest
-- **Dev server can't reach database** — you forgot `source .env.ecluse` before starting
 - **Port in use** — `lsof -iTCP:<port> -sTCP:LISTEN` to find the blocker
 
 ---
@@ -441,7 +446,7 @@ RUST_LOG=debug ecluse up feat-foo
 | `NotAGitRepo` | Not in a git repo | `git init` first |
 | `ComposeFileNotFound` | No compose file at repo root | Add compose file or switch mode |
 | `PortInUse` | Port bound by another process | `kill <pid>` then retry |
-| `PostgresUnreachable` | Can't connect to configured postgres | Start postgres; check config |
+| `HookFailed` | `on_up` or `on_down` exited non-zero | Check the hook command and its output |
 
 ---
 
@@ -454,9 +459,9 @@ What ecluse intentionally does not do in v0. These are design decisions, not bug
 - **`localhost:<port>` only** — no public URLs; use cloudflared or ngrok alongside ecluse
 - **No agent process sandboxing** — container mode isolates services, not the agent's filesystem
 - **No process lifecycle management** — ecluse does not start dev servers or manage tmux sessions; it sets up the environment and writes `.env.ecluse`
-- **`ecluse shell` is for humans, not agents** — agents should `cd <worktree_path> && source .env.ecluse` directly; `ecluse shell` spawns an interactive subshell which blocks non-interactive execution
+- **`ecluse shell` is for humans, not agents** — agents use `ecluse up --json` or `ecluse env` to get the worktree path and env vars, then operate directly; `ecluse shell` spawns an interactive subshell which blocks non-interactive execution
+- **No built-in database management** — ecluse allocates ports and writes env vars; use `[hooks] on_up`/`on_down` with your app's own tooling (prisma, rails db:create, psql, etc.)
 - **macOS and Linux only** — WSL2 acceptable but untested; native Windows not supported
-- **Postgres only for database provisioning** — MySQL, MongoDB, SQLite not supported in v0
 - **No background daemon** — every ecluse command is a short-lived process
 - **No Ctrl+C rollback guarantee** — if killed mid-`up`, run `ecluse down <slug>` to clean partial state
 - **No plugin/hook system** — wrap ecluse in a shell script for custom lifecycle behaviour
@@ -476,21 +481,21 @@ stride = 100            # port offset per slot
 prefix = "ecluse"       # prefix for compose project names and volume names
 worktree_dir = ".ecluse/worktrees"
 
-# Optional: database provisioning (host and hybrid modes)
-[database]
-provider = "postgres-host"
-host = "localhost"
-port = 5432
-user = "postgres"
-base = "myapp"          # database name prefix; slug is appended
+# Optional: lifecycle hooks — run in the worktree with all env vars set
+[hooks]
+on_up = "npx prisma migrate deploy"
+on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_SLUG'"
 ```
+
+Hooks run as shell commands inside the worktree directory. All `.env.ecluse` variables (`PORT`, `DATABASE_URL`, `ECLUSE_SLUG`, etc.) are available. ecluse does not manage databases directly — use `on_up` for migrations, `on_down` for teardown.
 
 ## Commands
 
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
-ecluse up <slug> [--branch <name>] [--watch]
+ecluse up <slug> [--branch <name>] [--watch] [--json]
+ecluse env <slug>
 ecluse shell <slug>
-ecluse down <slug> [--keep-volumes] [--keep-database] [--keep-branch]
+ecluse down <slug> [--keep-volumes] [--keep-branch]
 ecluse ls [--json]
 ```

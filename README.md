@@ -85,11 +85,19 @@ The skill teaches your agent every command, mode, and workflow. Install globally
 Canonical agent loop:
 
 ```bash
-ecluse up <task-slug>
-cd $(ecluse ls --json | jq -r '.[] | select(.slug=="<task-slug>") | .worktree_path')
-source .env.ecluse   # PORT, DATABASE_URL, etc. now in env
-# do work, run tests, verify
+# 1. Create session — get worktree path + full env in one call
+ecluse up <task-slug> --json   # returns JSON with worktree_path and all env vars
+
+# 2. Work in the worktree (path from JSON above)
+# Edit files, run commands — env vars are in the JSON output
+
+# 3. Tear down
 ecluse down <task-slug>
+```
+
+Or query an existing session anytime:
+```bash
+ecluse env <task-slug>   # JSON: worktree_path + all env vars
 ```
 
 The `.env.ecluse` file in every worktree contains everything the agent needs:
@@ -128,9 +136,10 @@ Three thin mode implementations share this slot primitive. Mode is selected once
 
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
-ecluse up <slug> [--branch <name>] [--watch]
+ecluse up <slug> [--branch <name>] [--watch] [--json]
 ecluse shell <slug>
-ecluse down <slug> [--keep-volumes] [--keep-database] [--keep-branch]
+ecluse env <slug>
+ecluse down <slug> [--keep-volumes] [--keep-branch]
 ecluse ls [--json]
 ```
 
@@ -148,15 +157,13 @@ worktree_dir = ".ecluse/worktrees"
 app_label = "ecluse.role"
 app_label_value = "app"
 
-# Optional: database provisioning for host and hybrid modes
-[database]
-provider = "postgres-host"
-host = "localhost"
-port = 5432
-user = "postgres"
-base = "myapp"
-# password: use PGPASSWORD env var or ~/.pgpass
+# Optional: lifecycle hooks — run in the worktree with all env vars set
+[hooks]
+on_up = "npx prisma migrate deploy"
+on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_SLUG'"
 ```
+
+Hooks run as shell commands inside the worktree directory with all `.env.ecluse` variables pre-loaded. Use them for migrations, seeding, or teardown. ecluse doesn't manage databases directly — your app's own tooling handles that via `on_up`.
 
 ## Hybrid mode setup
 
