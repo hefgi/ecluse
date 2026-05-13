@@ -22,11 +22,9 @@ Data services (postgres, redis) run in Docker containers managed by ecluse. The 
 | Variable               | Description                              |
 |------------------------|------------------------------------------|
 | `ECLUSE_SLUG`          | Session slug (e.g. `my-feature`)         |
-| `PORT`                 | Rails port (`base_port + slot * stride`) |
-| `DATABASE_URL`         | `postgres://localhost:<offset_port>/postgres` |
-| `REDIS_URL`            | `redis://localhost:<offset_port>`        |
-| `ECLUSE_POSTGRES_PORT` | Offset host port for Postgres            |
-| `ECLUSE_REDIS_PORT`    | Offset host port for Redis               |
+| `PORT`                 | Rails port (`base_port + slot`, e.g. 3001 for slot 1) |
+| `ECLUSE_POSTGRES_PORT` | Per-slot host port for Postgres          |
+| `ECLUSE_REDIS_PORT`    | Per-slot host port for Redis             |
 
 ## Hooks
 

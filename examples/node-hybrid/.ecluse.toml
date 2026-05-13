@@ -1,14 +1,27 @@
 mode = "hybrid"
 max_slots = 6
-base_port = 3000
-stride = 100
 prefix = "ecluse"
 
-# Express API on index 0 → ECLUSE_API_PORT + PORT alias (e.g. 3100 for slot 1)
-# React dev server on index 1 → ECLUSE_FRONTEND_PORT (e.g. 3101 for slot 1)
-[ports]
-api = 0
-frontend = 1
+# Express API: slot 1 → ECLUSE_API_PORT=3001 + PORT alias, slot 2 → 3002
+[[services]]
+name = "api"
+base_port = 3000
+
+# React dev server: slot 1 → ECLUSE_FRONTEND_PORT=5174, slot 2 → 5175
+[[services]]
+name = "frontend"
+base_port = 5173
+
+# Data services — rewritten in compose overlay
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432
+
+[[services]]
+name = "redis"
+run = "docker"
+base_port = 6379
 
 [hooks]
 on_up = "npm run db:migrate"

@@ -20,9 +20,8 @@ Postgres runs in a Docker container managed by ecluse. Next.js runs natively. Ea
 | Variable               | Description                              |
 |------------------------|------------------------------------------|
 | `ECLUSE_SLUG`          | Session slug                             |
-| `PORT`                 | Next.js port (`base_port + slot * stride`) |
-| `DATABASE_URL`         | `postgres://localhost:<offset_port>/postgres` |
-| `ECLUSE_POSTGRES_PORT` | Offset host port for Postgres            |
+| `PORT`                 | Next.js port (`base_port + slot`, e.g. 3001 for slot 1) |
+| `ECLUSE_POSTGRES_PORT` | Per-slot host port for Postgres          |
 
 ## Hooks
 

@@ -2,7 +2,7 @@
 
 Rails 7 app with Sidekiq background jobs and a Blazer admin panel, running in hybrid mode.
 
-Data services (Postgres, Redis) run in Docker with per-slot offset ports. Three Rails processes run natively — each on its own dedicated port from the `[ports]` table.
+Data services (Postgres, Redis) run in Docker with per-slot ports. Three Rails processes run natively — each on its own dedicated `base_port` in `[[services]]`.
 
 ## Processes
 
@@ -14,15 +14,15 @@ Data services (Postgres, Redis) run in Docker with per-slot offset ports. Three 
 
 Sidekiq Web UI is mounted inside the main Rails app at `/sidekiq` (routed through Puma on `ECLUSE_WEB_PORT`). The `ECLUSE_SIDEKIQ_PORT` is reserved for a standalone Sidekiq Web rack process if you prefer to run it separately.
 
-## Ports (slot 1 example)
+## Ports (slot 1 example, `port = base_port + 1`)
 
 | Variable               | Port | Service              |
 |------------------------|------|----------------------|
-| `ECLUSE_WEB_PORT`      | 3100 | Rails Puma (+ PORT alias) |
-| `ECLUSE_SIDEKIQ_PORT`  | 3101 | Sidekiq Web (standalone) |
-| `ECLUSE_ADMIN_PORT`    | 3102 | Blazer admin panel   |
-| `ECLUSE_POSTGRES_PORT` | 5532 | Postgres (compose)   |
-| `ECLUSE_REDIS_PORT`    | 6479 | Redis (compose)      |
+| `ECLUSE_WEB_PORT`      | 3001 | Rails Puma (+ PORT alias) |
+| `ECLUSE_SIDEKIQ_PORT`  | 4568 | Sidekiq Web (standalone) |
+| `ECLUSE_ADMIN_PORT`    | 4001 | Blazer admin panel   |
+| `ECLUSE_POSTGRES_PORT` | 5433 | Postgres (compose)   |
+| `ECLUSE_REDIS_PORT`    | 6380 | Redis (compose)      |
 
 ## Usage
 
@@ -47,7 +47,7 @@ Rails reads port from the env var at boot — no hardcoded 3000:
 
 ```ruby
 # config/puma.rb
-port ENV.fetch("ECLUSE_WEB_PORT", 3000)
+port ENV.fetch("PORT", 3000)
 ```
 
 Sidekiq connects to Redis via the offset port:

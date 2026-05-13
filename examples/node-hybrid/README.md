@@ -20,9 +20,9 @@ Postgres runs in a Docker container managed by ecluse. The Express API and React
 | Variable               | Description                              |
 |------------------------|------------------------------------------|
 | `ECLUSE_SLUG`          | Session slug                             |
-| `PORT`                 | App port (`base_port + slot * stride`)   |
-| `DATABASE_URL`         | `postgres://localhost:<offset_port>/postgres` |
-| `ECLUSE_POSTGRES_PORT` | Offset host port for Postgres            |
+| `PORT`                 | App port (`base_port + slot`, e.g. 3001 for slot 1) |
+| `ECLUSE_POSTGRES_PORT` | Per-slot host port for Postgres          |
+| `ECLUSE_REDIS_PORT`    | Per-slot host port for Redis             |
 
 ## Hooks
 

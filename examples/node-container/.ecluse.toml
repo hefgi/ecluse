@@ -1,5 +1,7 @@
 mode = "container"
 max_slots = 6
-base_port = 3000
-stride = 100
 prefix = "ecluse"
+
+# All services run in Docker — ports come from compose overlay.
+# [[services]] with run = "docker" are optional here; ecluse rewrites
+# all compose ports automatically using slot as offset.

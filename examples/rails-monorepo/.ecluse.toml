@@ -1,15 +1,32 @@
 mode = "hybrid"
 max_slots = 6
-base_port = 3000
-stride = 100
 prefix = "ecluse"
 
-# Three native processes, each needs its own host port.
-# slot 1 → 3100–3102, slot 2 → 3200–3202, etc.
-[ports]
-web     = 0   # → ECLUSE_WEB_PORT + PORT alias  Rails Puma server
-sidekiq = 1   # → ECLUSE_SIDEKIQ_PORT           Sidekiq Web UI (mounted at /sidekiq)
-admin   = 2   # → ECLUSE_ADMIN_PORT             Blazer / ActiveAdmin on a separate Rack process
+# Rails Puma server: slot 1 → ECLUSE_WEB_PORT=3001 + PORT alias, slot 2 → 3002
+[[services]]
+name = "web"
+base_port = 3000
+
+# Sidekiq Web UI: slot 1 → ECLUSE_SIDEKIQ_PORT=4568, slot 2 → 4569
+[[services]]
+name = "sidekiq"
+base_port = 4567
+
+# Blazer / ActiveAdmin: slot 1 → ECLUSE_ADMIN_PORT=4001, slot 2 → 4002
+[[services]]
+name = "admin"
+base_port = 4000
+
+# Data services — rewritten in compose overlay
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432
+
+[[services]]
+name = "redis"
+run = "docker"
+base_port = 6379
 
 [hooks]
 on_up  = "bin/rails db:prepare"

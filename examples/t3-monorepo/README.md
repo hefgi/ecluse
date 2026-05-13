@@ -2,7 +2,7 @@
 
 T3 monorepo (Turborepo + Next.js + tRPC + Prisma + BullMQ) in hybrid mode.
 
-Data services (Postgres, Redis) run in Docker with per-slot offset ports. All four app services run natively on the host — each on its own dedicated port from the `[ports]` table.
+Data services (Postgres, Redis) run in Docker with per-slot ports. All four app services run natively on the host — each on its own dedicated `base_port` in `[[services]]`.
 
 ## Monorepo structure
 
@@ -17,18 +17,18 @@ packages/
   ui/       Shared component library
 ```
 
-## Ports (slot 1 example)
+## Ports (slot 1 example, `port = base_port + 1`)
 
 | Variable              | Port | Service                  |
 |-----------------------|------|--------------------------|
-| `ECLUSE_API_PORT`     | 3100 | tRPC / REST API          |
+| `ECLUSE_API_PORT`     | 3001 | tRPC / REST API + PORT alias |
 | `ECLUSE_WEB_PORT`     | 3101 | Next.js frontend         |
-| `ECLUSE_WORKER_PORT`  | 3102 | BullMQ board UI          |
-| `ECLUSE_EMAIL_PORT`   | 3103 | React Email preview      |
-| `ECLUSE_POSTGRES_PORT`| 5532 | Postgres (from compose)  |
-| `ECLUSE_REDIS_PORT`   | 6479 | Redis (from compose)     |
+| `ECLUSE_WORKER_PORT`  | 3201 | BullMQ board UI          |
+| `ECLUSE_EMAIL_PORT`   | 3301 | React Email preview      |
+| `ECLUSE_POSTGRES_PORT`| 5433 | Postgres (from compose)  |
+| `ECLUSE_REDIS_PORT`   | 6380 | Redis (from compose)     |
 
-`PORT` is an alias for `ECLUSE_API_PORT` (the first `[ports]` entry).
+`PORT` is an alias for `ECLUSE_API_PORT` (the first native `[[services]]` entry).
 
 ## Usage
 
@@ -38,11 +38,11 @@ ecluse shell my-feature
 
 # Inside the session shell — start all services via turbo
 npm run dev
-# or start individually:
-# ECLUSE_API_PORT=3100 npx next dev apps/api -p $ECLUSE_API_PORT
-# ECLUSE_WEB_PORT=3101 npx next dev apps/web -p $ECLUSE_WEB_PORT
-# ECLUSE_WORKER_PORT=3102 node apps/worker/src/index.js
-# ECLUSE_EMAIL_PORT=3103 npx email dev --port $ECLUSE_EMAIL_PORT
+# or start individually (slot 1 example):
+# npx next dev apps/api -p $ECLUSE_API_PORT
+# npx next dev apps/web -p $ECLUSE_WEB_PORT
+# node apps/worker/src/index.js  (reads ECLUSE_WORKER_PORT)
+# npx email dev --port $ECLUSE_EMAIL_PORT
 
 ecluse down my-feature
 ```

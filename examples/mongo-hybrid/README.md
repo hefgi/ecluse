@@ -22,8 +22,8 @@ Note: MongoDB is not a Postgres-compatible service, so ecluse does not set `DATA
 | Variable               | Description                              |
 |------------------------|------------------------------------------|
 | `ECLUSE_SLUG`          | Session slug                             |
-| `PORT`                 | App port (`base_port + slot * stride`)   |
-| `ECLUSE_MONGODB_PORT`  | Offset host port for MongoDB             |
+| `PORT`                 | App port (`base_port + slot`, e.g. 3001 for slot 1) |
+| `ECLUSE_MONGO_PORT`    | Per-slot host port for MongoDB           |
 
 ## Constructing the MongoDB connection string
 

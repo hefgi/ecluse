@@ -20,9 +20,8 @@ Postgres runs in a Docker container managed by ecluse. The Go binary runs native
 | Variable               | Description                              |
 |------------------------|------------------------------------------|
 | `ECLUSE_SLUG`          | Session slug                             |
-| `PORT`                 | API port (`base_port + slot * stride`)   |
-| `DATABASE_URL`         | `postgres://localhost:<offset_port>/postgres` |
-| `ECLUSE_POSTGRES_PORT` | Offset host port for Postgres            |
+| `PORT`                 | API port (`base_port + slot`, e.g. 8081 for slot 1) |
+| `ECLUSE_POSTGRES_PORT` | Per-slot host port for Postgres          |
 
 ## Hooks
 

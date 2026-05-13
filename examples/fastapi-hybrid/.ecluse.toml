@@ -1,14 +1,27 @@
 mode = "hybrid"
 max_slots = 6
-base_port = 8000
-stride = 100
 prefix = "ecluse"
 
-# FastAPI on index 0 → ECLUSE_API_PORT + PORT alias (e.g. 8100 for slot 1)
-# Vue dev server on index 1 → ECLUSE_FRONTEND_PORT (e.g. 8101 for slot 1)
-[ports]
-api = 0
-frontend = 1
+# FastAPI: slot 1 → ECLUSE_API_PORT=8001 + PORT alias, slot 2 → 8002
+[[services]]
+name = "api"
+base_port = 8000
+
+# Vue dev server: slot 1 → ECLUSE_FRONTEND_PORT=5174, slot 2 → 5175
+[[services]]
+name = "frontend"
+base_port = 5173
+
+# Data services — ports are rewritten in the compose overlay
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432
+
+[[services]]
+name = "redis"
+run = "docker"
+base_port = 6379
 
 [hooks]
 on_up = "alembic upgrade head"

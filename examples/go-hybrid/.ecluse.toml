@@ -1,12 +1,17 @@
 mode = "hybrid"
 max_slots = 6
-base_port = 8080
-stride = 100
 prefix = "ecluse"
 
-# Go HTTP server on index 0 → ECLUSE_API_PORT + PORT alias (e.g. 8180 for slot 1)
-[ports]
-api = 0
+# Go HTTP server: slot 1 → ECLUSE_API_PORT=8081 + PORT alias, slot 2 → 8082
+[[services]]
+name = "api"
+base_port = 8080
+
+# Postgres data service — rewritten in compose overlay
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432
 
 [hooks]
-on_up = "migrate -path ./migrations -database \"$ECLUSE_POSTGRES_PORT\" up"
+on_up = "migrate -path ./migrations -database \"postgres://localhost:$ECLUSE_POSTGRES_PORT/myapp\" up"

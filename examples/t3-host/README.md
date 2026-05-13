@@ -16,7 +16,7 @@ Each slot gets a distinct `PORT` so multiple worktrees can serve simultaneously.
 |---------------|------------------------------------------|
 | `ECLUSE_SLUG` | Session slug (use in DB name convention) |
 | `ECLUSE_SLOT` | Slot number                              |
-| `PORT`        | Next.js port (`base_port + slot * stride`) |
+| `PORT`        | Next.js port (`base_port + slot`, e.g. 3001 for slot 1) |
 
 ## Hooks
 

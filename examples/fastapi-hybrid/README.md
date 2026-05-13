@@ -21,9 +21,9 @@ Postgres runs in a Docker container managed by ecluse. The FastAPI process and V
 | Variable               | Description                              |
 |------------------------|------------------------------------------|
 | `ECLUSE_SLUG`          | Session slug                             |
-| `PORT`                 | API port (`base_port + slot * stride`)   |
-| `DATABASE_URL`         | `postgres://localhost:<offset_port>/postgres` |
-| `ECLUSE_POSTGRES_PORT` | Offset host port for Postgres            |
+| `PORT`                 | API port (`base_port + slot`, e.g. 8001 for slot 1) |
+| `ECLUSE_POSTGRES_PORT` | Per-slot host port for Postgres          |
+| `ECLUSE_REDIS_PORT`    | Per-slot host port for Redis             |
 
 ## Hooks
 
