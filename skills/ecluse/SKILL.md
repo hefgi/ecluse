@@ -121,6 +121,7 @@ ecluse down <slug>
 
 ```bash
 ecluse env <slug>   # same JSON as up --json: worktree_path + all env vars
+ecluse env          # auto-detects current session if run from inside a worktree
 ```
 
 ### Environment variables

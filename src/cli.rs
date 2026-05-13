@@ -109,6 +109,6 @@ pub struct ShellArgs {
 
 #[derive(Args)]
 pub struct EnvArgs {
-    /// Session slug
-    pub slug: String,
+    /// Session slug — omit when already inside a worktree
+    pub slug: Option<String>,
 }

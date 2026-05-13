@@ -422,11 +422,30 @@ fn cmd_env(args: cli::EnvArgs) -> Result<()> {
     let (_, root) = config::Config::find_and_load()?;
     let guard = state::StateGuard::acquire(&root)?;
 
-    let session = guard
-        .state
-        .find_session(&args.slug)
-        .ok_or_else(|| error::EcluseError::SessionNotFound(args.slug.clone()))?
-        .clone();
+    let session = match args.slug {
+        Some(ref slug) => guard
+            .state
+            .find_session(slug)
+            .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
+            .clone(),
+        None => {
+            let cwd = std::env::current_dir().context("could not determine current directory")?;
+            guard
+                .state
+                .sessions
+                .iter()
+                .find(|s| {
+                    let wt = std::path::Path::new(&s.worktree_path);
+                    cwd.starts_with(wt)
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "not inside an ecluse worktree; run from a worktree or pass a slug"
+                    )
+                })?
+                .clone()
+        }
+    };
 
     let env_file = std::path::Path::new(&session.worktree_path).join(".env.ecluse");
 
