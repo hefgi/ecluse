@@ -40,11 +40,16 @@ impl PgClient {
         // Use a short TCP connect timeout via psql
         let out = Command::new("psql")
             .args([
-                "-h", &self.host,
-                "-p", &self.port.to_string(),
-                "-U", &self.user,
-                "-c", "SELECT 1",
-                "--connect-timeout", "1",
+                "-h",
+                &self.host,
+                "-p",
+                &self.port.to_string(),
+                "-U",
+                &self.user,
+                "-c",
+                "SELECT 1",
+                "--connect-timeout",
+                "1",
                 "-q",
                 "-t",
             ])
@@ -60,7 +65,14 @@ impl PgClient {
 
     fn run_psql(&self, args: &[&str]) -> Result<std::process::Output> {
         Command::new("psql")
-            .args(["-h", &self.host, "-p", &self.port.to_string(), "-U", &self.user])
+            .args([
+                "-h",
+                &self.host,
+                "-p",
+                &self.port.to_string(),
+                "-U",
+                &self.user,
+            ])
             .args(args)
             .output()
             .context("failed to run psql")

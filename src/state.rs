@@ -17,11 +17,16 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
-        Self { version: 1, sessions: Vec::new() }
+        Self {
+            version: 1,
+            sessions: Vec::new(),
+        }
     }
 }
 
-fn default_version() -> u8 { 1 }
+fn default_version() -> u8 {
+    1
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Session {
@@ -96,8 +101,8 @@ impl StateGuard {
 
         let state_path = ecluse_dir.join("state.json");
         let state = if state_path.exists() {
-            let content = std::fs::read_to_string(&state_path)
-                .context("failed to read state.json")?;
+            let content =
+                std::fs::read_to_string(&state_path).context("failed to read state.json")?;
             serde_json::from_str(&content)
                 .with_context(|| crate::error::EcluseError::StateCorrupt(content.clone()))?
         } else {
@@ -113,10 +118,9 @@ impl StateGuard {
 
     pub fn commit(&self) -> Result<()> {
         let tmp = self.state_path.with_extension("json.tmp");
-        let data = serde_json::to_string_pretty(&self.state)
-            .context("failed to serialize state")?;
-        std::fs::write(&tmp, &data)
-            .context("failed to write state.json.tmp")?;
+        let data =
+            serde_json::to_string_pretty(&self.state).context("failed to serialize state")?;
+        std::fs::write(&tmp, &data).context("failed to write state.json.tmp")?;
         std::fs::rename(&tmp, &self.state_path)
             .context("failed to atomically update state.json")?;
         Ok(())

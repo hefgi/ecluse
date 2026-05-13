@@ -26,12 +26,13 @@ pub fn run(args: &[&str]) -> Result<String> {
     }
 }
 
-pub fn compose_up(project: &str, compose_file: &str, overlay_file: Option<&str>, watch: bool) -> Result<()> {
-    let mut args = vec![
-        "compose",
-        "-p", project,
-        "-f", compose_file,
-    ];
+pub fn compose_up(
+    project: &str,
+    compose_file: &str,
+    overlay_file: Option<&str>,
+    watch: bool,
+) -> Result<()> {
+    let mut args = vec!["compose", "-p", project, "-f", compose_file];
     if let Some(ov) = overlay_file {
         args.extend(["-f", ov]);
     }
@@ -49,7 +50,8 @@ pub fn compose_up(project: &str, compose_file: &str, overlay_file: Option<&str>,
     if !status.success() {
         return Err(crate::error::EcluseError::DockerFailed {
             stderr: "docker compose up failed; check output above".into(),
-        }.into());
+        }
+        .into());
     }
     Ok(())
 }
@@ -61,11 +63,7 @@ pub fn compose_up_services(
     services: &[&str],
     watch: bool,
 ) -> Result<()> {
-    let mut args = vec![
-        "compose",
-        "-p", project,
-        "-f", compose_file,
-    ];
+    let mut args = vec!["compose", "-p", project, "-f", compose_file];
     if let Some(ov) = overlay_file {
         args.extend(["-f", ov]);
     }
@@ -84,17 +82,19 @@ pub fn compose_up_services(
     if !status.success() {
         return Err(crate::error::EcluseError::DockerFailed {
             stderr: "docker compose up failed; check output above".into(),
-        }.into());
+        }
+        .into());
     }
     Ok(())
 }
 
-pub fn compose_down(project: &str, compose_file: &str, overlay_file: Option<&str>, remove_volumes: bool) -> Result<()> {
-    let mut args = vec![
-        "compose",
-        "-p", project,
-        "-f", compose_file,
-    ];
+pub fn compose_down(
+    project: &str,
+    compose_file: &str,
+    overlay_file: Option<&str>,
+    remove_volumes: bool,
+) -> Result<()> {
+    let mut args = vec!["compose", "-p", project, "-f", compose_file];
     if let Some(ov) = overlay_file {
         args.extend(["-f", ov]);
     }

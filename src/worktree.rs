@@ -12,9 +12,7 @@ impl WorktreeManager {
     }
 
     pub fn worktree_path(&self, config: &crate::config::Config, slug: &str) -> PathBuf {
-        self.project_root
-            .join(&config.worktree_dir)
-            .join(slug)
+        self.project_root.join(&config.worktree_dir).join(slug)
     }
 
     pub fn create(&self, path: &Path, branch: &str) -> Result<()> {

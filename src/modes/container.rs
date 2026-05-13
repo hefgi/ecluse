@@ -25,20 +25,19 @@ impl super::ModeHandler for ContainerMode {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
 
-        let compose_path = compose::find_compose_file(root)
-            .ok_or_else(|| crate::error::EcluseError::ComposeFileNotFound(root.display().to_string()))?;
+        let compose_path = compose::find_compose_file(root).ok_or_else(|| {
+            crate::error::EcluseError::ComposeFileNotFound(root.display().to_string())
+        })?;
 
         let compose_data = compose::parse(&compose_path)?;
 
         let suffix = format!("{}_{}", config.prefix, slug);
         let overlay_dir = root.join(".ecluse").join("overlays");
-        std::fs::create_dir_all(&overlay_dir)
-            .context("failed to create overlays directory")?;
+        std::fs::create_dir_all(&overlay_dir).context("failed to create overlays directory")?;
         let overlay_path = overlay_dir.join(format!("{}.yml", slug));
 
         let overlay_yaml = compose::generate_overlay(&compose_data, offset, &suffix, None)?;
-        std::fs::write(&overlay_path, &overlay_yaml)
-            .context("failed to write overlay file")?;
+        std::fs::write(&overlay_path, &overlay_yaml).context("failed to write overlay file")?;
 
         // Create worktree
         wt.create(&worktree_path, branch)?;

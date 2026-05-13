@@ -109,27 +109,40 @@ pub fn detect(root: &Path) -> DetectionResult {
         // Parse compose for deeper signals
         if let Ok(compose) = crate::compose::parse(cp) {
             // Any service has build: . (app builds from repo)
-            let has_app_build = compose.services.values().any(|svc| {
-                match &svc.build {
-                    Some(serde_yaml::Value::String(s)) => s == "." || s.starts_with("./"),
-                    Some(serde_yaml::Value::Mapping(m)) => m
-                        .get("context")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s == "." || s.starts_with("./"))
-                        .unwrap_or(false),
-                    _ => false,
-                }
+            let has_app_build = compose.services.values().any(|svc| match &svc.build {
+                Some(serde_yaml::Value::String(s)) => s == "." || s.starts_with("./"),
+                Some(serde_yaml::Value::Mapping(m)) => m
+                    .get("context")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s == "." || s.starts_with("./"))
+                    .unwrap_or(false),
+                _ => false,
             });
             if has_app_build {
-                let sig = Signal::new("Compose has a service with build: . (app builds from repo root)", 3, 0, 0);
+                let sig = Signal::new(
+                    "Compose has a service with build: . (app builds from repo root)",
+                    3,
+                    0,
+                    0,
+                );
                 scores.container += sig.container_delta;
                 signals.push(sig);
             }
 
             // All services match known data images
             let data_images = [
-                "postgres", "redis", "mysql", "mongo", "rabbitmq", "mailhog",
-                "minio", "elasticsearch", "nats", "kafka", "clickhouse", "memcached",
+                "postgres",
+                "redis",
+                "mysql",
+                "mongo",
+                "rabbitmq",
+                "mailhog",
+                "minio",
+                "elasticsearch",
+                "nats",
+                "kafka",
+                "clickhouse",
+                "memcached",
             ];
             let all_data = !compose.services.is_empty()
                 && compose.services.values().all(|svc| {
@@ -154,7 +167,8 @@ pub fn detect(root: &Path) -> DetectionResult {
             }
 
             // Any service has ecluse.role: app label
-            let has_app_label = !crate::compose::app_services(&compose, "ecluse.role", "app").is_empty();
+            let has_app_label =
+                !crate::compose::app_services(&compose, "ecluse.role", "app").is_empty();
             if has_app_label {
                 let sig = Signal::new("Compose has a service with label ecluse.role=app", 0, 0, 10);
                 scores.hybrid += sig.hybrid_delta;
@@ -176,9 +190,10 @@ pub fn detect(root: &Path) -> DetectionResult {
             }
 
             // Compose has watch blocks
-            let has_watch = compose.services.values().any(|svc| {
-                svc.other.contains_key("develop") || svc.other.contains_key("watch")
-            });
+            let has_watch = compose
+                .services
+                .values()
+                .any(|svc| svc.other.contains_key("develop") || svc.other.contains_key("watch"));
             if has_watch {
                 let sig = Signal::new("Compose has watch: blocks", 2, 0, 1);
                 scores.container += sig.container_delta;
@@ -195,7 +210,11 @@ pub fn detect(root: &Path) -> DetectionResult {
     }
 
     // .devcontainer
-    if root.join(".devcontainer").join("devcontainer.json").exists() {
+    if root
+        .join(".devcontainer")
+        .join("devcontainer.json")
+        .exists()
+    {
         let sig = Signal::new(".devcontainer/devcontainer.json exists", 4, 0, 0);
         scores.container += sig.container_delta;
         signals.push(sig);
@@ -229,7 +248,12 @@ pub fn detect(root: &Path) -> DetectionResult {
                     .unwrap_or("");
                 let has_docker = dev_script.contains("docker") || dev_script.contains("compose");
                 if !dev_script.is_empty() && !has_docker {
-                    let sig = Signal::new("package.json has a dev script that does not call docker/compose", 0, 2, 2);
+                    let sig = Signal::new(
+                        "package.json has a dev script that does not call docker/compose",
+                        0,
+                        2,
+                        2,
+                    );
                     scores.host += sig.host_delta;
                     scores.hybrid += sig.hybrid_delta;
                     signals.push(sig);
@@ -247,7 +271,13 @@ pub fn detect(root: &Path) -> DetectionResult {
     }
 
     // Version managers
-    for f in &[".tool-versions", ".nvmrc", ".python-version", ".ruby-version", "mise.toml"] {
+    for f in &[
+        ".tool-versions",
+        ".nvmrc",
+        ".python-version",
+        ".ruby-version",
+        "mise.toml",
+    ] {
         if root.join(f).exists() {
             let sig = Signal::new(&format!("{} present (version manager)", f), 0, 1, 1);
             scores.host += sig.host_delta;
@@ -355,9 +385,21 @@ pub fn print_detection_result(result: &DetectionResult) {
     println!("  Signals found:");
     for sig in &result.signals {
         let parts: Vec<String> = [
-            if sig.container_delta != 0 { format!("{:+} container", sig.container_delta) } else { String::new() },
-            if sig.host_delta != 0 { format!("{:+} host", sig.host_delta) } else { String::new() },
-            if sig.hybrid_delta != 0 { format!("{:+} hybrid", sig.hybrid_delta) } else { String::new() },
+            if sig.container_delta != 0 {
+                format!("{:+} container", sig.container_delta)
+            } else {
+                String::new()
+            },
+            if sig.host_delta != 0 {
+                format!("{:+} host", sig.host_delta)
+            } else {
+                String::new()
+            },
+            if sig.hybrid_delta != 0 {
+                format!("{:+} hybrid", sig.hybrid_delta)
+            } else {
+                String::new()
+            },
         ]
         .iter()
         .filter(|s| !s.is_empty())
@@ -375,11 +417,7 @@ pub fn print_detection_result(result: &DetectionResult) {
 
     match &result.recommended {
         None => println!("  No mode recommended — all scores ≤ 0. Use --mode to specify."),
-        Some(mode) => println!(
-            "  Recommended: {} ({})",
-            mode,
-            result.confidence,
-        ),
+        Some(mode) => println!("  Recommended: {} ({})", mode, result.confidence,),
     }
     println!();
 }

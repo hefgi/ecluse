@@ -32,8 +32,9 @@ pub struct Service {
 }
 
 pub fn parse(path: &Path) -> Result<ComposeFile> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| crate::error::EcluseError::ComposeFileNotFound(path.display().to_string()))?;
+    let content = std::fs::read_to_string(path).with_context(|| {
+        crate::error::EcluseError::ComposeFileNotFound(path.display().to_string())
+    })?;
     serde_yaml::from_str(&content)
         .with_context(|| crate::error::EcluseError::ComposeParseFailed(path.display().to_string()))
 }
@@ -114,11 +115,8 @@ pub fn generate_overlay(
 
         // Rewrite ports
         if !svc.ports.is_empty() {
-            let new_ports: Vec<serde_yaml::Value> = svc
-                .ports
-                .iter()
-                .map(|p| rewrite_port(p, offset))
-                .collect();
+            let new_ports: Vec<serde_yaml::Value> =
+                svc.ports.iter().map(|p| rewrite_port(p, offset)).collect();
             svc_override.insert("ports".into(), serde_yaml::Value::Sequence(new_ports));
         }
 
@@ -293,7 +291,12 @@ pub fn service_host_port(svc: &Service, offset: u16) -> Option<u16> {
 
 /// Find the compose file — checks docker-compose.yml, compose.yaml, compose.yml
 pub fn find_compose_file(root: &Path) -> Option<std::path::PathBuf> {
-    for name in &["docker-compose.yml", "docker-compose.yaml", "compose.yaml", "compose.yml"] {
+    for name in &[
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yaml",
+        "compose.yml",
+    ] {
         let p = root.join(name);
         if p.exists() {
             return Some(p);

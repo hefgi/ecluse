@@ -22,8 +22,7 @@ fn main() {
     let level = if cli.verbose { "debug" } else { "info" };
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| level.into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| level.into()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -61,7 +60,12 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
             std::process::exit(1);
         }
 
-        if args.explain || matches!(result.confidence, detect::Confidence::Low | detect::Confidence::None) {
+        if args.explain
+            || matches!(
+                result.confidence,
+                detect::Confidence::Low | detect::Confidence::None
+            )
+        {
             detect::print_detection_result(&result);
         } else {
             match &result.recommended {
@@ -209,13 +213,7 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
     let handler = modes::get_handler(&config);
 
     let session = handler.bring_up(
-        &args.slug,
-        slot,
-        offset,
-        &branch,
-        &config,
-        &root,
-        args.watch,
+        &args.slug, slot, offset, &branch, &config, &root, args.watch,
     )?;
 
     print_up_summary(&session, &config);
@@ -238,7 +236,10 @@ fn print_up_summary(session: &state::Session, _config: &config::Config) {
             if let Some(port) = session.app_port {
                 println!("App URL:    http://localhost:{}", port);
             }
-            println!("Project:    {}", session.compose_project.as_deref().unwrap_or("-"));
+            println!(
+                "Project:    {}",
+                session.compose_project.as_deref().unwrap_or("-")
+            );
         }
         config::Mode::Host | config::Mode::Hybrid => {
             if let Some(port) = session.app_port {
@@ -249,10 +250,7 @@ fn print_up_summary(session: &state::Session, _config: &config::Config) {
             }
             println!();
             println!("Next step:");
-            println!(
-                "  cd {} && source .env.ecluse",
-                session.worktree_path
-            );
+            println!("  cd {} && source .env.ecluse", session.worktree_path);
             println!("  <your dev command>  # e.g. npm run dev, bin/dev, bin/rails server");
         }
     }
@@ -272,14 +270,23 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         .clone();
 
     let handler = modes::get_handler(&config);
-    handler.bring_down(&session, &config, &root, args.keep_volumes, args.keep_database)?;
+    handler.bring_down(
+        &session,
+        &config,
+        &root,
+        args.keep_volumes,
+        args.keep_database,
+    )?;
 
     guard.state.remove_session(&args.slug);
     guard.commit()?;
 
     if args.keep_branch {
         // v0: branches are never deleted anyway; flag noted for future use
-        tracing::debug!("--keep-branch is a no-op in v0; branch '{}' is kept", session.branch);
+        tracing::debug!(
+            "--keep-branch is a no-op in v0; branch '{}' is kept",
+            session.branch
+        );
     }
 
     println!("Session '{}' torn down.", args.slug);
@@ -329,7 +336,10 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
             slug: s.slug.clone(),
             mode: s.mode.to_string(),
             slot: s.slot,
-            port: s.app_port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+            port: s
+                .app_port
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| "-".into()),
             database: s.database_name.clone().unwrap_or_else(|| "-".into()),
             branch: s.branch.clone(),
             started: s.started_at[..16].replace('T', " "),
@@ -339,4 +349,3 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
     println!("{}", Table::new(rows));
     Ok(())
 }
-

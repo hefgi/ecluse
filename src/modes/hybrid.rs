@@ -26,14 +26,17 @@ impl super::ModeHandler for HybridMode {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
 
-        let compose_path = compose::find_compose_file(root)
-            .ok_or_else(|| crate::error::EcluseError::ComposeFileNotFound(root.display().to_string()))?;
+        let compose_path = compose::find_compose_file(root).ok_or_else(|| {
+            crate::error::EcluseError::ComposeFileNotFound(root.display().to_string())
+        })?;
 
         let compose_data = compose::parse(&compose_path)?;
 
         // Partition services
-        let app_svcs = compose::app_services(&compose_data, &config.app_label, &config.app_label_value);
-        let data_svcs = compose::data_services(&compose_data, &config.app_label, &config.app_label_value);
+        let app_svcs =
+            compose::app_services(&compose_data, &config.app_label, &config.app_label_value);
+        let data_svcs =
+            compose::data_services(&compose_data, &config.app_label, &config.app_label_value);
 
         if app_svcs.is_empty() {
             tracing::warn!(
@@ -46,14 +49,13 @@ impl super::ModeHandler for HybridMode {
 
         let suffix = format!("{}_{}", config.prefix, slug);
         let overlay_dir = root.join(".ecluse").join("overlays");
-        std::fs::create_dir_all(&overlay_dir)
-            .context("failed to create overlays directory")?;
+        std::fs::create_dir_all(&overlay_dir).context("failed to create overlays directory")?;
         let overlay_path = overlay_dir.join(format!("{}.yml", slug));
 
         // Generate overlay for data services only
-        let overlay_yaml = compose::generate_overlay(&compose_data, offset, &suffix, Some(&data_svcs))?;
-        std::fs::write(&overlay_path, &overlay_yaml)
-            .context("failed to write overlay file")?;
+        let overlay_yaml =
+            compose::generate_overlay(&compose_data, offset, &suffix, Some(&data_svcs))?;
+        std::fs::write(&overlay_path, &overlay_yaml).context("failed to write overlay file")?;
 
         // Create worktree
         wt.create(&worktree_path, branch)?;
@@ -64,7 +66,13 @@ impl super::ModeHandler for HybridMode {
 
         // Bring up data services only
         let data_svc_refs: Vec<&str> = data_svcs.iter().map(|s| s.as_str()).collect();
-        if let Err(e) = docker::compose_up_services(&project, &compose_str, Some(&overlay_str), &data_svc_refs, watch) {
+        if let Err(e) = docker::compose_up_services(
+            &project,
+            &compose_str,
+            Some(&overlay_str),
+            &data_svc_refs,
+            watch,
+        ) {
             let _ = wt.remove(&worktree_path);
             let _ = std::fs::remove_file(&overlay_path);
             return Err(e);

@@ -27,7 +27,10 @@ impl std::str::FromStr for Mode {
             "container" => Ok(Mode::Container),
             "host" => Ok(Mode::Host),
             "hybrid" => Ok(Mode::Hybrid),
-            _ => Err(anyhow::anyhow!("unknown mode '{}'; valid: container, host, hybrid", s)),
+            _ => Err(anyhow::anyhow!(
+                "unknown mode '{}'; valid: container, host, hybrid",
+                s
+            )),
         }
     }
 }
@@ -67,17 +70,39 @@ pub struct DatabaseConfig {
     pub base: String,
 }
 
-fn default_max_slots() -> u8 { 8 }
-fn default_base_port() -> u16 { 3000 }
-fn default_stride() -> u16 { 100 }
-fn default_prefix() -> String { "ecluse".into() }
-fn default_worktree_dir() -> String { ".ecluse/worktrees".into() }
-fn default_app_label() -> String { "ecluse.role".into() }
-fn default_app_label_value() -> String { "app".into() }
-fn default_db_provider() -> String { "none".into() }
-fn default_db_host() -> String { "localhost".into() }
-fn default_db_port() -> u16 { 5432 }
-fn default_db_user() -> String { "postgres".into() }
+fn default_max_slots() -> u8 {
+    8
+}
+fn default_base_port() -> u16 {
+    3000
+}
+fn default_stride() -> u16 {
+    100
+}
+fn default_prefix() -> String {
+    "ecluse".into()
+}
+fn default_worktree_dir() -> String {
+    ".ecluse/worktrees".into()
+}
+fn default_app_label() -> String {
+    "ecluse.role".into()
+}
+fn default_app_label_value() -> String {
+    "app".into()
+}
+fn default_db_provider() -> String {
+    "none".into()
+}
+fn default_db_host() -> String {
+    "localhost".into()
+}
+fn default_db_port() -> u16 {
+    5432
+}
+fn default_db_user() -> String {
+    "postgres".into()
+}
 
 impl Config {
     pub fn load(root: &Path) -> Result<Self> {
@@ -90,8 +115,7 @@ impl Config {
 
     pub fn save(&self, root: &Path) -> Result<()> {
         let path = root.join(".ecluse.toml");
-        let content = toml::to_string_pretty(self)
-            .context("failed to serialize config")?;
+        let content = toml::to_string_pretty(self).context("failed to serialize config")?;
         std::fs::write(&path, content)
             .with_context(|| format!("failed to write {}", path.display()))
     }

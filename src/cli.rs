@@ -96,4 +96,3 @@ pub struct LsArgs {
     #[arg(long)]
     pub json: bool,
 }
-

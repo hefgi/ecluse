@@ -32,7 +32,10 @@ pub fn build_env(
         let key = service_env_key(name);
         match name.as_str() {
             n if n.contains("postgres") || n.contains("pg") || n == "db" => {
-                env.insert("DATABASE_URL".into(), format!("postgres://localhost:{}/{}", port, n));
+                env.insert(
+                    "DATABASE_URL".into(),
+                    format!("postgres://localhost:{}/{}", port, n),
+                );
             }
             n if n.contains("redis") => {
                 env.insert("REDIS_URL".into(), format!("redis://localhost:{}", port));
@@ -50,10 +53,7 @@ fn service_env_key(name: &str) -> String {
 }
 
 pub fn write_env_file(worktree: &Path, env: &HashMap<String, String>) -> Result<()> {
-    let mut lines: Vec<String> = env
-        .iter()
-        .map(|(k, v)| format!("{}={}", k, v))
-        .collect();
+    let mut lines: Vec<String> = env.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
     lines.sort();
     let content = lines.join("\n") + "\n";
     std::fs::write(worktree.join(".env.ecluse"), content)
