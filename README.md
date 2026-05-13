@@ -1,13 +1,31 @@
-# ecluse
+<div align="center">
 
-![ecluse](banner.png)
+<img src="banner.png" alt="ecluse" width="600" />
+
+**Per-worktree isolation. Pick what you need isolated.**
+
+Each git worktree gets its own slot — isolated ports, its own database, its own infra.
 
 [![CI](https://github.com/hefgi/ecluse/actions/workflows/ci.yml/badge.svg)](https://github.com/hefgi/ecluse/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/ecluse.svg)](https://crates.io/crates/ecluse)
 [![Homebrew](https://img.shields.io/badge/homebrew-hefgi%2Ftap-orange)](https://github.com/hefgi/homebrew-tap)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-**Per-worktree isolation. Pick what you need isolated.**
+---
+
+**Built for coding agents running tasks in parallel.**
+
+![Claude Code](https://img.shields.io/badge/Claude_Code-d97706?style=flat-square)
+![Cursor](https://img.shields.io/badge/Cursor-000?style=flat-square)
+![Codex](https://img.shields.io/badge/Codex-10a37f?style=flat-square)
+![Windsurf](https://img.shields.io/badge/Windsurf-0ea5e9?style=flat-square)
+![Copilot](https://img.shields.io/badge/Copilot-2b3137?style=flat-square)
+
+and any agent that can run shell commands.
+
+</div>
+
+## The problem
 
 You're running 4 Claude Code sessions in parallel. Each agent finishes its task and wants to verify — run the test suite, spin up the app, hit the endpoints. But port 3000 is taken. Agent 2 kills agent 1's server. Agent 3 waits. The verification loop that was supposed to run in parallel is now sequential. You're paying for 4 agents and getting the throughput of one.
 
@@ -21,9 +39,47 @@ ecluse down feat-foo  # clean teardown, nothing left behind
 
 > ecluse is French for "canal lock" — each session gets its own chamber, everything is isolated, nothing leaks between them.
 
-## For coding agents
+## Install
 
-ecluse is built as a first-class tool for coding agents running tasks in parallel. Each agent gets an isolated environment — same codebase, different worktree, zero port or database collisions.
+[![Homebrew](https://img.shields.io/badge/Homebrew-FBB040?style=flat-square&logo=homebrew&logoColor=black)](https://github.com/hefgi/homebrew-tap)
+
+```bash
+brew install hefgi/tap/ecluse
+```
+
+[![Crates.io](https://img.shields.io/badge/cargo-install-orange?style=flat-square&logo=rust&logoColor=white)](https://crates.io/crates/ecluse)
+
+```bash
+cargo install ecluse
+```
+
+Requires Rust 1.85+. For container and hybrid modes, [OrbStack](https://orbstack.dev) is recommended over Docker Desktop on macOS — faster, less memory.
+
+## Get started
+
+```bash
+cd my-project
+ecluse init              # detects mode, writes .ecluse.toml
+ecluse up feat-foo       # creates worktree + slot
+cd .ecluse/worktrees/feat-foo
+source .env.ecluse       # loads PORT, DATABASE_URL, etc.
+npm run dev              # or bin/dev, bin/rails server, etc.
+```
+
+Your app runs on a unique port. Other sessions run in parallel without touching yours.
+
+## Agent skills
+
+Install the ecluse skill into your agent harness once — your agent learns every command and workflow automatically:
+
+```bash
+npx skills add hefgi/ecluse -y
+```
+
+| Agent | Install |
+|---|---|
+| Any agent | `npx skills add hefgi/ecluse -y` |
+| Project-local | `npx skills add hefgi/ecluse -y --out .` |
 
 Canonical agent loop:
 
@@ -31,7 +87,7 @@ Canonical agent loop:
 ecluse up <task-slug>
 cd $(ecluse ls --json | jq -r '.[] | select(.slug=="<task-slug>") | .worktree_path')
 source .env.ecluse
-# do work
+# do work, run tests, verify
 ecluse down <task-slug>
 ```
 
@@ -46,15 +102,9 @@ The `.env.ecluse` file in every worktree contains everything the agent needs:
 | `DATABASE_URL` | Postgres connection string |
 | `REDIS_URL` | Redis connection string (if redis present) |
 
-Install the ecluse skill into your coding agent harness:
-
-```bash
-npx skills add hefgi/ecluse -y
-```
-
 ## Choosing a mode
 
-ecluse supports three isolation modes. Pick the one that fits your stack:
+`ecluse init` detects the right mode automatically. You confirm before anything is written.
 
 | Mode | What gets isolated | Best for |
 |---|---|---|
@@ -62,49 +112,16 @@ ecluse supports three isolation modes. Pick the one that fits your stack:
 | `host` | Ports and databases — app runs natively | Pure native stacks (`npm run dev`, `bin/rails server`) |
 | `hybrid` | Data services in containers, app on host | Rails/Django/Node apps with a postgres+redis compose file |
 
-`ecluse init` detects the right mode automatically. You confirm before anything is written.
-
-For a full decision guide: `npx skills add hefgi/ecluse -y`
-
-## Install
-
-**macOS (Homebrew — recommended):**
-
-```bash
-brew install hefgi/tap/ecluse
-```
-
-**From source:**
-
-```bash
-cargo install --git https://github.com/hefgi/ecluse
-```
-
-Requires Rust 1.85+. For macOS, [OrbStack](https://orbstack.dev) is recommended over Docker Desktop for container and hybrid modes — it's faster and uses less memory.
-
-## Quick start
-
-```bash
-cd my-project
-ecluse init              # detects mode, writes .ecluse.toml
-ecluse up feat-foo       # creates worktree + slot
-cd .ecluse/worktrees/feat-foo
-source .env.ecluse       # loads PORT, DATABASE_URL, etc.
-npm run dev              # or bin/dev, bin/rails server, etc.
-```
-
-Your app runs on a unique port. If database isolation is configured, it has its own database. Other sessions run in parallel without touching yours.
-
 ## How it works
 
 The central concept is a **slot** — an integer from 1 to `max_slots`. Every resource is derived from the slot:
 
-- Port offset: `slot × stride` (default stride: 100)
+- Port: `base_port + slot × stride` (defaults: base 3000, stride 100)
 - Compose project name: `<prefix>_<slug>`
 - Named volumes: `<volume>_<prefix>_<slug>`
 - Database name: `<base>_<slug>`
 
-Three thin mode implementations share this slot primitive. Mode is selected once at `init` time and stored in `.ecluse.toml`. All three modes use the same four commands.
+Three thin mode implementations share this slot primitive. Mode is selected once at `init` time and stored in `.ecluse.toml`.
 
 ## Commands
 
@@ -117,7 +134,7 @@ ecluse ls [--json]
 
 ## Configuration
 
-`.ecluse.toml` (written by `init`, lives at repo root):
+`.ecluse.toml` lives at repo root, written by `ecluse init`:
 
 ```toml
 mode = "hybrid"
@@ -158,19 +175,9 @@ services:
 
 `ecluse up feat-foo` starts postgres and redis in containers with offset ports, creates the worktree, and writes `.env.ecluse` with connection strings pointing at the containerized data services. You run the app yourself.
 
-## Positioning
-
-ecluse is not "Docker for worktrees" — container mode is just one option. It's not "DNS/HTTPS per branch" — those come later. It's a **slot allocator** that promises: for each worktree, you get a clean chamber, and every resource you ask to be isolated is allocated off that chamber's slot.
-
-Compared to alternatives:
-- **[branchbox](https://github.com/branchbox/branchbox):** container-only, devcontainer-focused. ecluse supports host and hybrid modes that branchbox doesn't treat as first-class.
-- **[Sub-Xaero/wtenv](https://github.com/Sub-Xaero/wtenv):** macOS-only, DNS/HTTPS focus. ecluse is cross-platform and uses `localhost:<port>` — simpler, more portable.
-
 ## Contributing
 
 Issues and PRs are welcome. Check the [open issues](https://github.com/hefgi/ecluse/issues) for ideas — good first issues are tagged. If you're adding a new isolation mode or provider, open an issue first to discuss the approach.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, how to run tests, and the PR process.
 
 ## License
 
