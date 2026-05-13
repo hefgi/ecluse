@@ -266,6 +266,442 @@ fn namespace_volume(vol: &serde_yaml::Value, suffix: &str) -> serde_yaml::Value 
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+
+    fn null_svc(ports: &[&str], volumes: &[&str]) -> Service {
+        Service {
+            image: None,
+            build: None,
+            ports: ports
+                .iter()
+                .map(|p| serde_yaml::Value::String(p.to_string()))
+                .collect(),
+            volumes: volumes
+                .iter()
+                .map(|v| serde_yaml::Value::String(v.to_string()))
+                .collect(),
+            labels: serde_yaml::Value::Null,
+            other: HashMap::new(),
+        }
+    }
+
+    fn mapping_labels(pairs: &[(&str, &str)]) -> serde_yaml::Value {
+        let mut map = serde_yaml::Mapping::new();
+        for (k, v) in pairs {
+            map.insert(
+                serde_yaml::Value::String(k.to_string()),
+                serde_yaml::Value::String(v.to_string()),
+            );
+        }
+        serde_yaml::Value::Mapping(map)
+    }
+
+    fn sequence_labels(items: &[&str]) -> serde_yaml::Value {
+        serde_yaml::Value::Sequence(
+            items
+                .iter()
+                .map(|s| serde_yaml::Value::String(s.to_string()))
+                .collect(),
+        )
+    }
+
+    fn make_compose(services: Vec<(&str, Service)>) -> ComposeFile {
+        ComposeFile {
+            services: services
+                .into_iter()
+                .map(|(n, s)| (n.to_string(), s))
+                .collect(),
+            volumes: HashMap::new(),
+            networks: HashMap::new(),
+            other: HashMap::new(),
+        }
+    }
+
+    // ── parse ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_valid_compose_file() {
+        let dir = TempDir::new().unwrap();
+        let yaml = "services:\n  app:\n    build: .\n    ports:\n      - \"3000:3000\"\n  db:\n    image: postgres:15\nvolumes:\n  db_data:\n";
+        std::fs::write(dir.path().join("docker-compose.yml"), yaml).unwrap();
+        let cf = parse(&dir.path().join("docker-compose.yml")).unwrap();
+        assert!(cf.services.contains_key("app"));
+        assert!(cf.services.contains_key("db"));
+        assert!(cf.volumes.contains_key("db_data"));
+    }
+
+    #[test]
+    fn parse_missing_file_errors() {
+        let dir = TempDir::new().unwrap();
+        let err = parse(&dir.path().join("docker-compose.yml")).unwrap_err();
+        assert!(
+            err.to_string().contains("not found") || err.to_string().contains("docker-compose.yml")
+        );
+    }
+
+    #[test]
+    fn parse_invalid_yaml_errors() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("docker-compose.yml"), "{ bad: [yaml:").unwrap();
+        let err = parse(&dir.path().join("docker-compose.yml")).unwrap_err();
+        assert!(err.to_string().contains("parse") || err.to_string().contains("compose"));
+    }
+
+    // ── find_compose_file ─────────────────────────────────────────────────────
+
+    #[test]
+    fn find_compose_docker_compose_yml() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("docker-compose.yml"), "").unwrap();
+        let found = find_compose_file(dir.path()).unwrap();
+        assert!(found.to_string_lossy().contains("docker-compose.yml"));
+    }
+
+    #[test]
+    fn find_compose_compose_yaml() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("compose.yaml"), "").unwrap();
+        assert!(find_compose_file(dir.path()).is_some());
+    }
+
+    #[test]
+    fn find_compose_compose_yml() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("compose.yml"), "").unwrap();
+        assert!(find_compose_file(dir.path()).is_some());
+    }
+
+    #[test]
+    fn find_compose_docker_compose_yaml() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("docker-compose.yaml"), "").unwrap();
+        assert!(find_compose_file(dir.path()).is_some());
+    }
+
+    #[test]
+    fn find_compose_none_when_absent() {
+        let dir = TempDir::new().unwrap();
+        assert!(find_compose_file(dir.path()).is_none());
+    }
+
+    // ── app_services / data_services ──────────────────────────────────────────
+
+    #[test]
+    fn app_services_mapping_labels_detected() {
+        let cf = make_compose(vec![
+            (
+                "web",
+                Service {
+                    labels: mapping_labels(&[("ecluse.role", "app")]),
+                    ..null_svc(&[], &[])
+                },
+            ),
+            ("db", null_svc(&[], &[])),
+        ]);
+        let apps = app_services(&cf, "ecluse.role", "app");
+        assert_eq!(apps, vec!["web"]);
+    }
+
+    #[test]
+    fn app_services_sequence_labels_detected() {
+        let cf = make_compose(vec![
+            (
+                "web",
+                Service {
+                    labels: sequence_labels(&["ecluse.role=app", "other=val"]),
+                    ..null_svc(&[], &[])
+                },
+            ),
+            ("db", null_svc(&[], &[])),
+        ]);
+        let apps = app_services(&cf, "ecluse.role", "app");
+        assert_eq!(apps, vec!["web"]);
+    }
+
+    #[test]
+    fn app_services_no_match_returns_empty() {
+        let cf = make_compose(vec![("db", null_svc(&[], &[]))]);
+        assert!(app_services(&cf, "ecluse.role", "app").is_empty());
+    }
+
+    #[test]
+    fn app_services_null_labels_not_matched() {
+        let cf = make_compose(vec![("web", null_svc(&[], &[]))]);
+        assert!(app_services(&cf, "ecluse.role", "app").is_empty());
+    }
+
+    #[test]
+    fn app_services_wrong_value_not_matched() {
+        let cf = make_compose(vec![(
+            "web",
+            Service {
+                labels: mapping_labels(&[("ecluse.role", "worker")]),
+                ..null_svc(&[], &[])
+            },
+        )]);
+        assert!(app_services(&cf, "ecluse.role", "app").is_empty());
+    }
+
+    #[test]
+    fn data_services_excludes_app_labeled() {
+        let cf = make_compose(vec![
+            (
+                "web",
+                Service {
+                    labels: mapping_labels(&[("ecluse.role", "app")]),
+                    ..null_svc(&[], &[])
+                },
+            ),
+            ("db", null_svc(&[], &[])),
+            ("redis", null_svc(&[], &[])),
+        ]);
+        let data = data_services(&cf, "ecluse.role", "app");
+        assert!(!data.contains(&"web".to_string()));
+        assert!(data.contains(&"db".to_string()));
+        assert!(data.contains(&"redis".to_string()));
+    }
+
+    #[test]
+    fn data_services_all_when_no_app_label() {
+        let cf = make_compose(vec![
+            ("db", null_svc(&[], &[])),
+            ("redis", null_svc(&[], &[])),
+        ]);
+        assert_eq!(data_services(&cf, "ecluse.role", "app").len(), 2);
+    }
+
+    // ── service_host_port ─────────────────────────────────────────────────────
+
+    #[test]
+    fn service_host_port_host_container_string() {
+        let s = null_svc(&["3000:3000"], &[]);
+        assert_eq!(service_host_port(&s, 100), Some(3100));
+    }
+
+    #[test]
+    fn service_host_port_container_only_string() {
+        let s = null_svc(&["3000"], &[]);
+        assert_eq!(service_host_port(&s, 100), Some(3100));
+    }
+
+    #[test]
+    fn service_host_port_ip_host_container_string() {
+        let s = null_svc(&["0.0.0.0:5432:5432"], &[]);
+        assert_eq!(service_host_port(&s, 100), Some(5532));
+    }
+
+    #[test]
+    fn service_host_port_number_value() {
+        let s = Service {
+            ports: vec![serde_yaml::Value::Number(serde_yaml::Number::from(8080u64))],
+            ..null_svc(&[], &[])
+        };
+        assert_eq!(service_host_port(&s, 100), Some(8180));
+    }
+
+    #[test]
+    fn service_host_port_zero_offset() {
+        let s = null_svc(&["5000:5000"], &[]);
+        assert_eq!(service_host_port(&s, 0), Some(5000));
+    }
+
+    #[test]
+    fn service_host_port_no_ports_none() {
+        let s = null_svc(&[], &[]);
+        assert_eq!(service_host_port(&s, 100), None);
+    }
+
+    // ── rewrite_port_str (via overlay) ────────────────────────────────────────
+
+    #[test]
+    fn overlay_port_string_host_container_rewritten() {
+        let cf = make_compose(vec![("app", null_svc(&["3000:3000"], &[]))]);
+        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        assert!(yaml.contains("3100:3000"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_port_container_only_rewritten_with_host() {
+        let cf = make_compose(vec![("app", null_svc(&["8080"], &[]))]);
+        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        assert!(yaml.contains("8180:8080"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_port_ip_host_container_rewritten() {
+        let cf = make_compose(vec![("app", null_svc(&["0.0.0.0:3000:3000"], &[]))]);
+        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        assert!(yaml.contains("3100"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_port_numeric_rewritten() {
+        let s = Service {
+            ports: vec![serde_yaml::Value::Number(serde_yaml::Number::from(3000u64))],
+            ..null_svc(&[], &[])
+        };
+        let cf = make_compose(vec![("app", s)]);
+        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        assert!(yaml.contains("3100"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_port_mapping_published_rewritten() {
+        let mut pm = serde_yaml::Mapping::new();
+        pm.insert(
+            serde_yaml::Value::String("published".into()),
+            serde_yaml::Value::Number(3000u64.into()),
+        );
+        pm.insert(
+            serde_yaml::Value::String("target".into()),
+            serde_yaml::Value::Number(3000u64.into()),
+        );
+        let s = Service {
+            ports: vec![serde_yaml::Value::Mapping(pm)],
+            ..null_svc(&[], &[])
+        };
+        let cf = make_compose(vec![("app", s)]);
+        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        assert!(yaml.contains("3100"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_port_mapping_without_published_unchanged() {
+        let mut pm = serde_yaml::Mapping::new();
+        pm.insert(
+            serde_yaml::Value::String("target".into()),
+            serde_yaml::Value::Number(3000u64.into()),
+        );
+        let s = Service {
+            ports: vec![serde_yaml::Value::Mapping(pm)],
+            ..null_svc(&[], &[])
+        };
+        let cf = make_compose(vec![("app", s)]);
+        // Should not crash even without "published" key
+        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        assert!(!yaml.is_empty());
+    }
+
+    #[test]
+    fn overlay_port_non_numeric_host_passthrough() {
+        // "named-port:3000" — host is not a number, should pass through unchanged
+        let cf = make_compose(vec![("app", null_svc(&["named-port:3000"], &[]))]);
+        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        assert!(yaml.contains("named-port:3000"), "got: {}", yaml);
+    }
+
+    // ── volume namespacing (via overlay) ──────────────────────────────────────
+
+    #[test]
+    fn overlay_named_volume_namespaced() {
+        let cf = make_compose(vec![("db", null_svc(&[], &["db_data:/var/lib/postgresql/data"]))]);
+        let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
+        assert!(yaml.contains("db_data_myslug"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_bind_mount_dot_not_namespaced() {
+        let cf = make_compose(vec![("app", null_svc(&[], &["./src:/app/src"]))]);
+        let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
+        assert!(yaml.contains("./src:/app/src") || yaml.contains("'./src:/app/src'"), "got: {}", yaml);
+        assert!(!yaml.contains("./src_myslug"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_bind_mount_absolute_not_namespaced() {
+        let cf = make_compose(vec![("app", null_svc(&[], &["/data:/data"]))]);
+        let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
+        assert!(!yaml.contains("/data_myslug"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_volume_mapping_type_volume_namespaced() {
+        let mut vm = serde_yaml::Mapping::new();
+        vm.insert(
+            serde_yaml::Value::String("type".into()),
+            serde_yaml::Value::String("volume".into()),
+        );
+        vm.insert(
+            serde_yaml::Value::String("source".into()),
+            serde_yaml::Value::String("db_data".into()),
+        );
+        vm.insert(
+            serde_yaml::Value::String("target".into()),
+            serde_yaml::Value::String("/data".into()),
+        );
+        let s = Service {
+            volumes: vec![serde_yaml::Value::Mapping(vm)],
+            ..null_svc(&[], &[])
+        };
+        let cf = make_compose(vec![("db", s)]);
+        let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
+        assert!(yaml.contains("db_data_myslug"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_volume_mapping_type_bind_not_namespaced() {
+        let mut vm = serde_yaml::Mapping::new();
+        vm.insert(
+            serde_yaml::Value::String("type".into()),
+            serde_yaml::Value::String("bind".into()),
+        );
+        vm.insert(
+            serde_yaml::Value::String("source".into()),
+            serde_yaml::Value::String("./src".into()),
+        );
+        vm.insert(
+            serde_yaml::Value::String("target".into()),
+            serde_yaml::Value::String("/app".into()),
+        );
+        let s = Service {
+            volumes: vec![serde_yaml::Value::Mapping(vm)],
+            ..null_svc(&[], &[])
+        };
+        let cf = make_compose(vec![("app", s)]);
+        let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
+        assert!(!yaml.contains("./src_myslug"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_top_level_volumes_declared_with_suffix() {
+        let s = null_svc(&[], &["db_data:/data"]);
+        let mut cf = make_compose(vec![("db", s)]);
+        cf.volumes.insert("db_data".into(), serde_yaml::Value::Null);
+        let yaml = generate_overlay(&cf, 0, "slug", None).unwrap();
+        assert!(yaml.contains("db_data_slug"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_services_to_include_filters_correctly() {
+        let cf = make_compose(vec![
+            ("app", null_svc(&["3000:3000"], &[])),
+            ("db", null_svc(&["5432:5432"], &[])),
+        ]);
+        let yaml = generate_overlay(&cf, 100, "slug", Some(&["db".to_string()])).unwrap();
+        assert!(yaml.contains("5532"), "got: {}", yaml);
+        assert!(!yaml.contains("3100"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_empty_compose_no_crash() {
+        let cf = make_compose(vec![]);
+        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        // no panic, valid yaml (may be empty or just "---\n")
+        let _: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap_or(serde_yaml::Value::Null);
+    }
+
+    #[test]
+    fn overlay_zero_offset_keeps_original_port() {
+        let cf = make_compose(vec![("app", null_svc(&["3000:3000"], &[]))]);
+        let yaml = generate_overlay(&cf, 0, "slug", None).unwrap();
+        assert!(yaml.contains("3000:3000"), "got: {}", yaml);
+    }
+}
+
 /// Extract host-side port for a service (first port mapping, after offset)
 pub fn service_host_port(svc: &Service, offset: u16) -> Option<u16> {
     for port in &svc.ports {
