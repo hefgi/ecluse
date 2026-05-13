@@ -46,10 +46,10 @@ The `rust-toolchain.toml` pins to stable. Do not add nightly features.
 
 ## Skills are in `skills/`, not `src/skills/`
 
-The canonical skill content lives in `skills/ecluse/<name>/SKILL.md`. The files in `src/skills/` are thin wrappers that `include_str!` from there. When editing skill content, edit `skills/ecluse/` — the `src/skills/` files re-export automatically.
+The canonical skill content lives in `skills/<name>/SKILL.md`. The files in `src/skills.rs` use `include_str!` from there. When editing skill content, edit `skills/` — the binary re-embeds automatically on next build.
 
 If you add a new skill:
-1. Create `skills/ecluse/<name>/SKILL.md` with proper frontmatter
+1. Create `skills/<name>/SKILL.md` with proper frontmatter
 2. Add a corresponding `include_str!` entry in `src/skills.rs`
 3. Register it in `skills::ALL_SKILLS`
 4. Add the path to `.claude-plugin/plugin.json`
