@@ -6,7 +6,11 @@ fn ecluse_bin() -> PathBuf {
 }
 
 fn setup_repo(dir: &std::path::Path) {
-    Command::new("git").args(["init"]).current_dir(dir).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
     Command::new("git")
         .args(["commit", "--allow-empty", "-m", "init"])
         .current_dir(dir)
@@ -46,7 +50,10 @@ fn tmp_repo() -> tempfile::TempDir {
 
 #[test]
 fn version() {
-    let out = Command::new(ecluse_bin()).arg("--version").output().unwrap();
+    let out = Command::new(ecluse_bin())
+        .arg("--version")
+        .output()
+        .unwrap();
     assert!(out.status.success());
     assert!(stdout(&out).contains("ecluse"));
 }
@@ -91,7 +98,11 @@ fn up_output_shows_correct_port() {
     let repo = tmp_repo();
     ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
     let out = ecluse(repo.path(), &["up", "feat-foo"]);
-    assert!(stdout(&out).contains("App port:   3100"), "got: {}", stdout(&out));
+    assert!(
+        stdout(&out).contains("App port:   3100"),
+        "got: {}",
+        stdout(&out)
+    );
 }
 
 #[test]
@@ -117,7 +128,11 @@ fn duplicate_slug_is_rejected() {
     ecluse(repo.path(), &["up", "feat-foo"]);
     let out = ecluse(repo.path(), &["up", "feat-foo"]);
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("already exists"), "got: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("already exists"),
+        "got: {}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -142,7 +157,11 @@ fn down_nonexistent_slug_errors() {
     ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
     let out = ecluse(repo.path(), &["down", "does-not-exist"]);
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("does-not-exist"), "got: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("does-not-exist"),
+        "got: {}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -165,8 +184,8 @@ fn ls_json_is_valid_json() {
 
     let out = ecluse(repo.path(), &["ls", "--json"]);
     assert!(out.status.success());
-    let parsed: serde_json::Value = serde_json::from_str(&stdout(&out))
-        .expect("ls --json output is not valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("ls --json output is not valid JSON");
     assert!(parsed.is_array());
     assert_eq!(parsed.as_array().unwrap().len(), 1);
 }
@@ -188,14 +207,20 @@ fn slot_reuse_after_down() {
 #[test]
 fn custom_base_port() {
     let repo = tmp_repo();
-    ecluse(repo.path(), &["init", "--mode", "host", "--base-port", "4000", "--yes"]);
+    ecluse(
+        repo.path(),
+        &["init", "--mode", "host", "--base-port", "4000", "--yes"],
+    );
     let out = ecluse(repo.path(), &["up", "feat-foo"]);
     assert!(out.status.success(), "{}", stderr(&out));
-    assert!(stdout(&out).contains("App port:   4100"), "got: {}", stdout(&out));
+    assert!(
+        stdout(&out).contains("App port:   4100"),
+        "got: {}",
+        stdout(&out)
+    );
 
-    let env = std::fs::read_to_string(
-        repo.path().join(".ecluse/worktrees/feat-foo/.env.ecluse")
-    ).unwrap();
+    let env = std::fs::read_to_string(repo.path().join(".ecluse/worktrees/feat-foo/.env.ecluse"))
+        .unwrap();
     assert!(env.contains("PORT=4100"));
 }
 
@@ -212,5 +237,9 @@ fn up_without_init_errors() {
     let repo = tmp_repo();
     let out = ecluse(repo.path(), &["up", "feat-foo"]);
     assert!(!out.status.success());
-    assert!(stderr(&out).contains("ecluse init"), "got: {}", stderr(&out));
+    assert!(
+        stderr(&out).contains("ecluse init"),
+        "got: {}",
+        stderr(&out)
+    );
 }
