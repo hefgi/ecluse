@@ -48,7 +48,7 @@ brew install ecluse/tap/ecluse
 ecluse --version
 ```
 
-Or from source: `cargo install --git https://github.com/ecluse/ecluse`
+Or from source: `cargo install --git https://github.com/hefgi/ecluse`
 
 ### Five-minute on-ramp
 

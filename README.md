@@ -35,7 +35,7 @@ brew install ecluse/tap/ecluse
 **From source:**
 
 ```bash
-cargo install --git https://github.com/ecluse/ecluse
+cargo install --git https://github.com/hefgi/ecluse
 ```
 
 Requires Rust 1.85+. For macOS, [OrbStack](https://orbstack.dev) is recommended over Docker Desktop for container and hybrid modes — it's faster and uses less memory.
