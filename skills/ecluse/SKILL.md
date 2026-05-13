@@ -457,11 +457,12 @@ RUST_LOG=debug ecluse up feat-foo
 
 What ecluse intentionally does not do in v0. These are design decisions, not bugs.
 
+- **Ports are checked, not reserved** — ecluse finds a free port at `up` time and writes it to `.env.ecluse`. There is a small window between that check and when your process actually binds. If another process takes the port in between, the value in `.env.ecluse` will be wrong. Fix: `ecluse down feat-foo --keep-worktree` then `ecluse up feat-foo --reuse-worktree`, or pin a specific port with `--port name=value`.
+- **No process lifecycle management for native services** — for `host` and `hybrid` modes, ecluse writes the environment but does not start or stop your app. If a native service fails to bind after `up`, ecluse cannot retry or restart it. You must do a `down`/`up` cycle yourself.
 - **Mode is set at `init`, not re-detected on `up`** — to change: `ecluse init --mode <new>`
 - **One compose file per repo root** — monorepos: run `ecluse init` per subdirectory
 - **`localhost:<port>` only** — no public URLs; use cloudflared or ngrok alongside ecluse
 - **No agent process sandboxing** — container mode isolates services, not the agent's filesystem
-- **No process lifecycle management** — ecluse does not start dev servers or manage tmux sessions; it sets up the environment and writes `.env.ecluse`
 - **`ecluse shell` is for humans, not agents** — agents use `ecluse up --json` or `ecluse env` to get the worktree path and env vars, then operate directly; `ecluse shell` spawns an interactive subshell which blocks non-interactive execution
 - **No built-in database management** — ecluse allocates ports and writes env vars; use `[hooks] on_up`/`on_down` with your app's own tooling (prisma, rails db:create, psql, etc.)
 - **macOS and Linux only** — WSL2 acceptable but untested; native Windows not supported
@@ -520,9 +521,9 @@ See [examples.md](examples.md) for 5 canonical config templates covering host, c
 
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
-ecluse up <slug> [--branch <name>] [--watch] [--json]
+ecluse up <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>]
 ecluse env [<slug>]
-ecluse down <slug> [--keep-volumes] [--keep-branch]
+ecluse down <slug> [--keep-volumes] [--keep-branch] [--keep-worktree]
 ecluse ls [--json]
 ecluse validate [--ports]
 ```
@@ -530,3 +531,20 @@ ecluse validate [--ports]
 `ecluse shell` exists but is human-only — it spawns an interactive subshell that blocks non-interactive execution. Agents must not use it.
 
 `ecluse validate` checks your `.ecluse.toml` for port range safety (ensures `port_search_range` doesn't create overlaps between services) and prints the current config. Pass `--ports` to see the full port allocation table across all slots.
+
+**Soft restart** — tear down services without losing the git worktree, then spin up fresh:
+
+```bash
+ecluse down feat-foo --keep-worktree   # stops services, removes session from state, keeps worktree on disk
+ecluse up feat-foo --reuse-worktree    # allocates a new slot, skips worktree creation
+```
+
+Use this when a service failed to bind after `up` and you want a fresh start without losing changes in the worktree.
+
+**Port override** — pin a service to a specific port for this session:
+
+```bash
+ecluse up feat-foo --port api=4001 --port postgres=5444
+```
+
+Overrides bypass the auto-bump logic and use the given value directly. The overridden ports are stored in session state and reflected in `ecluse env` output.

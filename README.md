@@ -140,12 +140,25 @@ Three thin mode implementations share this slot primitive. Mode is selected once
 
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
-ecluse up <slug> [--branch <name>] [--watch] [--json]
+ecluse up <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>]
 ecluse shell <slug>
 ecluse env [<slug>]
-ecluse down <slug> [--keep-volumes] [--keep-branch]
+ecluse down <slug> [--keep-volumes] [--keep-branch] [--keep-worktree]
 ecluse ls [--json]
 ecluse validate [--ports]
+```
+
+**Soft restart** — tear down services without losing your worktree, then spin them up fresh:
+
+```bash
+ecluse down feat-foo --keep-worktree   # services torn down, worktree + branch kept
+ecluse up feat-foo --reuse-worktree    # new slot, fresh ports, worktree reused
+```
+
+**Port override** — pin a specific service to a port for this session (useful when the auto-assigned port conflicts with something ecluse can't detect):
+
+```bash
+ecluse up feat-foo --port api=4001 --port postgres=5444
 ```
 
 ## Configuration
@@ -207,6 +220,23 @@ services:
 Or define `run = "docker"` services in `[[services]]` to explicitly control which services stay in containers. Either approach works — the label is the simpler default for single-app stacks.
 
 `ecluse up feat-foo` starts postgres and redis in containers with per-slot ports, creates the worktree, and writes `.env.ecluse` with `ECLUSE_POSTGRES_PORT` and `ECLUSE_REDIS_PORT` pointing at the containerized data services. You run the app yourself.
+
+## Known limits
+
+**Ports are checked, not reserved.** ecluse finds a free port at `ecluse up` time and writes it to `.env.ecluse`. There is a small window between the check and when your process actually binds — if something else takes the port in between, the port in `.env.ecluse` will be wrong. The fix is to tear down and recreate the session:
+
+```bash
+ecluse down feat-foo --keep-worktree
+ecluse up feat-foo --reuse-worktree
+```
+
+Or pin a specific port manually:
+
+```bash
+ecluse up feat-foo --port api=4001
+```
+
+**ecluse does not manage native processes.** For `host` and `hybrid` modes, ecluse writes the environment and optionally runs `on_up` hooks — it does not start or stop your app. If a native service fails to start, ecluse has no way to retry it without a full `down`/`up` cycle.
 
 ## Contributing
 
