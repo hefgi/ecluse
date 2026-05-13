@@ -4,6 +4,10 @@ base_port = 8080
 stride = 100
 prefix = "ecluse"
 
+# k3d loadbalancer on index 0 → ECLUSE_LOADBALANCER_PORT + PORT alias (e.g. 8180 for slot 1)
+[ports]
+loadbalancer = 0
+
 [hooks]
 on_up = "k3d cluster create ecluse-$ECLUSE_SLUG --port \"$PORT:80@loadbalancer\""
 on_down = "k3d cluster delete ecluse-$ECLUSE_SLUG"

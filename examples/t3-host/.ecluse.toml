@@ -4,6 +4,10 @@ base_port = 3000
 stride = 100
 prefix = "ecluse"
 
+# Next.js app on index 0 → ECLUSE_APP_PORT + PORT alias (e.g. 3100 for slot 1)
+[ports]
+app = 0
+
 [hooks]
 on_up = "npx prisma migrate deploy"
 on_down = "npx prisma migrate reset --force"

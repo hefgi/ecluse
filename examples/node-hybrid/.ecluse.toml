@@ -4,5 +4,11 @@ base_port = 3000
 stride = 100
 prefix = "ecluse"
 
+# Express API on index 0 → ECLUSE_API_PORT + PORT alias (e.g. 3100 for slot 1)
+# React dev server on index 1 → ECLUSE_FRONTEND_PORT (e.g. 3101 for slot 1)
+[ports]
+api = 0
+frontend = 1
+
 [hooks]
 on_up = "npm run db:migrate"
