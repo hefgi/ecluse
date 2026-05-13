@@ -142,7 +142,7 @@ pub fn generate_overlay(
     }
 
     // Declare top-level volumes
-    for (vol_name, _) in &compose.volumes {
+    for vol_name in compose.volumes.keys() {
         let new_name = format!("{}_{}", vol_name, suffix);
         overlay_volumes.insert(new_name, serde_yaml::Value::Null);
     }
