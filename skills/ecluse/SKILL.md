@@ -95,12 +95,13 @@ ecluse up <slug> --json
 #   "worktree_path": "/path/to/.ecluse/worktrees/feat-auth",
 #   "env_file": "/path/to/.ecluse/worktrees/feat-auth/.env.ecluse",
 #   "env": {
-#     "PORT": "3100",
+#     "PORT": "3100",               ← alias for first [ports] entry
+#     "ECLUSE_API_PORT": "3100",    ← if [ports] api = 0
+#     "ECLUSE_FRONTEND_PORT": "3101", ← if [ports] frontend = 1
+#     "ECLUSE_POSTGRES_PORT": "5532", ← from compose data service
 #     "ECLUSE_SLOT": "1",
 #     "ECLUSE_SLUG": "feat-auth",
 #     "ECLUSE_MODE": "hybrid",
-#     "DATABASE_URL": "postgres://localhost:5532/postgres",
-#     "REDIS_URL": "redis://localhost:6479",
 #     ...
 #   }
 # }
@@ -130,20 +131,21 @@ All vars are in the JSON from `ecluse up --json` or `ecluse env <slug>`.
 
 | Variable | Example | Description |
 |---|---|---|
-| `PORT` | `3100` | App port — never hardcode 3000 |
-| `DATABASE_URL` | `postgres://localhost:5532/postgres` | Set if compose has a postgres service |
-| `REDIS_URL` | `redis://localhost:6479` | Set if compose has a redis service |
+| `PORT` | `3100` | Alias for the first `[ports]` entry — never hardcode 3000 |
+| `ECLUSE_<NAME>_PORT` | `ECLUSE_API_PORT=3100` | Per-service port from `[ports]` config |
+| `ECLUSE_<SERVICE>_PORT` | `ECLUSE_POSTGRES_PORT=5532` | Data service port from compose (hybrid/container) |
 | `ECLUSE_SLOT` | `1` | Slot number |
 | `ECLUSE_SLUG` | `feat-auth` | Session slug |
 | `ECLUSE_OFFSET` | `100` | Port offset (`slot × stride`) |
 | `ECLUSE_MODE` | `hybrid` | `container`, `host`, or `hybrid` |
-| `ECLUSE_<SERVICE>_PORT` | `ECLUSE_POSTGRES_PORT=5532` | Offset port per compose service |
+
+**No `DATABASE_URL` or `REDIS_URL` are set automatically.** Data service ports are exposed as `ECLUSE_<SERVICE>_PORT` (e.g. `ECLUSE_POSTGRES_PORT=5532`). Construct connection strings in your `on_up` hook or app config using that port. This keeps ecluse engine-agnostic.
 
 ### Parallel sessions
 
 ```bash
-ecluse up feat-auth --json   # slot 1, port 3100
-ecluse up feat-cache --json  # slot 2, port 3200
+ecluse up feat-auth --json   # slot 1 → ECLUSE_API_PORT=3100, ECLUSE_POSTGRES_PORT=5532
+ecluse up feat-cache --json  # slot 2 → ECLUSE_API_PORT=3200, ECLUSE_POSTGRES_PORT=5632
 ecluse ls                    # see both
 ```
 
@@ -252,55 +254,51 @@ ecluse down feat-foo --keep-volumes   # keeps volumes
 
 ## Host Mode
 
-No containers. ecluse reserves a port range, optionally provisions a Postgres database, writes `.env.ecluse`, creates the worktree. You start your own dev server.
+No containers. ecluse reserves a port range, writes `.env.ecluse`, creates the worktree, runs `on_up`. You start your own dev server.
 
 ### Prerequisites
 
 - No Docker required
-- Host Postgres if you want database isolation (`brew services start postgresql@16`)
+- Host Postgres/MySQL/SQLite already available if your app needs a database
 
 ### Workflow
 
 ```bash
 ecluse up feat-foo
 # Session:   feat-foo (slot 1)
-# App port:  3100
-# Database:  myapp_feat_foo
+# App port:  3100  (ECLUSE_API_PORT + PORT alias, if [ports] api = 0)
 # Next step: cd .ecluse/worktrees/feat-foo && source .env.ecluse
 
 cd .ecluse/worktrees/feat-foo
 source .env.ecluse
-npm run dev    # reads $PORT, $DATABASE_URL
+npm run dev    # reads $PORT; run migrations via [hooks] on_up
 ```
 
-### Database provisioning
+### Database in host mode
 
-Without a `[database]` section, only port isolation is provided. To enable per-session databases:
+ecluse does not provision databases. Use `[hooks] on_up` with your app's own tooling:
 
 ```toml
-[database]
-provider = "postgres-host"
-host = "localhost"
-port = 5432
-user = "postgres"
-base = "myapp"
-# auth: use PGPASSWORD env var or ~/.pgpass — never write passwords to .ecluse.toml
+[ports]
+app = 0
+
+[hooks]
+on_up = "npx prisma migrate deploy"
+on_down = "npx prisma migrate reset --force"
 ```
 
-With `base = "myapp"` and slug `feat-foo`, ecluse creates `myapp_feat_foo` on `up` and drops it on `down`.
+Your app's connection string is defined in your `.env` (not managed by ecluse). The hook runs inside the worktree with all ecluse env vars set.
 
 ### Teardown
 
 ```bash
-ecluse down feat-foo                    # drops database, removes worktree
-ecluse down feat-foo --keep-database    # keeps database
+ecluse down feat-foo   # runs on_down hook, removes worktree
 ```
 
 ### Common failures
 
 - **"Port 3100 is in use by PID 12345"** — `kill 12345`
-- **"Host Postgres is unreachable"** — `brew services start postgresql@16`; check `[database]` config
-- **App can't find database** — `source .env.ecluse` before starting the server
+- **App can't find database** — `source .env.ecluse` before starting; check hook output for migration errors
 
 ---
 
@@ -337,12 +335,12 @@ services:
 ```bash
 ecluse up feat-foo
 # postgres and redis start in Docker with offset ports
-# App port:  3100
-# Database:  postgres://localhost:5532/myapp_feat_foo
+# ECLUSE_POSTGRES_PORT=5532, ECLUSE_REDIS_PORT=6479
+# ECLUSE_API_PORT=3100, PORT=3100  (from [ports] api = 0)
 
 cd .ecluse/worktrees/feat-foo
 source .env.ecluse
-bin/dev    # or npm run dev — reads PORT, DATABASE_URL, REDIS_URL
+bin/dev    # or npm run dev — reads PORT, ECLUSE_POSTGRES_PORT, etc.
 ```
 
 ### Without the label
@@ -358,7 +356,7 @@ ecluse down feat-foo --keep-volumes   # keeps volumes
 
 ### Common failures
 
-- **App can't connect to postgres** — `DATABASE_URL` points to offset port (5532, not 5432). Run `source .env.ecluse` first.
+- **App can't connect to postgres** — `ECLUSE_POSTGRES_PORT` is the offset port (e.g. 5532, not 5432). Run `source .env.ecluse` first and use that port in your connection string.
 - **Data containers didn't start** — `docker info` to verify Docker is running
 - **Wrong service excluded** — check `ecluse.role: app` is only on the app service
 
@@ -409,8 +407,6 @@ brew services start postgresql@16    # macOS
 sudo systemctl start postgresql      # Linux
 psql -U postgres -c "SELECT 1"       # verify
 ```
-
-Check `.ecluse.toml` `[database]` has correct `host`, `port`, `user`.
 
 ### Lock timeout
 
@@ -478,17 +474,26 @@ What ecluse intentionally does not do in v0. These are design decisions, not bug
 mode = "hybrid"         # container | host | hybrid
 max_slots = 8           # max parallel sessions
 base_port = 3000        # slot 1 = base_port + stride, slot 2 = base_port + 2*stride
-stride = 100            # port offset per slot
+stride = 100            # port offset per slot — must be > number of [ports] entries
 prefix = "ecluse"       # prefix for compose project names and volume names
 worktree_dir = ".ecluse/worktrees"
+
+# Named ports within each slot's range.
+# index 0 → base_port + slot*stride + 0  (also sets PORT alias)
+# index 1 → base_port + slot*stride + 1
+# Each entry generates ECLUSE_<NAME>_PORT.
+# Omit [ports] for single-service stacks — PORT is set automatically.
+[ports]
+api = 0
+frontend = 1
 
 # Optional: lifecycle hooks — run in the worktree with all env vars set
 [hooks]
 on_up = "npx prisma migrate deploy"
-on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_SLUG'"
+on_down = "npx prisma migrate reset --force"
 ```
 
-Hooks run as shell commands inside the worktree directory. All `.env.ecluse` variables (`PORT`, `DATABASE_URL`, `ECLUSE_SLUG`, etc.) are available. ecluse does not manage databases directly — use `on_up` for migrations, `on_down` for teardown.
+Hooks run as shell commands inside the worktree directory. All `.env.ecluse` variables (`PORT`, `ECLUSE_SLUG`, `ECLUSE_<NAME>_PORT`, etc.) are available. ecluse does not manage databases directly — use `on_up` for migrations, `on_down` for teardown.
 
 ## Commands
 
