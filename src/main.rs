@@ -327,7 +327,19 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
 
     let handler = modes::get_handler(&config);
 
-    let session = handler.bring_up(&args.slug, slot, &branch, &config, &root, args.watch)?;
+    let port_overrides: std::collections::HashMap<String, u16> =
+        args.port_overrides.iter().cloned().collect();
+
+    let session = handler.bring_up(
+        &args.slug,
+        slot,
+        &branch,
+        &config,
+        &root,
+        args.watch,
+        args.reuse_worktree,
+        &port_overrides,
+    )?;
 
     if args.json {
         print_up_json(&session, &root)?;
@@ -407,7 +419,7 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         .clone();
 
     let handler = modes::get_handler(&config);
-    handler.bring_down(&session, &config, &root, args.keep_volumes)?;
+    handler.bring_down(&session, &config, &root, args.keep_volumes, args.keep_worktree)?;
 
     guard.state.remove_session(&args.slug);
     guard.commit()?;
@@ -419,7 +431,14 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         );
     }
 
-    println!("Session '{}' torn down.", args.slug);
+    if args.keep_worktree {
+        println!(
+            "Session '{}' torn down (worktree kept at {}).",
+            args.slug, session.worktree_path
+        );
+    } else {
+        println!("Session '{}' torn down.", args.slug);
+    }
     Ok(())
 }
 

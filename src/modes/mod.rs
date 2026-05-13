@@ -17,6 +17,8 @@ pub trait ModeHandler {
         config: &Config,
         root: &Path,
         watch: bool,
+        reuse_worktree: bool,
+        port_overrides: &std::collections::HashMap<String, u16>,
     ) -> Result<Session>;
 
     fn bring_down(
@@ -25,6 +27,7 @@ pub trait ModeHandler {
         config: &Config,
         root: &Path,
         keep_volumes: bool,
+        keep_worktree: bool,
     ) -> Result<()>;
 }
 

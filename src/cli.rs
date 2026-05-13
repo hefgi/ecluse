@@ -72,6 +72,14 @@ pub struct UpArgs {
     /// Output session info as JSON (useful for agents)
     #[arg(long)]
     pub json: bool,
+
+    /// Reuse an existing worktree instead of creating a new one
+    #[arg(long)]
+    pub reuse_worktree: bool,
+
+    /// Override a service port: --port <name>=<value> (repeatable)
+    #[arg(long = "port", value_name = "NAME=PORT", value_parser = parse_port_override)]
+    pub port_overrides: Vec<(String, u16)>,
 }
 
 #[derive(Args)]
@@ -86,6 +94,23 @@ pub struct DownArgs {
     /// Keep the git branch after tearing down the worktree (no-op in v0; branches are never deleted)
     #[arg(long)]
     pub keep_branch: bool,
+
+    /// Tear down services but keep the git worktree on disk
+    #[arg(long)]
+    pub keep_worktree: bool,
+}
+
+fn parse_port_override(s: &str) -> Result<(String, u16), String> {
+    let (name, port_str) = s
+        .split_once('=')
+        .ok_or_else(|| format!("expected NAME=PORT, got '{}'", s))?;
+    let port: u16 = port_str
+        .parse()
+        .map_err(|_| format!("invalid port '{}': must be a number 1-65535", port_str))?;
+    if port == 0 {
+        return Err("port must be >= 1".into());
+    }
+    Ok((name.to_string(), port))
 }
 
 #[derive(Args)]

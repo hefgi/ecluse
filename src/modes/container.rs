@@ -22,6 +22,8 @@ impl super::ModeHandler for ContainerMode {
         config: &Config,
         root: &Path,
         watch: bool,
+        reuse_worktree: bool,
+        port_overrides: &std::collections::HashMap<String, u16>,
     ) -> Result<Session> {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
@@ -40,22 +42,25 @@ impl super::ModeHandler for ContainerMode {
         // Compute actual allocated ports (with port search) and generate overlay
         let docker_svcs_config = config.docker_services();
         let (overlay_yaml, allocated_ports) = if !docker_svcs_config.is_empty() {
-            // Explicit [[services]] — find free port for each
-            let port_overrides: std::collections::HashMap<String, u16> = docker_svcs_config
+            // Explicit [[services]] — find free port for each (respecting explicit overrides)
+            let resolved: std::collections::HashMap<String, u16> = docker_svcs_config
                 .iter()
                 .map(|s| {
-                    let port = validate::find_free_port(config, s, slot)?;
+                    let port = if let Some(&p) = port_overrides.get(&s.name) {
+                        p
+                    } else {
+                        validate::find_free_port(config, s, slot)?
+                    };
                     Ok((s.name.clone(), port))
                 })
                 .collect::<Result<_>>()?;
             let yaml = compose::generate_overlay_with_ports(
                 &compose_data,
-                &port_overrides,
+                &resolved,
                 &suffix,
                 None,
             )?;
-            // Keep allocated ports as Vec for env building
-            let ports: Vec<(String, u16)> = port_overrides.into_iter().collect();
+            let ports: Vec<(String, u16)> = resolved.into_iter().collect();
             (yaml, ports)
         } else {
             // Fallback: offset by slot
@@ -71,14 +76,25 @@ impl super::ModeHandler for ContainerMode {
         };
         std::fs::write(&overlay_path, &overlay_yaml).context("failed to write overlay file")?;
 
-        wt.create(&worktree_path, branch)?;
+        if reuse_worktree {
+            if !worktree_path.exists() {
+                return Err(anyhow::anyhow!(
+                    "worktree not found at {}; remove --reuse-worktree or run ecluse up without it",
+                    worktree_path.display()
+                ));
+            }
+        } else {
+            wt.create(&worktree_path, branch)?;
+        }
 
         let project = format!("{}_{}", config.prefix, slug);
         let compose_str = compose_path.to_string_lossy().to_string();
         let overlay_str = overlay_path.to_string_lossy().to_string();
 
         if let Err(e) = docker::compose_up(&project, &compose_str, Some(&overlay_str), watch) {
-            let _ = wt.remove(&worktree_path);
+            if !reuse_worktree {
+                let _ = wt.remove(&worktree_path);
+            }
             let _ = std::fs::remove_file(&overlay_path);
             return Err(e);
         }
@@ -95,13 +111,17 @@ impl super::ModeHandler for ContainerMode {
         if let Some(cmd) = &config.hooks.on_up {
             if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
                 let _ = docker::compose_down(&project, &compose_str, Some(&overlay_str), true);
-                let _ = wt.remove(&worktree_path);
+                if !reuse_worktree {
+                    let _ = wt.remove(&worktree_path);
+                }
                 let _ = std::fs::remove_file(&overlay_path);
                 return Err(e);
             }
         }
 
         let app_port = allocated_ports.first().map(|(_, p)| *p);
+        let stored_port_overrides: std::collections::HashMap<String, u16> =
+            allocated_ports.iter().cloned().collect();
 
         Ok(Session {
             slug: slug.to_string(),
@@ -113,6 +133,7 @@ impl super::ModeHandler for ContainerMode {
             overlay_file: Some(overlay_str),
             app_port,
             started_at: Utc::now().to_rfc3339(),
+            port_overrides: stored_port_overrides,
         })
     }
 
@@ -122,6 +143,7 @@ impl super::ModeHandler for ContainerMode {
         _config: &Config,
         root: &Path,
         keep_volumes: bool,
+        keep_worktree: bool,
     ) -> Result<()> {
         if let Some(project) = &session.compose_project {
             if let Some(overlay) = &session.overlay_file {
@@ -135,9 +157,11 @@ impl super::ModeHandler for ContainerMode {
             }
         }
 
-        let wt = WorktreeManager::new(root.to_owned());
-        let wt_path = std::path::PathBuf::from(&session.worktree_path);
-        wt.remove(&wt_path)?;
+        if !keep_worktree {
+            let wt = WorktreeManager::new(root.to_owned());
+            let wt_path = std::path::PathBuf::from(&session.worktree_path);
+            wt.remove(&wt_path)?;
+        }
 
         Ok(())
     }
