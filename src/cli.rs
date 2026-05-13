@@ -25,8 +25,6 @@ pub enum Command {
     Down(DownArgs),
     /// List active sessions
     Ls(LsArgs),
-    /// Show embedded skill documentation
-    Skills(SkillsArgs),
 }
 
 #[derive(Args)]
@@ -95,21 +93,3 @@ pub struct LsArgs {
     pub json: bool,
 }
 
-#[derive(Args)]
-pub struct SkillsArgs {
-    #[command(subcommand)]
-    pub command: Option<SkillsCommand>,
-}
-
-#[derive(Subcommand)]
-pub enum SkillsCommand {
-    /// List all available skills
-    List,
-    /// Print a skill to stdout
-    Show {
-        /// Skill name
-        name: String,
-    },
-    /// Write all skills to .ecluse/skills/ in the current repo
-    Install,
-}

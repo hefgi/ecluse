@@ -7,7 +7,6 @@ mod env;
 mod error;
 mod modes;
 mod postgres;
-mod skills;
 mod slot;
 mod state;
 mod worktree;
@@ -41,7 +40,6 @@ fn run(cli: cli::Cli) -> Result<()> {
         cli::Command::Up(args) => cmd_up(args),
         cli::Command::Down(args) => cmd_down(args),
         cli::Command::Ls(args) => cmd_ls(args),
-        cli::Command::Skills(args) => cmd_skills(args),
     }
 }
 
@@ -147,7 +145,6 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
     println!();
     println!("Next steps:");
     println!("  ecluse up <slug>          create a new isolated session");
-    println!("  ecluse skills show choosing-a-mode   change or review mode choice");
 
     Ok(())
 }
@@ -342,38 +339,3 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
     Ok(())
 }
 
-// ── skills ────────────────────────────────────────────────────────────────────
-
-fn cmd_skills(args: cli::SkillsArgs) -> Result<()> {
-    match args.command {
-        None | Some(cli::SkillsCommand::List) => {
-            println!("Available skills:\n");
-            for skill in skills::ALL_SKILLS {
-                println!("  {:25}  {}", skill.name, skill.description);
-            }
-            println!("\nRun: ecluse skills show <name>");
-        }
-        Some(cli::SkillsCommand::Show { name }) => {
-            match skills::find(&name) {
-                Some(skill) => print!("{}", skill.content),
-                None => {
-                    eprintln!("unknown skill '{}'. Run `ecluse skills` to list available skills.", name);
-                    std::process::exit(1);
-                }
-            }
-        }
-        Some(cli::SkillsCommand::Install) => {
-            let (_, root) = config::Config::find_and_load()?;
-            let skills_dir = root.join(".ecluse").join("skills");
-            for skill in skills::ALL_SKILLS {
-                let skill_dir = skills_dir.join(skill.name);
-                std::fs::create_dir_all(&skill_dir)?;
-                let path = skill_dir.join("SKILL.md");
-                std::fs::write(&path, skill.content)?;
-                println!("Wrote {}", path.display());
-            }
-            println!("\n{} skills installed to .ecluse/skills/", skills::ALL_SKILLS.len());
-        }
-    }
-    Ok(())
-}
