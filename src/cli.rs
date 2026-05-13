@@ -49,14 +49,6 @@ pub struct InitArgs {
     #[arg(long, default_value = "8")]
     pub max_slots: u8,
 
-    /// Base port (slot 1 = base_port + stride, slot 2 = base_port + 2*stride, etc.)
-    #[arg(long, default_value = "3000")]
-    pub base_port: u16,
-
-    /// Port stride per slot
-    #[arg(long, default_value = "100")]
-    pub stride: u16,
-
     /// Prefix for compose project names and branches
     #[arg(long, default_value = "ecluse")]
     pub prefix: String,

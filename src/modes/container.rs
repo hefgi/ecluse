@@ -17,7 +17,6 @@ impl super::ModeHandler for ContainerMode {
         &self,
         slug: &str,
         slot: u8,
-        offset: u16,
         branch: &str,
         config: &Config,
         root: &Path,
@@ -37,7 +36,18 @@ impl super::ModeHandler for ContainerMode {
         std::fs::create_dir_all(&overlay_dir).context("failed to create overlays directory")?;
         let overlay_path = overlay_dir.join(format!("{}.yml", slug));
 
-        let overlay_yaml = compose::generate_overlay(&compose_data, offset, &suffix, None)?;
+        // Build port overrides from docker services config if defined
+        let docker_svcs_config = config.docker_services();
+        let overlay_yaml = if !docker_svcs_config.is_empty() {
+            let port_overrides: std::collections::HashMap<String, u16> = docker_svcs_config
+                .iter()
+                .map(|s| (s.name.clone(), s.port(slot)))
+                .collect();
+            compose::generate_overlay_with_ports(&compose_data, &port_overrides, &suffix, None)?
+        } else {
+            // Fallback: use slot as offset for backward compat
+            compose::generate_overlay(&compose_data, slot as u16, &suffix, None)?
+        };
         std::fs::write(&overlay_path, &overlay_yaml).context("failed to write overlay file")?;
 
         wt.create(&worktree_path, branch)?;
@@ -52,22 +62,29 @@ impl super::ModeHandler for ContainerMode {
             return Err(e);
         }
 
-        // In container mode all services come from compose — no [ports] config needed
-        let data_service_ports: Vec<(String, u16)> = compose_data
-            .services
-            .iter()
-            .filter_map(|(name, svc)| {
-                compose::service_host_port(svc, offset).map(|p| (name.clone(), p))
-            })
-            .collect();
+        // Docker service ports for env vars
+        let docker_ports: Vec<(String, u16)> = if !docker_svcs_config.is_empty() {
+            docker_svcs_config
+                .iter()
+                .map(|s| (s.name.clone(), s.port(slot)))
+                .collect()
+        } else {
+            // Fallback: derive from compose data using slot as offset
+            compose_data
+                .services
+                .iter()
+                .filter_map(|(name, svc)| {
+                    compose::service_host_port(svc, slot as u16).map(|p| (name.clone(), p))
+                })
+                .collect()
+        };
 
         let env_map = env::build_env(
             slot,
             slug,
-            offset,
             "container",
             &indexmap::IndexMap::new(),
-            &data_service_ports,
+            &docker_ports,
         );
         env::write_env_file(&worktree_path, &env_map)?;
 
@@ -80,17 +97,20 @@ impl super::ModeHandler for ContainerMode {
             }
         }
 
-        let app_port = compose_data
-            .services
-            .values()
-            .filter_map(|svc| compose::service_host_port(svc, offset))
-            .next();
+        let app_port = if !docker_svcs_config.is_empty() {
+            docker_svcs_config.first().map(|s| s.port(slot))
+        } else {
+            compose_data
+                .services
+                .values()
+                .filter_map(|svc| compose::service_host_port(svc, slot as u16))
+                .next()
+        };
 
         Ok(Session {
             slug: slug.to_string(),
             mode: crate::config::Mode::Container,
             slot,
-            offset,
             branch: branch.to_string(),
             worktree_path: worktree_path.display().to_string(),
             compose_project: Some(project),

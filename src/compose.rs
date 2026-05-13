@@ -173,6 +173,134 @@ pub fn generate_overlay(
         .context("failed to serialize overlay YAML")
 }
 
+/// Generate a compose overlay that sets explicit host ports from a map of
+/// service_name → host_port, and namespaces named volumes with `suffix`.
+/// This is used in the per-service base_port model.
+pub fn generate_overlay_with_ports(
+    compose: &ComposeFile,
+    port_overrides: &HashMap<String, u16>,
+    suffix: &str,
+    services_to_include: Option<&[String]>,
+) -> Result<String> {
+    let mut overlay_services: HashMap<String, serde_yaml::Value> = HashMap::new();
+    let mut overlay_volumes: HashMap<String, serde_yaml::Value> = HashMap::new();
+
+    for (name, svc) in &compose.services {
+        if let Some(inc) = services_to_include {
+            if !inc.contains(name) {
+                continue;
+            }
+        }
+
+        let mut svc_override: HashMap<String, serde_yaml::Value> = HashMap::new();
+
+        // Rewrite ports using explicit host port if provided, otherwise keep as-is
+        if !svc.ports.is_empty() {
+            let host_port = port_overrides.get(name).copied();
+            let new_ports: Vec<serde_yaml::Value> = svc
+                .ports
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    if i == 0 {
+                        if let Some(hp) = host_port {
+                            return rewrite_port_to_host(p, hp);
+                        }
+                    }
+                    p.clone()
+                })
+                .collect();
+            svc_override.insert("ports".into(), serde_yaml::Value::Sequence(new_ports));
+        }
+
+        // Namespace volumes
+        if !svc.volumes.is_empty() {
+            let new_vols: Vec<serde_yaml::Value> = svc
+                .volumes
+                .iter()
+                .map(|v| namespace_volume(v, suffix))
+                .collect();
+            svc_override.insert("volumes".into(), serde_yaml::Value::Sequence(new_vols));
+        }
+
+        if !svc_override.is_empty() {
+            let mut map = serde_yaml::Mapping::new();
+            for (k, v) in svc_override {
+                map.insert(serde_yaml::Value::String(k), v);
+            }
+            overlay_services.insert(name.clone(), serde_yaml::Value::Mapping(map));
+        }
+    }
+
+    // Declare top-level volumes
+    for vol_name in compose.volumes.keys() {
+        let new_name = format!("{}_{}", vol_name, suffix);
+        overlay_volumes.insert(new_name, serde_yaml::Value::Null);
+    }
+
+    let mut root = serde_yaml::Mapping::new();
+
+    if !overlay_services.is_empty() {
+        let mut svc_map = serde_yaml::Mapping::new();
+        for (k, v) in overlay_services {
+            svc_map.insert(serde_yaml::Value::String(k), v);
+        }
+        root.insert(
+            serde_yaml::Value::String("services".into()),
+            serde_yaml::Value::Mapping(svc_map),
+        );
+    }
+
+    if !overlay_volumes.is_empty() {
+        let mut vol_map = serde_yaml::Mapping::new();
+        for (k, v) in overlay_volumes {
+            vol_map.insert(serde_yaml::Value::String(k), v);
+        }
+        root.insert(
+            serde_yaml::Value::String("volumes".into()),
+            serde_yaml::Value::Mapping(vol_map),
+        );
+    }
+
+    serde_yaml::to_string(&serde_yaml::Value::Mapping(root))
+        .context("failed to serialize overlay YAML")
+}
+
+/// Rewrite the first port mapping to use an explicit host port,
+/// preserving the container port.
+fn rewrite_port_to_host(port: &serde_yaml::Value, host_port: u16) -> serde_yaml::Value {
+    match port {
+        serde_yaml::Value::String(s) => {
+            let parts: Vec<&str> = s.split(':').collect();
+            let container_port = match parts.len() {
+                1 => parts[0].to_string(),
+                2 => parts[1].to_string(),
+                3 => parts[2].to_string(),
+                _ => return port.clone(),
+            };
+            serde_yaml::Value::String(format!("{}:{}", host_port, container_port))
+        }
+        serde_yaml::Value::Number(n) => {
+            if let Some(p) = n.as_u64() {
+                serde_yaml::Value::String(format!("{}:{}", host_port, p))
+            } else {
+                port.clone()
+            }
+        }
+        serde_yaml::Value::Mapping(map) => {
+            let mut new_map = map.clone();
+            if map.contains_key("published") {
+                new_map.insert(
+                    serde_yaml::Value::String("published".into()),
+                    serde_yaml::Value::Number(host_port.into()),
+                );
+            }
+            serde_yaml::Value::Mapping(new_map)
+        }
+        _ => port.clone(),
+    }
+}
+
 fn rewrite_port(port: &serde_yaml::Value, offset: u16) -> serde_yaml::Value {
     match port {
         serde_yaml::Value::String(s) => {
@@ -598,7 +726,10 @@ mod tests {
 
     #[test]
     fn overlay_named_volume_namespaced() {
-        let cf = make_compose(vec![("db", null_svc(&[], &["db_data:/var/lib/postgresql/data"]))]);
+        let cf = make_compose(vec![(
+            "db",
+            null_svc(&[], &["db_data:/var/lib/postgresql/data"]),
+        )]);
         let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
         assert!(yaml.contains("db_data_myslug"), "got: {}", yaml);
     }
@@ -607,7 +738,11 @@ mod tests {
     fn overlay_bind_mount_dot_not_namespaced() {
         let cf = make_compose(vec![("app", null_svc(&[], &["./src:/app/src"]))]);
         let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
-        assert!(yaml.contains("./src:/app/src") || yaml.contains("'./src:/app/src'"), "got: {}", yaml);
+        assert!(
+            yaml.contains("./src:/app/src") || yaml.contains("'./src:/app/src'"),
+            "got: {}",
+            yaml
+        );
         assert!(!yaml.contains("./src_myslug"), "got: {}", yaml);
     }
 

@@ -119,13 +119,11 @@ mod tests {
         crate::config::Config {
             mode: crate::config::Mode::Host,
             max_slots: 8,
-            base_port: 3000,
-            stride: 100,
             prefix: "ecluse".into(),
             worktree_dir: ".ecluse/worktrees".into(),
             app_label: "ecluse.role".into(),
             app_label_value: "app".into(),
-            ports: Default::default(),
+            services: vec![],
             hooks: crate::config::HookConfig::default(),
         }
     }
@@ -144,8 +142,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let err = WorktreeManager::verify_git_repo(dir.path()).unwrap_err();
         assert!(
-            err.to_string().contains("git")
-                || err.to_string().contains("repository"),
+            err.to_string().contains("git") || err.to_string().contains("repository"),
             "got: {}",
             err
         );

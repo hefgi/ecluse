@@ -56,7 +56,9 @@ mod tests {
         let content = std::fs::read_to_string(&out_file).unwrap();
         // The pwd should be the temp dir
         assert!(
-            content.trim().contains(dir.path().to_string_lossy().as_ref()),
+            content
+                .trim()
+                .contains(dir.path().to_string_lossy().as_ref()),
             "expected {} in pwd output: {}",
             dir.path().display(),
             content

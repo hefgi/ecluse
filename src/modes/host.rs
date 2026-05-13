@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
+use indexmap::IndexMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -16,7 +17,6 @@ impl super::ModeHandler for HostMode {
         &self,
         slug: &str,
         slot: u8,
-        offset: u16,
         branch: &str,
         config: &Config,
         root: &Path,
@@ -25,15 +25,15 @@ impl super::ModeHandler for HostMode {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
 
-        let named_ports = env::effective_named_ports(&config.ports, config.base_port, offset);
+        let native_ports = native_ports_for_slot(config, slot);
 
-        for port in named_ports.values() {
+        for port in native_ports.values() {
             check_port_free(*port)?;
         }
 
         wt.create(&worktree_path, branch)?;
 
-        let env_map = env::build_env(slot, slug, offset, "host", &named_ports, &[]);
+        let env_map = env::build_env(slot, slug, "host", &native_ports, &[]);
         env::write_env_file(&worktree_path, &env_map)?;
 
         if let Some(cmd) = &config.hooks.on_up {
@@ -43,13 +43,12 @@ impl super::ModeHandler for HostMode {
             }
         }
 
-        let app_port = named_ports.values().next().copied();
+        let app_port = native_ports.values().next().copied();
 
         Ok(Session {
             slug: slug.to_string(),
             mode: crate::config::Mode::Host,
             slot,
-            offset,
             branch: branch.to_string(),
             worktree_path: worktree_path.display().to_string(),
             compose_project: None,
@@ -67,15 +66,8 @@ impl super::ModeHandler for HostMode {
         _keep_volumes: bool,
     ) -> Result<()> {
         if let Some(cmd) = &config.hooks.on_down {
-            let named_ports = env::effective_named_ports(&config.ports, config.base_port, session.offset);
-            let env_map = env::build_env(
-                session.slot,
-                &session.slug,
-                session.offset,
-                "host",
-                &named_ports,
-                &[],
-            );
+            let native_ports = native_ports_for_slot(config, session.slot);
+            let env_map = env::build_env(session.slot, &session.slug, "host", &native_ports, &[]);
             hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
         }
 
@@ -84,6 +76,22 @@ impl super::ModeHandler for HostMode {
         wt.remove(&wt_path)?;
 
         Ok(())
+    }
+}
+
+/// Build the native port map for a slot, falling back to "app" on 3000+slot
+/// when no [[services]] are defined.
+fn native_ports_for_slot(config: &Config, slot: u8) -> IndexMap<String, u16> {
+    let native = config.native_services();
+    if native.is_empty() {
+        let mut m = IndexMap::new();
+        m.insert("app".to_string(), 3000u16 + slot as u16);
+        m
+    } else {
+        native
+            .iter()
+            .map(|s| (s.name.clone(), s.port(slot)))
+            .collect()
     }
 }
 

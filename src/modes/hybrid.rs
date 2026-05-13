@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
+use indexmap::IndexMap;
 use std::path::Path;
 
 use crate::compose;
@@ -17,7 +18,6 @@ impl super::ModeHandler for HybridMode {
         &self,
         slug: &str,
         slot: u8,
-        offset: u16,
         branch: &str,
         config: &Config,
         root: &Path,
@@ -32,26 +32,55 @@ impl super::ModeHandler for HybridMode {
 
         let compose_data = compose::parse(&compose_path)?;
 
-        let app_svcs =
-            compose::app_services(&compose_data, &config.app_label, &config.app_label_value);
-        let data_svcs =
-            compose::data_services(&compose_data, &config.app_label, &config.app_label_value);
+        // Determine which compose services are "data" (docker) services
+        // Prefer config.docker_services() if [[services]] are defined,
+        // otherwise fall back to label-based detection.
+        let docker_svcs_config = config.docker_services();
+        let data_svcs: Vec<String> = if !docker_svcs_config.is_empty() {
+            docker_svcs_config.iter().map(|s| s.name.clone()).collect()
+        } else {
+            let app_svcs =
+                compose::app_services(&compose_data, &config.app_label, &config.app_label_value);
+            let data =
+                compose::data_services(&compose_data, &config.app_label, &config.app_label_value);
+            if app_svcs.is_empty() {
+                tracing::warn!(
+                    "No service labeled {}={} found; treating all services as data.",
+                    config.app_label,
+                    config.app_label_value
+                );
+            }
+            data
+        };
 
-        if app_svcs.is_empty() {
-            tracing::warn!(
-                "No service labeled {}={} found; treating all services as data.",
-                config.app_label,
-                config.app_label_value
-            );
-        }
+        // Build port overrides for docker services: service_name → host port
+        let docker_port_overrides: std::collections::HashMap<String, u16> =
+            if !docker_svcs_config.is_empty() {
+                docker_svcs_config
+                    .iter()
+                    .map(|s| (s.name.clone(), s.port(slot)))
+                    .collect()
+            } else {
+                std::collections::HashMap::new()
+            };
 
         let suffix = format!("{}_{}", config.prefix, slug);
         let overlay_dir = root.join(".ecluse").join("overlays");
         std::fs::create_dir_all(&overlay_dir).context("failed to create overlays directory")?;
         let overlay_path = overlay_dir.join(format!("{}.yml", slug));
 
-        let overlay_yaml =
-            compose::generate_overlay(&compose_data, offset, &suffix, Some(&data_svcs))?;
+        let overlay_yaml = if docker_port_overrides.is_empty() {
+            // Fallback: use offset-based rewriting (no explicit service config)
+            // For the fallback, we use slot as offset so slot 1 = offset 1
+            compose::generate_overlay(&compose_data, slot as u16, &suffix, Some(&data_svcs))?
+        } else {
+            compose::generate_overlay_with_ports(
+                &compose_data,
+                &docker_port_overrides,
+                &suffix,
+                Some(&data_svcs),
+            )?
+        };
         std::fs::write(&overlay_path, &overlay_yaml).context("failed to write overlay file")?;
 
         wt.create(&worktree_path, branch)?;
@@ -73,23 +102,43 @@ impl super::ModeHandler for HybridMode {
             return Err(e);
         }
 
-        // Named ports from [ports] config (app services running natively)
-        let named_ports = env::effective_named_ports(&config.ports, config.base_port, offset);
+        // Native ports from [[services]] config (or fallback)
+        let native_ports: IndexMap<String, u16> = {
+            let native = config.native_services();
+            if native.is_empty() {
+                let mut m = IndexMap::new();
+                m.insert("app".to_string(), 3000u16 + slot as u16);
+                m
+            } else {
+                native
+                    .iter()
+                    .map(|s| (s.name.clone(), s.port(slot)))
+                    .collect()
+            }
+        };
 
-        // Data service ports from compose
-        let data_service_ports: Vec<(String, u16)> = compose_data
-            .services
-            .iter()
-            .filter_map(|(name, svc)| {
-                if data_svcs.contains(name) {
-                    compose::service_host_port(svc, offset).map(|p| (name.clone(), p))
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Docker service ports for env vars
+        let docker_ports: Vec<(String, u16)> = if !docker_svcs_config.is_empty() {
+            docker_svcs_config
+                .iter()
+                .map(|s| (s.name.clone(), s.port(slot)))
+                .collect()
+        } else {
+            // Fallback: derive from compose data using slot as offset
+            compose_data
+                .services
+                .iter()
+                .filter_map(|(name, svc)| {
+                    if data_svcs.contains(name) {
+                        compose::service_host_port(svc, slot as u16).map(|p| (name.clone(), p))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
 
-        let env_map = env::build_env(slot, slug, offset, "hybrid", &named_ports, &data_service_ports);
+        let env_map = env::build_env(slot, slug, "hybrid", &native_ports, &docker_ports);
         env::write_env_file(&worktree_path, &env_map)?;
 
         if let Some(cmd) = &config.hooks.on_up {
@@ -101,13 +150,12 @@ impl super::ModeHandler for HybridMode {
             }
         }
 
-        let app_port = named_ports.values().next().copied();
+        let app_port = native_ports.values().next().copied();
 
         Ok(Session {
             slug: slug.to_string(),
             mode: crate::config::Mode::Hybrid,
             slot,
-            offset,
             branch: branch.to_string(),
             worktree_path: worktree_path.display().to_string(),
             compose_project: Some(project),
@@ -125,15 +173,18 @@ impl super::ModeHandler for HybridMode {
         keep_volumes: bool,
     ) -> Result<()> {
         if let Some(cmd) = &config.hooks.on_down {
-            let named_ports = env::effective_named_ports(&config.ports, config.base_port, session.offset);
-            let env_map = env::build_env(
-                session.slot,
-                &session.slug,
-                session.offset,
-                "hybrid",
-                &named_ports,
-                &[],
-            );
+            let native = config.native_services();
+            let native_ports: IndexMap<String, u16> = if native.is_empty() {
+                let mut m = IndexMap::new();
+                m.insert("app".to_string(), 3000u16 + session.slot as u16);
+                m
+            } else {
+                native
+                    .iter()
+                    .map(|s| (s.name.clone(), s.port(session.slot)))
+                    .collect()
+            };
+            let env_map = env::build_env(session.slot, &session.slug, "hybrid", &native_ports, &[]);
             hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
         }
 
