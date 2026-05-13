@@ -8,50 +8,67 @@ Five examples covering every mode and port pattern. Read the `.ecluse.toml` and 
 |---|---|---|---|
 | [t3-host](examples/t3-host/.ecluse.toml) | host | TypeScript | Single service, no Docker |
 | [node-container](examples/node-container/.ecluse.toml) | container | TypeScript | Fully containerized, ports from compose |
-| [fastapi-hybrid](examples/fastapi-hybrid/.ecluse.toml) | hybrid | Python | Single service + data in Docker |
-| [t3-monorepo](examples/t3-monorepo/.ecluse.toml) | hybrid | TypeScript | Multi-port monorepo (4 services) |
+| [fastapi-hybrid](examples/fastapi-hybrid/.ecluse.toml) | hybrid | Python | Two native services + data in Docker |
+| [t3-monorepo](examples/t3-monorepo/.ecluse.toml) | hybrid | TypeScript | Multi-port monorepo (4 native services) |
 | [k3d](examples/k3d/.ecluse.toml) | host | — | Kubernetes ingress, all services inside cluster |
 
 ## Patterns
 
 **Host, single service** — no Docker, one port, `PORT` alias set automatically:
 ```toml
-[ports]
-app = 0   # → ECLUSE_APP_PORT + PORT alias
+[[services]]
+name = "app"
+base_port = 3000   # slot 1 → PORT=3001, slot 2 → PORT=3002
 ```
 
-**Container** — all services in Docker, ports come from compose overlay — no `[ports]` needed.
+**Container** — all services in Docker, ports come from compose overlay — no `[[services]]` needed.
 
-**Hybrid, single service** — data in Docker, app on host:
+**Hybrid, single native service + data in Docker:**
 ```toml
-[ports]
-api = 0   # → ECLUSE_API_PORT + PORT alias
-# data service ports available as ECLUSE_POSTGRES_PORT, ECLUSE_REDIS_PORT, etc.
+[[services]]
+name = "api"
+base_port = 8000   # slot 1 → ECLUSE_API_PORT=8001 + PORT alias
+
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432   # slot 1 → ECLUSE_POSTGRES_PORT=5433
 ```
 
-**Hybrid, monorepo** — multiple native processes, each needs its own port:
+**Hybrid, monorepo** — multiple native processes, each needs its own base_port:
 ```toml
-[ports]
-api     = 0   # → ECLUSE_API_PORT + PORT alias
-web     = 1   # → ECLUSE_WEB_PORT
-worker  = 2   # → ECLUSE_WORKER_PORT
-email   = 3   # → ECLUSE_EMAIL_PORT
+[[services]]
+name = "api"
+base_port = 3000   # slot 1 → ECLUSE_API_PORT=3001 + PORT alias
+
+[[services]]
+name = "web"
+base_port = 3100   # slot 1 → ECLUSE_WEB_PORT=3101
+
+[[services]]
+name = "worker"
+base_port = 3200   # slot 1 → ECLUSE_WORKER_PORT=3201
 ```
 
-**Kubernetes / k3d** — two ingress host ports only; services talk to each other inside the cluster via DNS, not host ports:
+**Kubernetes / k3d** — two ingress host ports; services talk inside the cluster via DNS:
 ```toml
-[ports]
-http  = 0   # → ECLUSE_HTTP_PORT + PORT alias → mapped to :80 inside cluster
-https = 1   # → ECLUSE_HTTPS_PORT → mapped to :443 inside cluster
+[[services]]
+name = "http"
+base_port = 8080   # slot 1 → ECLUSE_HTTP_PORT=8081 + PORT alias
+
+[[services]]
+name = "https"
+base_port = 8443   # slot 1 → ECLUSE_HTTPS_PORT=8444
 ```
 
 ## How ports are resolved
 
-`base_port + slot × stride + index`
+`port = base_port + slot`
 
-With defaults (`base_port = 3000`, `stride = 100`):
-- slot 1: index 0 → 3100, index 1 → 3101, index 2 → 3102
-- slot 2: index 0 → 3200, index 1 → 3201, index 2 → 3202
+- slot 1: base_port + 1
+- slot 2: base_port + 2
 
-The first `[ports]` entry always sets the `PORT` alias for framework compatibility.
-Omit `[ports]` entirely for single-service stacks — `PORT` is set to `base_port + slot × stride` automatically.
+Pick `base_port` values to match your app's conventional ports. Space them apart (e.g. 3000, 3100, 3200) so slots never collide even with many parallel sessions.
+
+The first native `[[services]]` entry always sets the `PORT` alias for framework compatibility.
+Omit `[[services]]` entirely for single-service stacks — `PORT` is set to `3000 + slot` automatically.

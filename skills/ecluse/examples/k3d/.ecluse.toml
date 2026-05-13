@@ -1,16 +1,19 @@
 mode = "host"
 max_slots = 4
-base_port = 8080
-stride = 100
 prefix = "ecluse"
 
 # k3d only needs two host ports: HTTP and HTTPS ingress.
-# All services inside the cluster communicate via internal DNS
-# (e.g. http://service-b.default.svc.cluster.local) — no per-service host ports needed.
-# Ingress routes /api, /frontend, /auth etc. to the right pods based on path/hostname rules.
-[ports]
-http = 0    # → ECLUSE_HTTP_PORT + PORT alias (e.g. 8180 for slot 1)
-https = 1   # → ECLUSE_HTTPS_PORT (e.g. 8181 for slot 1)
+# All services inside the cluster communicate via internal DNS — no per-service host ports needed.
+
+# HTTP ingress: slot 1 → ECLUSE_HTTP_PORT=8081 + PORT alias, slot 2 → 8082
+[[services]]
+name = "http"
+base_port = 8080
+
+# HTTPS ingress: slot 1 → ECLUSE_HTTPS_PORT=8444, slot 2 → 8445
+[[services]]
+name = "https"
+base_port = 8443
 
 [hooks]
 on_up = "k3d cluster create ecluse-$ECLUSE_SLUG --port \"$ECLUSE_HTTP_PORT:80@loadbalancer\" --port \"$ECLUSE_HTTPS_PORT:443@loadbalancer\""

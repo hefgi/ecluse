@@ -28,7 +28,7 @@ Per-worktree isolation for development environments. Each `ecluse up` allocates 
 - **Container mode details** → [Container Mode](#container-mode)
 - **Host mode details** → [Host Mode](#host-mode)
 - **Hybrid mode details** → [Hybrid Mode](#hybrid-mode)
-- **Config templates for your stack?** → [examples.md](examples.md) — 11 ready-to-use examples
+- **Config templates for your stack?** → [examples.md](examples.md) — 5 canonical examples
 - **Something broken?** → [Troubleshooting](#troubleshooting)
 - **Feature not supported?** → [Limits](#limits)
 
@@ -65,7 +65,7 @@ Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Us
 
 ### What `ecluse up` does
 
-1. Allocates a slot (integer 1–N) and computes port offset (`slot × stride`)
+1. Allocates a slot (integer 1–N)
 2. Creates a git worktree at `.ecluse/worktrees/<slug>` on branch `ecluse/<slug>`
 3. Depending on mode: starts containers, writes `.env.ecluse`, runs `on_up` hook if configured
 4. `on_up` runs in the worktree with all env vars set — use it for migrations, seeding, etc.
@@ -96,10 +96,9 @@ ecluse up <slug> --json
 #   "worktree_path": "/path/to/.ecluse/worktrees/feat-auth",
 #   "env_file": "/path/to/.ecluse/worktrees/feat-auth/.env.ecluse",
 #   "env": {
-#     "PORT": "3100",               ← alias for first [ports] entry
-#     "ECLUSE_API_PORT": "3100",    ← if [ports] api = 0
-#     "ECLUSE_FRONTEND_PORT": "3101", ← if [ports] frontend = 1
-#     "ECLUSE_POSTGRES_PORT": "5532", ← from compose data service
+#     "PORT": "3001",                  ← alias for first native [[services]] entry
+#     "ECLUSE_API_PORT": "3001",       ← if [[services]] name="api" base_port=3000
+#     "ECLUSE_POSTGRES_PORT": "5433",  ← if [[services]] name="postgres" base_port=5432 run="docker"
 #     "ECLUSE_SLOT": "1",
 #     "ECLUSE_SLUG": "feat-auth",
 #     "ECLUSE_MODE": "hybrid",
@@ -132,21 +131,19 @@ All vars are in the JSON from `ecluse up --json` or `ecluse env <slug>`.
 
 | Variable | Example | Description |
 |---|---|---|
-| `PORT` | `3100` | Alias for the first `[ports]` entry — never hardcode 3000 |
-| `ECLUSE_<NAME>_PORT` | `ECLUSE_API_PORT=3100` | Per-service port from `[ports]` config |
-| `ECLUSE_<SERVICE>_PORT` | `ECLUSE_POSTGRES_PORT=5532` | Data service port from compose (hybrid/container) |
+| `PORT` | `3001` | Alias for the first native `[[services]]` entry — never hardcode 3000 |
+| `ECLUSE_<NAME>_PORT` | `ECLUSE_API_PORT=3001` | Per-service port: `base_port + slot` |
 | `ECLUSE_SLOT` | `1` | Slot number |
 | `ECLUSE_SLUG` | `feat-auth` | Session slug |
-| `ECLUSE_OFFSET` | `100` | Port offset (`slot × stride`) |
 | `ECLUSE_MODE` | `hybrid` | `container`, `host`, or `hybrid` |
 
-**No `DATABASE_URL` or `REDIS_URL` are set automatically.** Data service ports are exposed as `ECLUSE_<SERVICE>_PORT` (e.g. `ECLUSE_POSTGRES_PORT=5532`). Construct connection strings in your `on_up` hook or app config using that port. This keeps ecluse engine-agnostic.
+**No `DATABASE_URL` or `REDIS_URL` are set automatically.** Data service ports are exposed as `ECLUSE_<SERVICE>_PORT` (e.g. `ECLUSE_POSTGRES_PORT=5433`). Construct connection strings in your `on_up` hook or app config using that port. This keeps ecluse engine-agnostic.
 
 ### Parallel sessions
 
 ```bash
-ecluse up feat-auth --json   # slot 1 → ECLUSE_API_PORT=3100, ECLUSE_POSTGRES_PORT=5532
-ecluse up feat-cache --json  # slot 2 → ECLUSE_API_PORT=3200, ECLUSE_POSTGRES_PORT=5632
+ecluse up feat-auth --json   # slot 1 → ECLUSE_API_PORT=3001, ECLUSE_POSTGRES_PORT=5433
+ecluse up feat-cache --json  # slot 2 → ECLUSE_API_PORT=3002, ECLUSE_POSTGRES_PORT=5434
 ecluse ls                    # see both
 ```
 
@@ -206,7 +203,7 @@ Confidence: gap ≥ 4 = High (auto-accept), 2–3 = Medium, 0–1 = Low (full br
 
 - **Nix flake** — use `nix develop`; ecluse doesn't understand `flake.nix`
 - **Bazel** — use Bazel's native sandbox
-- **Monorepo, single compose at root** — the common case; use `[ports]` to allocate one port per native service (see `t3-monorepo` example)
+- **Monorepo, single compose at root** — the common case; use `[[services]]` to allocate one port per native service (see `t3-monorepo` example)
 - **Monorepo, each service has its own compose file** — ecluse only reads one compose file per repo root; run `ecluse init` inside each service subdirectory, giving each its own `.ecluse.toml`, slot pool, and state; the agent must `cd` into the right subdirectory before running ecluse commands
 
 ---
@@ -220,12 +217,14 @@ Every service — including the app — runs in Docker under a unique compose pr
 - Docker/OrbStack running
 - `docker-compose.yml` with `build: .` on the app service
 
-### Port offsets (stride = 100)
+### Port allocation
 
-| Session | Slot | web 3000 → host | postgres 5432 → host |
+Ports are computed as `base_port + slot`. With `[[services]] name="web" base_port=3000` and `[[services]] name="postgres" run="docker" base_port=5432`:
+
+| Session | Slot | web → host | postgres → host |
 |---|---|---|---|
-| `feat-foo` | 1 | 3100 | 5532 |
-| `fix-bar` | 2 | 3200 | 5632 |
+| `feat-foo` | 1 | 3001 | 5433 |
+| `fix-bar` | 2 | 3002 | 5434 |
 
 Only the host-side port changes. Container-internal ports stay the same.
 
@@ -268,7 +267,7 @@ No containers. ecluse reserves a port range, writes `.env.ecluse`, creates the w
 ```bash
 ecluse up feat-foo
 # Session:   feat-foo (slot 1)
-# App port:  3100  (ECLUSE_API_PORT + PORT alias, if [ports] api = 0)
+# App port:  3001  (ECLUSE_APP_PORT + PORT alias, from [[services]] name="app" base_port=3000)
 # Next step: cd .ecluse/worktrees/feat-foo && source .env.ecluse
 
 cd .ecluse/worktrees/feat-foo
@@ -281,8 +280,9 @@ npm run dev    # reads $PORT; run migrations via [hooks] on_up
 ecluse does not provision databases. Use `[hooks] on_up` with your app's own tooling:
 
 ```toml
-[ports]
-app = 0
+[[services]]
+name = "app"
+base_port = 3000
 
 [hooks]
 on_up = "npx prisma migrate deploy"
@@ -336,9 +336,9 @@ services:
 
 ```bash
 ecluse up feat-foo
-# postgres and redis start in Docker with offset ports
-# ECLUSE_POSTGRES_PORT=5532, ECLUSE_REDIS_PORT=6479
-# ECLUSE_API_PORT=3100, PORT=3100  (from [ports] api = 0)
+# postgres and redis start in Docker with per-slot ports
+# ECLUSE_POSTGRES_PORT=5433, ECLUSE_REDIS_PORT=6380  (base_port + slot 1)
+# ECLUSE_API_PORT=3001, PORT=3001  (from [[services]] name="api" base_port=3000)
 
 cd .ecluse/worktrees/feat-foo
 source .env.ecluse
@@ -368,15 +368,15 @@ ecluse down feat-foo --keep-volumes   # keeps volumes
 
 ### Port already in use
 
-**Error:** `port 3100 is already in use by PID 12345; stop that process first`
+**Error:** `port 3001 is already in use by PID 12345; stop that process first`
 
 ```bash
 kill 12345
-lsof -iTCP:3100 -sTCP:LISTEN   # verify port is free
+lsof -iTCP:3001 -sTCP:LISTEN   # verify port is free
 ecluse up                       # retry
 ```
 
-Persistent conflict: increase `stride` in `.ecluse.toml` to move into a less-contested range.
+Persistent conflict: change `base_port` in the relevant `[[services]]` block to a less-contested range.
 
 ### Docker not running
 
@@ -475,19 +475,23 @@ What ecluse intentionally does not do in v0. These are design decisions, not bug
 ```toml
 mode = "hybrid"         # container | host | hybrid
 max_slots = 8           # max parallel sessions
-base_port = 3000        # slot 1 = base_port + stride, slot 2 = base_port + 2*stride
-stride = 100            # port offset per slot — must be > number of [ports] entries
 prefix = "ecluse"       # prefix for compose project names and volume names
 worktree_dir = ".ecluse/worktrees"
 
-# Named ports within each slot's range.
-# index 0 → base_port + slot*stride + 0  (also sets PORT alias)
-# index 1 → base_port + slot*stride + 1
-# Each entry generates ECLUSE_<NAME>_PORT.
-# Omit [ports] for single-service stacks — PORT is set automatically.
-[ports]
-api = 0
-frontend = 1
+# One [[services]] block per service.
+# port = base_port + slot  (slot 1 → +1, slot 2 → +2, …)
+# run = "native" (default) runs on host; run = "docker" runs in a container.
+# The first native entry also sets the PORT alias for framework compatibility.
+# Omit [[services]] entirely for single-service stacks — PORT = 3000 + slot.
+
+[[services]]
+name = "api"
+base_port = 3000        # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
+
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432        # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
 
 # Optional: lifecycle hooks — run in the worktree with all env vars set
 [hooks]
@@ -499,7 +503,7 @@ Hooks run as shell commands inside the worktree directory. All `.env.ecluse` var
 
 ## Examples
 
-See [examples.md](examples.md) for 11 ready-to-use config templates covering Rails, Node, Next.js, FastAPI, Go, MongoDB, T3 monorepo, and Kubernetes. Each entry links directly to the `.ecluse.toml` and `docker-compose.yml` you can read and adapt.
+See [examples.md](examples.md) for 5 canonical config templates covering host, container, hybrid, multi-service monorepo, and Kubernetes. Each entry links directly to the `.ecluse.toml` and `docker-compose.yml` you can read and adapt.
 
 ## Commands
 

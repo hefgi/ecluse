@@ -1,16 +1,37 @@
 mode = "hybrid"
 max_slots = 4
-base_port = 3000
-stride = 100
 prefix = "ecluse"
 
-# Four services, each needs its own host port for hot-reload and direct access.
-# slot 1 → 3100–3103, slot 2 → 3200–3203, etc.
-[ports]
-api      = 0   # → ECLUSE_API_PORT     tRPC / REST API (Next.js API routes or standalone)
-web      = 1   # → ECLUSE_WEB_PORT     Next.js frontend
-worker   = 2   # → ECLUSE_WORKER_PORT  BullMQ admin board (bull-board)
-email    = 3   # → ECLUSE_EMAIL_PORT   React Email preview server
+# tRPC / REST API: slot 1 → ECLUSE_API_PORT=3001 + PORT alias, slot 2 → 3002
+[[services]]
+name = "api"
+base_port = 3000
+
+# Next.js frontend: slot 1 → ECLUSE_WEB_PORT=3101, slot 2 → 3102
+[[services]]
+name = "web"
+base_port = 3100
+
+# BullMQ admin board: slot 1 → ECLUSE_WORKER_PORT=3201, slot 2 → 3202
+[[services]]
+name = "worker"
+base_port = 3200
+
+# React Email preview: slot 1 → ECLUSE_EMAIL_PORT=3301, slot 2 → 3302
+[[services]]
+name = "email"
+base_port = 3300
+
+# Data services — rewritten in compose overlay
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432
+
+[[services]]
+name = "redis"
+run = "docker"
+base_port = 6379
 
 [hooks]
 on_up  = "npx prisma migrate deploy"

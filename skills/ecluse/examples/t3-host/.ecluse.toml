@@ -1,12 +1,11 @@
 mode = "host"
 max_slots = 6
-base_port = 3000
-stride = 100
 prefix = "ecluse"
 
-# Next.js app on index 0 → ECLUSE_APP_PORT + PORT alias (e.g. 3100 for slot 1)
-[ports]
-app = 0
+# Next.js app: slot 1 → ECLUSE_APP_PORT=3001 + PORT alias, slot 2 → 3002
+[[services]]
+name = "app"
+base_port = 3000
 
 [hooks]
 on_up = "npx prisma migrate deploy"
