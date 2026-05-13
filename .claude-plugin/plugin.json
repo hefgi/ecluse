@@ -1,0 +1,17 @@
+{
+  "name": "ecluse",
+  "description": "Per-worktree isolation for development environments. Teaches agents how to create, use, and tear down isolated sessions using ecluse.",
+  "version": "0.1.0",
+  "author": "ecluse",
+  "repository": "https://github.com/ecluse/ecluse",
+  "skills": [
+    "./skills/ecluse/getting-started",
+    "./skills/ecluse/choosing-a-mode",
+    "./skills/ecluse/agent-workflow",
+    "./skills/ecluse/container-mode",
+    "./skills/ecluse/host-mode",
+    "./skills/ecluse/hybrid-mode",
+    "./skills/ecluse/troubleshooting",
+    "./skills/ecluse/limits"
+  ]
+}

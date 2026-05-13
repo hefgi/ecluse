@@ -80,6 +80,18 @@ The `.env.ecluse` file in every worktree contains everything the agent needs:
 
 Full agent workflow: `ecluse skills show agent-workflow`
 
+## Agent harness integration
+
+ecluse ships a `.claude-plugin/plugin.json` manifest. Claude Code and Cursor pick this up automatically when you open the repo — skills are loaded without any manual setup.
+
+For other harnesses, install the skills locally:
+
+```bash
+ecluse skills install   # writes skills/<name>/SKILL.md to .ecluse/skills/
+```
+
+Skills live in `skills/ecluse/` in this repo. Each skill has a `SKILL.md` with YAML frontmatter (trigger descriptions, tags) and optional `references/` subdocs.
+
 ## OrbStack note
 
 On macOS, [OrbStack](https://orbstack.dev) is the recommended Docker runtime for ecluse. It provides faster container startup (~200ms vs ~2s for Docker Desktop) and lower memory overhead. Both runtimes are supported; OrbStack is preferred for developer workstations running multiple parallel sessions.
