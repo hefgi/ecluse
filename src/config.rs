@@ -21,16 +21,13 @@ impl std::fmt::Display for Mode {
 }
 
 impl std::str::FromStr for Mode {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self> {
+    type Err = crate::error::EcluseError;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s {
             "container" => Ok(Mode::Container),
             "host" => Ok(Mode::Host),
             "hybrid" => Ok(Mode::Hybrid),
-            _ => Err(anyhow::anyhow!(
-                "unknown mode '{}'; valid: container, host, hybrid",
-                s
-            )),
+            _ => Err(crate::error::EcluseError::ModeInvalid(s.to_string())),
         }
     }
 }
@@ -144,5 +141,126 @@ impl Config {
 impl DatabaseConfig {
     pub fn is_none(&self) -> bool {
         self.provider.is_empty() || self.provider == "none"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    fn write_toml(dir: &TempDir, content: &str) {
+        let path = dir.path().join(".ecluse.toml");
+        let mut f = std::fs::File::create(path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn mode_from_str_valid() {
+        assert_eq!("container".parse::<Mode>().unwrap(), Mode::Container);
+        assert_eq!("host".parse::<Mode>().unwrap(), Mode::Host);
+        assert_eq!("hybrid".parse::<Mode>().unwrap(), Mode::Hybrid);
+    }
+
+    #[test]
+    fn mode_from_str_invalid() {
+        let err = "nope".parse::<Mode>().unwrap_err();
+        assert!(err.to_string().contains("nope"));
+        assert!(err.to_string().contains("valid:"));
+    }
+
+    #[test]
+    fn mode_display_roundtrips() {
+        for mode in [Mode::Container, Mode::Host, Mode::Hybrid] {
+            let s = mode.to_string();
+            assert_eq!(s.parse::<Mode>().unwrap(), mode);
+        }
+    }
+
+    #[test]
+    fn config_loads_minimal_toml() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.mode, Mode::Host);
+        assert_eq!(config.max_slots, 8);
+        assert_eq!(config.stride, 100);
+        assert_eq!(config.prefix, "ecluse");
+    }
+
+    #[test]
+    fn config_loads_full_toml() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            r#"
+mode = "hybrid"
+max_slots = 4
+stride = 50
+prefix = "myapp"
+worktree_dir = ".wt"
+app_label = "role"
+app_label_value = "web"
+"#,
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.mode, Mode::Hybrid);
+        assert_eq!(config.max_slots, 4);
+        assert_eq!(config.stride, 50);
+        assert_eq!(config.prefix, "myapp");
+    }
+
+    #[test]
+    fn config_missing_returns_error() {
+        let dir = TempDir::new().unwrap();
+        let err = Config::load(dir.path()).unwrap_err();
+        assert!(err.to_string().contains("ecluse init"));
+    }
+
+    #[test]
+    fn is_db_enabled_true_for_postgres_host() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            r#"
+mode = "host"
+[database]
+provider = "postgres-host"
+base = "myapp"
+"#,
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert!(config.is_db_enabled());
+    }
+
+    #[test]
+    fn is_db_enabled_false_by_default() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert!(!config.is_db_enabled());
+    }
+
+    #[test]
+    fn config_roundtrips_save_load() {
+        let dir = TempDir::new().unwrap();
+        let original = Config {
+            mode: Mode::Hybrid,
+            max_slots: 6,
+            base_port: 3000,
+            stride: 200,
+            prefix: "test".into(),
+            worktree_dir: ".ecluse/worktrees".into(),
+            app_label: "ecluse.role".into(),
+            app_label_value: "app".into(),
+            database: DatabaseConfig::default(),
+        };
+        original.save(dir.path()).unwrap();
+        let loaded = Config::load(dir.path()).unwrap();
+        assert_eq!(loaded.mode, Mode::Hybrid);
+        assert_eq!(loaded.max_slots, 6);
+        assert_eq!(loaded.stride, 200);
+        assert_eq!(loaded.prefix, "test");
     }
 }

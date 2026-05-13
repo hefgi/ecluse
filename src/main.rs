@@ -167,9 +167,9 @@ fn prompt_mode_confirm(recommended: config::Mode) -> Result<config::Mode> {
             io::stdout().flush()?;
             let mut mode_input = String::new();
             io::stdin().read_line(&mut mode_input)?;
-            mode_input.trim().parse()
+            Ok(mode_input.trim().parse()?)
         }
-        other => other.parse(),
+        other => Ok(other.parse()?),
     }
 }
 

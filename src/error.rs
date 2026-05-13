@@ -50,4 +50,7 @@ pub enum EcluseError {
 
     #[error("not inside a git repository")]
     NotAGitRepo,
+
+    #[error("unknown mode '{0}'; valid: container, host, hybrid")]
+    ModeInvalid(String),
 }
