@@ -72,7 +72,10 @@ mod tests {
 
     #[test]
     fn port_in_use_message_contains_port_and_pid() {
-        let e = EcluseError::PortInUse { port: 3100, pid: 42 };
+        let e = EcluseError::PortInUse {
+            port: 3100,
+            pid: 42,
+        };
         let msg = e.to_string();
         assert!(msg.contains("3100"));
         assert!(msg.contains("42"));

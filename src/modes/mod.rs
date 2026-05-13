@@ -9,12 +9,10 @@ use crate::config::{Config, Mode};
 use crate::state::Session;
 
 pub trait ModeHandler {
-    #[allow(clippy::too_many_arguments)]
     fn bring_up(
         &self,
         slug: &str,
         slot: u8,
-        offset: u16,
         branch: &str,
         config: &Config,
         root: &Path,
@@ -47,13 +45,11 @@ mod tests {
         Config {
             mode,
             max_slots: 8,
-            base_port: 3000,
-            stride: 100,
             prefix: "ecluse".into(),
             worktree_dir: ".ecluse/worktrees".into(),
             app_label: "ecluse.role".into(),
             app_label_value: "app".into(),
-            ports: Default::default(),
+            services: vec![],
             hooks: HookConfig::default(),
         }
     }

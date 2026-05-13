@@ -66,7 +66,9 @@ fn init_host_creates_config() {
     assert!(repo.path().join(".ecluse.toml").exists());
     let config = std::fs::read_to_string(repo.path().join(".ecluse.toml")).unwrap();
     assert!(config.contains("mode = \"host\""));
-    assert!(config.contains("base_port = 3000"));
+    // New model: no base_port/stride at top level; services define their own ports
+    assert!(!config.contains("stride"));
+    assert!(config.contains("prefix = \"ecluse\""));
 }
 
 #[test]
@@ -88,9 +90,13 @@ fn up_creates_worktree_and_env() {
     assert!(worktree.exists(), "worktree directory missing");
 
     let env = std::fs::read_to_string(worktree.join(".env.ecluse")).unwrap();
-    assert!(env.contains("PORT=3100"));
+    // Fallback: no [[services]] defined → "app" service at 3000 + slot
+    // slot 1 → PORT=3001
+    assert!(env.contains("PORT=3001"), "got env: {}", env);
     assert!(env.contains("ECLUSE_SLOT=1"));
     assert!(env.contains("ECLUSE_MODE=host"));
+    // ECLUSE_OFFSET is removed in the new model
+    assert!(!env.contains("ECLUSE_OFFSET="));
 }
 
 #[test]
@@ -98,8 +104,9 @@ fn up_output_shows_correct_port() {
     let repo = tmp_repo();
     ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
     let out = ecluse(repo.path(), &["up", "feat-foo"]);
+    // slot 1 + fallback base 3000 → 3001
     assert!(
-        stdout(&out).contains("App port:   3100"),
+        stdout(&out).contains("App port:   3001"),
         "got: {}",
         stdout(&out)
     );
@@ -113,12 +120,22 @@ fn parallel_sessions_get_different_slots_and_ports() {
     let out1 = ecluse(repo.path(), &["up", "feat-foo"]);
     assert!(out1.status.success(), "{}", stderr(&out1));
     assert!(stdout(&out1).contains("slot 1"));
-    assert!(stdout(&out1).contains("App port:   3100"));
+    // slot 1 → 3001
+    assert!(
+        stdout(&out1).contains("App port:   3001"),
+        "got: {}",
+        stdout(&out1)
+    );
 
     let out2 = ecluse(repo.path(), &["up", "fix-bar"]);
     assert!(out2.status.success(), "{}", stderr(&out2));
     assert!(stdout(&out2).contains("slot 2"));
-    assert!(stdout(&out2).contains("App port:   3200"));
+    // slot 2 → 3002
+    assert!(
+        stdout(&out2).contains("App port:   3002"),
+        "got: {}",
+        stdout(&out2)
+    );
 }
 
 #[test]
@@ -201,27 +218,80 @@ fn slot_reuse_after_down() {
     let out = ecluse(repo.path(), &["up", "feat-bar"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(stdout(&out).contains("slot 1"));
-    assert!(stdout(&out).contains("App port:   3100"));
-}
-
-#[test]
-fn custom_base_port() {
-    let repo = tmp_repo();
-    ecluse(
-        repo.path(),
-        &["init", "--mode", "host", "--base-port", "4000", "--yes"],
-    );
-    let out = ecluse(repo.path(), &["up", "feat-foo"]);
-    assert!(out.status.success(), "{}", stderr(&out));
+    // slot 1 → 3001
     assert!(
-        stdout(&out).contains("App port:   4100"),
+        stdout(&out).contains("App port:   3001"),
         "got: {}",
         stdout(&out)
     );
+}
 
-    let env = std::fs::read_to_string(repo.path().join(".ecluse/worktrees/feat-foo/.env.ecluse"))
-        .unwrap();
-    assert!(env.contains("PORT=4100"));
+#[test]
+fn services_config_sets_per_service_ports() {
+    let repo = tmp_repo();
+    // Write a config with explicit [[services]]
+    std::fs::write(
+        repo.path().join(".ecluse.toml"),
+        r#"mode = "host"
+
+[[services]]
+name = "api"
+run = "native"
+base_port = 8000
+
+[[services]]
+name = "frontend"
+run = "native"
+base_port = 3000
+"#,
+    )
+    .unwrap();
+    let out = ecluse(repo.path(), &["up", "feat-foo"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let worktree = repo.path().join(".ecluse/worktrees/feat-foo");
+    let env = std::fs::read_to_string(worktree.join(".env.ecluse")).unwrap();
+
+    // api: 8000 + 1 = 8001; frontend: 3000 + 1 = 3001
+    assert!(env.contains("ECLUSE_API_PORT=8001"), "got env: {}", env);
+    assert!(
+        env.contains("ECLUSE_FRONTEND_PORT=3001"),
+        "got env: {}",
+        env
+    );
+    // PORT alias = first native service (api)
+    assert!(env.contains("PORT=8001"), "got env: {}", env);
+}
+
+#[test]
+fn services_config_slot2_increments_correctly() {
+    let repo = tmp_repo();
+    std::fs::write(
+        repo.path().join(".ecluse.toml"),
+        r#"mode = "host"
+
+[[services]]
+name = "api"
+run = "native"
+base_port = 8000
+"#,
+    )
+    .unwrap();
+    // First session: slot 1 → 8001
+    let out1 = ecluse(repo.path(), &["up", "feat-foo"]);
+    assert!(out1.status.success(), "{}", stderr(&out1));
+
+    // Second session: slot 2 → 8002
+    let out2 = ecluse(repo.path(), &["up", "fix-bar"]);
+    assert!(out2.status.success(), "{}", stderr(&out2));
+
+    let env2 = std::fs::read_to_string(
+        repo.path()
+            .join(".ecluse/worktrees/fix-bar/.env.ecluse"),
+    )
+    .unwrap();
+    assert!(env2.contains("ECLUSE_API_PORT=8002"), "got env: {}", env2);
+    assert!(env2.contains("PORT=8002"), "got env: {}", env2);
 }
 
 #[test]

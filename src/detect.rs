@@ -518,7 +518,11 @@ mod tests {
     fn procfile_dev_boosts_host_and_hybrid() {
         let baseline = detect(empty_dir().path()).scores;
         let dir = empty_dir();
-        fs::write(dir.path().join("Procfile.dev"), "web: bundle exec rails server").unwrap();
+        fs::write(
+            dir.path().join("Procfile.dev"),
+            "web: bundle exec rails server",
+        )
+        .unwrap();
         let result = detect(dir.path());
         assert!(result.scores.host > baseline.host);
         assert!(result.scores.hybrid > baseline.hybrid);
@@ -626,7 +630,8 @@ mod tests {
     #[test]
     fn readme_hybrid_pattern_window_boundary() {
         // Exactly 9 lines after docker compose up — should still match (window is 10)
-        let content = "docker compose up\nline1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nbin/dev\n";
+        let content =
+            "docker compose up\nline1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nbin/dev\n";
         assert!(readme_has_hybrid_pattern(content));
     }
 
@@ -657,7 +662,10 @@ mod tests {
     fn signals_are_recorded() {
         let dir = empty_dir();
         let result = detect(dir.path());
-        assert!(!result.signals.is_empty(), "should have at least the no-compose signal");
+        assert!(
+            !result.signals.is_empty(),
+            "should have at least the no-compose signal"
+        );
     }
 
     #[test]
@@ -715,13 +723,18 @@ mod tests {
         );
         let result = detect(dir.path());
         // build: . → +3 container
-        assert!(result.scores.container > 0, "container={}", result.scores.container);
+        assert!(
+            result.scores.container > 0,
+            "container={}",
+            result.scores.container
+        );
     }
 
     #[test]
     fn compose_app_build_context_boosts_container() {
         let dir = empty_dir();
-        let yaml = "services:\n  app:\n    build:\n      context: .\n    ports:\n      - \"3000:3000\"\n";
+        let yaml =
+            "services:\n  app:\n    build:\n      context: .\n    ports:\n      - \"3000:3000\"\n";
         write_compose(&dir, yaml);
         let result = detect(dir.path());
         assert!(result.scores.container > 0);
@@ -755,7 +768,11 @@ mod tests {
         write_compose(&dir, yaml);
         let result = detect(dir.path());
         // has_app_label: +10 hybrid
-        assert!(result.scores.hybrid >= 10 + 2, "hybrid={}", result.scores.hybrid);
+        assert!(
+            result.scores.hybrid >= 10 + 2,
+            "hybrid={}",
+            result.scores.hybrid
+        );
     }
 
     #[test]

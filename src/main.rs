@@ -110,13 +110,11 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
     let cfg = config::Config {
         mode: mode.clone(),
         max_slots: args.max_slots,
-        base_port: args.base_port,
-        stride: args.stride,
         prefix: args.prefix.clone(),
         worktree_dir: ".ecluse/worktrees".into(),
         app_label: "ecluse.role".into(),
         app_label_value: "app".into(),
-        ports: Default::default(),
+        services: vec![],
         hooks: config::HookConfig::default(),
     };
     cfg.save(&cwd)?;
@@ -311,7 +309,6 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
 
     let allocator = slot::SlotAllocator::new(&config, &guard.state);
     let slot = allocator.allocate_next()?;
-    let offset = allocator.offset(slot);
 
     let branch = args
         .branch
@@ -320,9 +317,7 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
 
     let handler = modes::get_handler(&config);
 
-    let session = handler.bring_up(
-        &args.slug, slot, offset, &branch, &config, &root, args.watch,
-    )?;
+    let session = handler.bring_up(&args.slug, slot, &branch, &config, &root, args.watch)?;
 
     if args.json {
         print_up_json(&session, &root)?;
