@@ -45,6 +45,15 @@ impl Default for ServiceRun {
     }
 }
 
+impl std::fmt::Display for ServiceRun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ServiceRun::Native => write!(f, "native"),
+            ServiceRun::Docker => write!(f, "docker"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServiceConfig {
     pub name: String,
@@ -74,6 +83,14 @@ pub struct Config {
     pub app_label: String,
     #[serde(default = "default_app_label_value")]
     pub app_label_value: String,
+    /// When true, fail immediately on port collision instead of searching for a free port.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub strict_port: bool,
+    /// Number of alternative ports to try per service when a port is already in use.
+    /// Each candidate is `nominal + i * max_slots` to avoid stealing another slot's port.
+    /// Guard: port_search_range * max_slots must not exceed the gap between adjacent services.
+    #[serde(default = "default_port_search_range")]
+    pub port_search_range: u8,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub services: Vec<ServiceConfig>,
     #[serde(default, skip_serializing_if = "HookConfig::is_empty")]
@@ -132,6 +149,12 @@ fn default_app_label() -> String {
 }
 fn default_app_label_value() -> String {
     "app".into()
+}
+fn default_port_search_range() -> u8 {
+    10
+}
+fn is_false(v: &bool) -> bool {
+    !v
 }
 
 impl Config {
@@ -275,6 +298,8 @@ on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_DATABASE'"
             worktree_dir: ".ecluse/worktrees".into(),
             app_label: "ecluse.role".into(),
             app_label_value: "app".into(),
+            strict_port: false,
+            port_search_range: 10,
             services: vec![],
             hooks: HookConfig::default(),
         };
@@ -283,6 +308,38 @@ on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_DATABASE'"
         assert_eq!(loaded.mode, Mode::Hybrid);
         assert_eq!(loaded.max_slots, 6);
         assert_eq!(loaded.prefix, "test");
+    }
+
+    #[test]
+    fn config_strict_port_defaults_to_false() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert!(!config.strict_port);
+    }
+
+    #[test]
+    fn config_port_search_range_defaults_to_10() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.port_search_range, 10);
+    }
+
+    #[test]
+    fn config_strict_port_can_be_set() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\nstrict_port = true\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert!(config.strict_port);
+    }
+
+    #[test]
+    fn config_port_search_range_can_be_set() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\nport_search_range = 5\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.port_search_range, 5);
     }
 
     #[test]
@@ -350,6 +407,8 @@ base_port = 5432
             worktree_dir: ".ecluse/worktrees".into(),
             app_label: "ecluse.role".into(),
             app_label_value: "app".into(),
+            strict_port: false,
+            port_search_range: 10,
             services: vec![
                 ServiceConfig {
                     name: "api".into(),
@@ -384,6 +443,8 @@ base_port = 5432
             worktree_dir: ".ecluse/worktrees".into(),
             app_label: "ecluse.role".into(),
             app_label_value: "app".into(),
+            strict_port: false,
+            port_search_range: 10,
             services: vec![
                 ServiceConfig {
                     name: "api".into(),

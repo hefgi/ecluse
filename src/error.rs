@@ -82,6 +82,19 @@ mod tests {
     }
 
     #[test]
+    fn port_exhausted_message_contains_service_and_nominal() {
+        let e = EcluseError::PortExhausted {
+            service: "api".into(),
+            nominal: 3001,
+            range: 10,
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("api"));
+        assert!(msg.contains("3001"));
+        assert!(msg.contains("10"));
+    }
+
+    #[test]
     fn app_label_missing_message() {
         let e = EcluseError::AppLabelMissing;
         assert!(e.to_string().contains("ecluse.role=app"));
@@ -153,6 +166,16 @@ pub enum EcluseError {
 
     #[error("port {port} is already in use by PID {pid}; stop that process first")]
     PortInUse { port: u16, pid: u32 },
+
+    #[error(
+        "no free port found for service '{service}' (tried {range} alternatives starting at {nominal}); \
+         free a port or increase port_search_range"
+    )]
+    PortExhausted {
+        service: String,
+        nominal: u16,
+        range: u8,
+    },
 
     #[error("compose file has no service labeled ecluse.role=app; all services treated as data")]
     AppLabelMissing,
