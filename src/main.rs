@@ -186,6 +186,111 @@ fn append_gitignore(path: &std::path::Path) -> Result<()> {
 
 // ── up ────────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    // ── validate_slug ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn valid_slug_two_chars() {
+        assert!(validate_slug("ab").is_ok());
+    }
+
+    #[test]
+    fn valid_slug_alphanumeric_with_hyphens() {
+        assert!(validate_slug("feat-my-feature").is_ok());
+    }
+
+    #[test]
+    fn valid_slug_numbers_only() {
+        assert!(validate_slug("12").is_ok());
+    }
+
+    #[test]
+    fn valid_slug_max_length() {
+        // max is 32 chars total: [a-z0-9] + up to 30 of [a-z0-9-] + [a-z0-9]
+        let slug = "a".repeat(32);
+        assert!(validate_slug(&slug).is_ok());
+    }
+
+    #[test]
+    fn valid_slug_mixed_numbers_letters_hyphens() {
+        assert!(validate_slug("fix-123-foo").is_ok());
+    }
+
+    #[test]
+    fn invalid_slug_uppercase() {
+        assert!(validate_slug("Feat-foo").is_err());
+    }
+
+    #[test]
+    fn invalid_slug_leading_hyphen() {
+        assert!(validate_slug("-feat-foo").is_err());
+    }
+
+    #[test]
+    fn invalid_slug_trailing_hyphen() {
+        assert!(validate_slug("feat-foo-").is_err());
+    }
+
+    #[test]
+    fn invalid_slug_single_char() {
+        assert!(validate_slug("a").is_err());
+    }
+
+    #[test]
+    fn invalid_slug_special_chars() {
+        assert!(validate_slug("feat_foo").is_err());
+        assert!(validate_slug("feat.foo").is_err());
+        assert!(validate_slug("feat foo").is_err());
+    }
+
+    #[test]
+    fn invalid_slug_too_long() {
+        // 33 chars — one over max
+        let slug = "a".repeat(33);
+        assert!(validate_slug(&slug).is_err());
+    }
+
+    #[test]
+    fn invalid_slug_empty() {
+        assert!(validate_slug("").is_err());
+    }
+
+    // ── append_gitignore ──────────────────────────────────────────────────────
+
+    #[test]
+    fn append_gitignore_creates_file_if_absent() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".gitignore");
+        append_gitignore(&path).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains(".ecluse/"));
+    }
+
+    #[test]
+    fn append_gitignore_appends_to_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".gitignore");
+        std::fs::write(&path, "node_modules/\ndist/\n").unwrap();
+        append_gitignore(&path).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("node_modules/"));
+        assert!(content.contains(".ecluse/"));
+    }
+
+    #[test]
+    fn append_gitignore_ends_with_newline() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".gitignore");
+        append_gitignore(&path).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.ends_with('\n'));
+    }
+}
+
 fn validate_slug(slug: &str) -> Result<()> {
     let re = regex_lite::Regex::new(r"^[a-z0-9][a-z0-9\-]{0,30}[a-z0-9]$").unwrap();
     if !re.is_match(slug) {

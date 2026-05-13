@@ -37,3 +37,32 @@ pub fn get_handler(config: &Config) -> Box<dyn ModeHandler> {
         Mode::Hybrid => Box::new(hybrid::HybridMode),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{HookConfig, Mode};
+
+    fn make_config(mode: Mode) -> Config {
+        Config {
+            mode,
+            max_slots: 8,
+            base_port: 3000,
+            stride: 100,
+            prefix: "ecluse".into(),
+            worktree_dir: ".ecluse/worktrees".into(),
+            app_label: "ecluse.role".into(),
+            app_label_value: "app".into(),
+            ports: Default::default(),
+            hooks: HookConfig::default(),
+        }
+    }
+
+    #[test]
+    fn get_handler_returns_handler_for_each_mode() {
+        // Just verify no panic and handler is returned (can't easily inspect type)
+        let _ = get_handler(&make_config(Mode::Container));
+        let _ = get_handler(&make_config(Mode::Host));
+        let _ = get_handler(&make_config(Mode::Hybrid));
+    }
+}
