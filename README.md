@@ -80,9 +80,7 @@ The `.env.ecluse` file in every worktree contains everything the agent needs:
 
 ## Agent harness integration
 
-ecluse ships a `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` manifest. Claude Code and Cursor pick this up automatically when you open the repo — no setup needed.
-
-For other harnesses, install the skill via npx:
+Install the ecluse skill into your coding agent:
 
 ```bash
 npx skills add hefgi/ecluse -y

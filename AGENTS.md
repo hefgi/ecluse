@@ -18,11 +18,9 @@ ecluse/
 │   ├── docker.rs        docker shell-outs
 │   ├── postgres.rs      psql shell-outs
 │   ├── detect.rs        mode detection signals
-│   ├── skills.rs        embedded skill registry (points to skills/)
 │   ├── error.rs         EcluseError enum
 │   └── modes/           container / host / hybrid handlers
-├── skills/ecluse/       canonical skill sources (SKILL.md per subfolder)
-└── .claude-plugin/      agent harness plugin manifest
+└── skills/ecluse/       skill content (SKILL.md)
 ```
 
 ## Build
