@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -33,15 +32,40 @@ impl std::str::FromStr for Mode {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceRun {
+    Native,
+    Docker,
+}
+
+impl Default for ServiceRun {
+    fn default() -> Self {
+        ServiceRun::Native
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ServiceConfig {
+    pub name: String,
+    pub base_port: u16,
+    #[serde(default)]
+    pub run: ServiceRun,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compose: Option<String>,
+}
+
+impl ServiceConfig {
+    pub fn port(&self, slot: u8) -> u16 {
+        self.base_port + slot as u16
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
     pub mode: Mode,
     #[serde(default = "default_max_slots")]
     pub max_slots: u8,
-    #[serde(default = "default_base_port")]
-    pub base_port: u16,
-    #[serde(default = "default_stride")]
-    pub stride: u16,
     #[serde(default = "default_prefix")]
     pub prefix: String,
     #[serde(default = "default_worktree_dir")]
@@ -50,14 +74,34 @@ pub struct Config {
     pub app_label: String,
     #[serde(default = "default_app_label_value")]
     pub app_label_value: String,
-    /// Named ports within a slot. Each entry maps a service name to an index
-    /// offset within the stride (0 = base_port + slot*stride, 1 = +1, etc.).
-    /// Generates ECLUSE_<NAME>_PORT env vars. The port at index 0 is also
-    /// exported as PORT for single-service compatibility.
-    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
-    pub ports: IndexMap<String, u8>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub services: Vec<ServiceConfig>,
     #[serde(default, skip_serializing_if = "HookConfig::is_empty")]
     pub hooks: HookConfig,
+}
+
+impl Config {
+    pub fn native_services(&self) -> Vec<&ServiceConfig> {
+        self.services
+            .iter()
+            .filter(|s| s.run == ServiceRun::Native)
+            .collect()
+    }
+
+    pub fn docker_services(&self) -> Vec<&ServiceConfig> {
+        self.services
+            .iter()
+            .filter(|s| s.run == ServiceRun::Docker)
+            .collect()
+    }
+
+    /// Returns port map for all services at a given slot
+    pub fn service_ports(&self, slot: u8) -> indexmap::IndexMap<String, u16> {
+        self.services
+            .iter()
+            .map(|s| (s.name.clone(), s.port(slot)))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -76,12 +120,6 @@ impl HookConfig {
 
 fn default_max_slots() -> u8 {
     8
-}
-fn default_base_port() -> u16 {
-    3000
-}
-fn default_stride() -> u16 {
-    100
 }
 fn default_prefix() -> String {
     "ecluse".into()
@@ -170,8 +208,8 @@ mod tests {
         let config = Config::load(dir.path()).unwrap();
         assert_eq!(config.mode, Mode::Host);
         assert_eq!(config.max_slots, 8);
-        assert_eq!(config.stride, 100);
         assert_eq!(config.prefix, "ecluse");
+        assert!(config.services.is_empty());
     }
 
     #[test]
@@ -182,7 +220,6 @@ mod tests {
             r#"
 mode = "hybrid"
 max_slots = 4
-stride = 50
 prefix = "myapp"
 worktree_dir = ".wt"
 app_label = "role"
@@ -192,7 +229,6 @@ app_label_value = "web"
         let config = Config::load(dir.path()).unwrap();
         assert_eq!(config.mode, Mode::Hybrid);
         assert_eq!(config.max_slots, 4);
-        assert_eq!(config.stride, 50);
         assert_eq!(config.prefix, "myapp");
     }
 
@@ -235,20 +271,17 @@ on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_DATABASE'"
         let original = Config {
             mode: Mode::Hybrid,
             max_slots: 6,
-            base_port: 3000,
-            stride: 200,
             prefix: "test".into(),
             worktree_dir: ".ecluse/worktrees".into(),
             app_label: "ecluse.role".into(),
             app_label_value: "app".into(),
-            ports: Default::default(),
+            services: vec![],
             hooks: HookConfig::default(),
         };
         original.save(dir.path()).unwrap();
         let loaded = Config::load(dir.path()).unwrap();
         assert_eq!(loaded.mode, Mode::Hybrid);
         assert_eq!(loaded.max_slots, 6);
-        assert_eq!(loaded.stride, 200);
         assert_eq!(loaded.prefix, "test");
     }
 
@@ -267,23 +300,113 @@ on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_DATABASE'"
     }
 
     #[test]
-    fn config_ports_load_from_toml() {
+    fn config_services_load_from_toml() {
         let dir = TempDir::new().unwrap();
         write_toml(
             &dir,
             r#"
-mode = "host"
-[ports]
-api = 0
-worker = 1
-frontend = 2
+mode = "hybrid"
+
+[[services]]
+name = "api"
+run = "native"
+base_port = 8000
+
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432
 "#,
         );
         let config = Config::load(dir.path()).unwrap();
-        assert_eq!(config.ports.len(), 3);
-        assert_eq!(config.ports["api"], 0);
-        assert_eq!(config.ports["worker"], 1);
-        assert_eq!(config.ports["frontend"], 2);
+        assert_eq!(config.services.len(), 2);
+        assert_eq!(config.services[0].name, "api");
+        assert_eq!(config.services[0].base_port, 8000);
+        assert_eq!(config.services[0].run, ServiceRun::Native);
+        assert_eq!(config.services[1].name, "postgres");
+        assert_eq!(config.services[1].base_port, 5432);
+        assert_eq!(config.services[1].run, ServiceRun::Docker);
+    }
+
+    #[test]
+    fn service_config_port_computes_correctly() {
+        let svc = ServiceConfig {
+            name: "api".into(),
+            base_port: 8000,
+            run: ServiceRun::Native,
+            compose: None,
+        };
+        assert_eq!(svc.port(1), 8001);
+        assert_eq!(svc.port(2), 8002);
+        assert_eq!(svc.port(8), 8008);
+    }
+
+    #[test]
+    fn config_native_services_filters_correctly() {
+        let config = Config {
+            mode: Mode::Hybrid,
+            max_slots: 8,
+            prefix: "ecluse".into(),
+            worktree_dir: ".ecluse/worktrees".into(),
+            app_label: "ecluse.role".into(),
+            app_label_value: "app".into(),
+            services: vec![
+                ServiceConfig {
+                    name: "api".into(),
+                    base_port: 8000,
+                    run: ServiceRun::Native,
+                    compose: None,
+                },
+                ServiceConfig {
+                    name: "postgres".into(),
+                    base_port: 5432,
+                    run: ServiceRun::Docker,
+                    compose: None,
+                },
+            ],
+            hooks: HookConfig::default(),
+        };
+        let native = config.native_services();
+        assert_eq!(native.len(), 1);
+        assert_eq!(native[0].name, "api");
+
+        let docker = config.docker_services();
+        assert_eq!(docker.len(), 1);
+        assert_eq!(docker[0].name, "postgres");
+    }
+
+    #[test]
+    fn config_service_ports_returns_correct_map() {
+        let config = Config {
+            mode: Mode::Hybrid,
+            max_slots: 8,
+            prefix: "ecluse".into(),
+            worktree_dir: ".ecluse/worktrees".into(),
+            app_label: "ecluse.role".into(),
+            app_label_value: "app".into(),
+            services: vec![
+                ServiceConfig {
+                    name: "api".into(),
+                    base_port: 8000,
+                    run: ServiceRun::Native,
+                    compose: None,
+                },
+                ServiceConfig {
+                    name: "postgres".into(),
+                    base_port: 5432,
+                    run: ServiceRun::Docker,
+                    compose: None,
+                },
+            ],
+            hooks: HookConfig::default(),
+        };
+        let ports = config.service_ports(1);
+        assert_eq!(ports["api"], 8001);
+        assert_eq!(ports["postgres"], 5433);
+
+        let ports2 = config.service_ports(2);
+        assert_eq!(ports2["api"], 8002);
+        assert_eq!(ports2["postgres"], 5434);
     }
 
     #[test]
@@ -344,10 +467,25 @@ frontend = 2
 
     #[test]
     fn find_and_load_errors_without_config() {
-        // Can only test when current dir has no .ecluse.toml traversal up
-        // Use a temp dir as the cwd substitute — we test via Config::load directly
         let dir = TempDir::new().unwrap();
         let result = Config::load(dir.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn service_run_defaults_to_native() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            r#"
+mode = "host"
+
+[[services]]
+name = "app"
+base_port = 3000
+"#,
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.services[0].run, ServiceRun::Native);
     }
 }
