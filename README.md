@@ -85,7 +85,7 @@ ecluse ships a `.claude-plugin/plugin.json` and `.codex-plugin/plugin.json` mani
 For other harnesses, install the skill via npx:
 
 ```bash
-npx skills add ecluse/ecluse -y
+npx skills add hefgi/ecluse -y
 ```
 
 ## OrbStack note
