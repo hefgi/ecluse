@@ -4,16 +4,15 @@
 
 - Rust 1.85+ (`rustup` or your preferred toolchain manager)
 - For container and hybrid mode testing: [OrbStack](https://orbstack.dev) (macOS) or Docker Engine (Linux)
-- [Task](https://taskfile.dev) for the dev workflow: `brew install go-task`
 
 ## Dev workflow
 
 ```bash
-task          # fmt + lint + test (run this before pushing)
-task build    # cargo build
-task test     # cargo test
-task lint     # cargo clippy -- -D warnings
-task fmt:fix  # auto-format
+cargo fmt --check && cargo clippy -- -D warnings && cargo test   # run before pushing
+cargo build
+cargo test
+cargo clippy -- -D warnings
+cargo fmt
 ```
 
 Run a specific test module:
@@ -60,6 +59,6 @@ Open an issue first. The current provider interface lives in `postgres.rs` — a
 ## Pull requests
 
 - Keep commits focused — one logical change per commit.
-- Run `task` before pushing; CI enforces fmt, clippy, and tests.
+- Run `cargo fmt --check && cargo clippy -- -D warnings && cargo test` before pushing; CI enforces all three.
 - For bug fixes: a failing test that passes after the fix is ideal.
 - For new features: unit tests are required, integration tests are a bonus.
