@@ -49,19 +49,19 @@ brew install ecluse/tap/ecluse
 ecluse --version
 ```
 
-Or from source: `cargo install --git https://github.com/hefgi/ecluse`
+Or from source: `cargo install ecluse`
 
-### Five-minute on-ramp
+### Agent quick-start
 
 ```bash
-cd my-project
-ecluse init              # auto-detects mode, prompts to confirm
-ecluse up feat-foo       # creates worktree + slot
-ecluse shell feat-foo    # drops into worktree with env loaded
-npm run dev              # PORT, DATABASE_URL, etc. already set
-ecluse ls                # see active sessions (from another terminal)
-ecluse down feat-foo     # clean teardown
+ecluse init --mode hybrid --yes          # write .ecluse.toml non-interactively
+ecluse up feat-foo --json                # worktree + slot + all env vars in one JSON call
+# → use worktree_path and env from JSON to run commands and edit files
+ecluse ls                                # see active sessions
+ecluse down feat-foo                     # clean teardown
 ```
+
+Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Use `ecluse up --json` or `ecluse env <slug>` to get the worktree path and env, then operate directly.
 
 ### What `ecluse up` does
 
@@ -505,8 +505,9 @@ See [examples.md](examples.md) for 11 ready-to-use config templates covering Rai
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
 ecluse up <slug> [--branch <name>] [--watch] [--json]
-ecluse env <slug>
-ecluse shell <slug>
+ecluse env [<slug>]
 ecluse down <slug> [--keep-volumes] [--keep-branch]
 ecluse ls [--json]
 ```
+
+`ecluse shell` exists but is human-only — it spawns an interactive subshell that blocks non-interactive execution. Agents must not use it.
