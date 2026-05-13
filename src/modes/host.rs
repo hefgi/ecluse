@@ -1,13 +1,13 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::Utc;
 use indexmap::IndexMap;
 use std::path::Path;
-use std::process::Command;
 
 use crate::config::Config;
 use crate::env;
 use crate::hooks;
 use crate::state::Session;
+use crate::validate;
 use crate::worktree::WorktreeManager;
 
 pub struct HostMode;
@@ -25,11 +25,7 @@ impl super::ModeHandler for HostMode {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
 
-        let native_ports = native_ports_for_slot(config, slot);
-
-        for port in native_ports.values() {
-            check_port_free(*port)?;
-        }
+        let native_ports = native_ports_for_slot(config, slot)?;
 
         wt.create(&worktree_path, branch)?;
 
@@ -66,7 +62,7 @@ impl super::ModeHandler for HostMode {
         _keep_volumes: bool,
     ) -> Result<()> {
         if let Some(cmd) = &config.hooks.on_down {
-            let native_ports = native_ports_for_slot(config, session.slot);
+            let native_ports = native_ports_for_slot(config, session.slot)?;
             let env_map = env::build_env(session.slot, &session.slug, "host", &native_ports, &[]);
             hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
         }
@@ -80,36 +76,28 @@ impl super::ModeHandler for HostMode {
 }
 
 /// Build the native port map for a slot, falling back to "app" on 3000+slot
-/// when no [[services]] are defined.
-fn native_ports_for_slot(config: &Config, slot: u8) -> IndexMap<String, u16> {
+/// when no [[services]] are defined. Finds a free port for each service.
+fn native_ports_for_slot(config: &Config, slot: u8) -> Result<IndexMap<String, u16>> {
     let native = config.native_services();
     if native.is_empty() {
+        // Fallback: single "app" service — use a minimal ServiceConfig for port search
+        let fallback = crate::config::ServiceConfig {
+            name: "app".into(),
+            base_port: 3000,
+            run: crate::config::ServiceRun::Native,
+            compose: None,
+        };
+        let port = validate::find_free_port(config, &fallback, slot)?;
         let mut m = IndexMap::new();
-        m.insert("app".to_string(), 3000u16 + slot as u16);
-        m
+        m.insert("app".to_string(), port);
+        Ok(m)
     } else {
         native
             .iter()
-            .map(|s| (s.name.clone(), s.port(slot)))
+            .map(|s| {
+                let port = validate::find_free_port(config, s, slot)?;
+                Ok((s.name.clone(), port))
+            })
             .collect()
     }
-}
-
-fn check_port_free(port: u16) -> Result<()> {
-    let output = Command::new("lsof")
-        .args(["-iTCP", &format!(":{}", port), "-sTCP:LISTEN", "-n", "-P"])
-        .output()
-        .context("failed to run lsof")?;
-
-    if output.status.success() && !output.stdout.is_empty() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let pid: u32 = stdout
-            .lines()
-            .nth(1)
-            .and_then(|line| line.split_whitespace().nth(1))
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(0);
-        return Err(crate::error::EcluseError::PortInUse { port, pid }.into());
-    }
-    Ok(())
 }

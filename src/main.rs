@@ -9,6 +9,7 @@ mod hooks;
 mod modes;
 mod slot;
 mod state;
+mod validate;
 mod worktree;
 
 use anyhow::{Context, Result};
@@ -41,6 +42,7 @@ fn run(cli: cli::Cli) -> Result<()> {
         cli::Command::Ls(args) => cmd_ls(args),
         cli::Command::Shell(args) => cmd_shell(args),
         cli::Command::Env(args) => cmd_env(args),
+        cli::Command::Validate(args) => cmd_validate(args),
     }
 }
 
@@ -114,6 +116,8 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         worktree_dir: ".ecluse/worktrees".into(),
         app_label: "ecluse.role".into(),
         app_label_value: "app".into(),
+        strict_port: false,
+        port_search_range: 10,
         services: vec![],
         hooks: config::HookConfig::default(),
     };
@@ -300,6 +304,12 @@ fn validate_slug(slug: &str) -> Result<()> {
 fn cmd_up(args: cli::UpArgs) -> Result<()> {
     validate_slug(&args.slug)?;
     let (config, root) = config::Config::find_and_load()?;
+
+    // Validate config before acquiring the state lock
+    let warnings = validate::validate_config(&config)?;
+    for w in &warnings {
+        eprintln!("warning: {}", w);
+    }
 
     let mut guard = state::StateGuard::acquire(&root)?;
 
@@ -515,6 +525,58 @@ fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
         .with_context(|| format!("failed to launch shell: {}", shell))?;
 
     std::process::exit(status.code().unwrap_or(0));
+}
+
+// ── validate ──────────────────────────────────────────────────────────────────
+
+fn cmd_validate(args: cli::ValidateArgs) -> Result<()> {
+    let (config, root) = config::Config::find_and_load()?;
+
+    let warnings = validate::validate_config(&config)?;
+
+    for w in &warnings {
+        eprintln!("warning: {}", w);
+    }
+
+    println!("Config at {} is valid.", root.join(".ecluse.toml").display());
+    println!(
+        "  max_slots:         {}",
+        config.max_slots
+    );
+    println!(
+        "  strict_port:       {}",
+        config.strict_port
+    );
+    println!(
+        "  port_search_range: {}",
+        config.port_search_range
+    );
+
+    if !config.services.is_empty() {
+        println!("  services:");
+        for svc in &config.services {
+            println!(
+                "    {} ({}) base_port={} slot_1_port={}",
+                svc.name,
+                svc.run,
+                svc.base_port,
+                svc.port(1),
+            );
+        }
+    }
+
+    if args.ports {
+        println!();
+        println!("Port allocation across all slots:");
+        let header_parts: Vec<String> = config.services.iter().map(|s| format!("{:>20}", s.name)).collect();
+        println!("  {:>6}  {}", "slot", header_parts.join("  "));
+        for slot in 1..=config.max_slots {
+            let port_parts: Vec<String> = config.services.iter().map(|s| format!("{:>20}", s.port(slot))).collect();
+            println!("  {:>6}  {}", slot, port_parts.join("  "));
+        }
+    }
+
+    Ok(())
 }
 
 // ── env ───────────────────────────────────────────────────────────────────────

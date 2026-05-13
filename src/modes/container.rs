@@ -8,6 +8,7 @@ use crate::docker;
 use crate::env;
 use crate::hooks;
 use crate::state::Session;
+use crate::validate;
 use crate::worktree::WorktreeManager;
 
 pub struct ContainerMode;
@@ -36,17 +37,37 @@ impl super::ModeHandler for ContainerMode {
         std::fs::create_dir_all(&overlay_dir).context("failed to create overlays directory")?;
         let overlay_path = overlay_dir.join(format!("{}.yml", slug));
 
-        // Build port overrides from docker services config if defined
+        // Compute actual allocated ports (with port search) and generate overlay
         let docker_svcs_config = config.docker_services();
-        let overlay_yaml = if !docker_svcs_config.is_empty() {
+        let (overlay_yaml, allocated_ports) = if !docker_svcs_config.is_empty() {
+            // Explicit [[services]] — find free port for each
             let port_overrides: std::collections::HashMap<String, u16> = docker_svcs_config
                 .iter()
-                .map(|s| (s.name.clone(), s.port(slot)))
-                .collect();
-            compose::generate_overlay_with_ports(&compose_data, &port_overrides, &suffix, None)?
+                .map(|s| {
+                    let port = validate::find_free_port(config, s, slot)?;
+                    Ok((s.name.clone(), port))
+                })
+                .collect::<Result<_>>()?;
+            let yaml = compose::generate_overlay_with_ports(
+                &compose_data,
+                &port_overrides,
+                &suffix,
+                None,
+            )?;
+            // Keep allocated ports as Vec for env building
+            let ports: Vec<(String, u16)> = port_overrides.into_iter().collect();
+            (yaml, ports)
         } else {
-            // Fallback: use slot as offset for backward compat
-            compose::generate_overlay(&compose_data, slot as u16, &suffix, None)?
+            // Fallback: offset by slot
+            let yaml = compose::generate_overlay(&compose_data, slot as u16, &suffix, None)?;
+            let ports: Vec<(String, u16)> = compose_data
+                .services
+                .iter()
+                .filter_map(|(name, svc)| {
+                    compose::service_host_port(svc, slot as u16).map(|p| (name.clone(), p))
+                })
+                .collect();
+            (yaml, ports)
         };
         std::fs::write(&overlay_path, &overlay_yaml).context("failed to write overlay file")?;
 
@@ -62,29 +83,12 @@ impl super::ModeHandler for ContainerMode {
             return Err(e);
         }
 
-        // Docker service ports for env vars
-        let docker_ports: Vec<(String, u16)> = if !docker_svcs_config.is_empty() {
-            docker_svcs_config
-                .iter()
-                .map(|s| (s.name.clone(), s.port(slot)))
-                .collect()
-        } else {
-            // Fallback: derive from compose data using slot as offset
-            compose_data
-                .services
-                .iter()
-                .filter_map(|(name, svc)| {
-                    compose::service_host_port(svc, slot as u16).map(|p| (name.clone(), p))
-                })
-                .collect()
-        };
-
         let env_map = env::build_env(
             slot,
             slug,
             "container",
             &indexmap::IndexMap::new(),
-            &docker_ports,
+            &allocated_ports,
         );
         env::write_env_file(&worktree_path, &env_map)?;
 
@@ -97,15 +101,7 @@ impl super::ModeHandler for ContainerMode {
             }
         }
 
-        let app_port = if !docker_svcs_config.is_empty() {
-            docker_svcs_config.first().map(|s| s.port(slot))
-        } else {
-            compose_data
-                .services
-                .values()
-                .filter_map(|svc| compose::service_host_port(svc, slot as u16))
-                .next()
-        };
+        let app_port = allocated_ports.first().map(|(_, p)| *p);
 
         Ok(Session {
             slug: slug.to_string(),

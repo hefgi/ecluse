@@ -9,6 +9,7 @@ use crate::docker;
 use crate::env;
 use crate::hooks;
 use crate::state::Session;
+use crate::validate;
 use crate::worktree::WorktreeManager;
 
 pub struct HybridMode;
@@ -53,16 +54,23 @@ impl super::ModeHandler for HybridMode {
             data
         };
 
-        // Build port overrides for docker services: service_name → host port
-        let docker_port_overrides: std::collections::HashMap<String, u16> =
-            if !docker_svcs_config.is_empty() {
-                docker_svcs_config
-                    .iter()
-                    .map(|s| (s.name.clone(), s.port(slot)))
-                    .collect()
-            } else {
-                std::collections::HashMap::new()
-            };
+        // Build port overrides for docker services, finding free ports
+        let (docker_port_overrides, allocated_docker_ports): (
+            std::collections::HashMap<String, u16>,
+            Vec<(String, u16)>,
+        ) = if !docker_svcs_config.is_empty() {
+            let pairs: Vec<(String, u16)> = docker_svcs_config
+                .iter()
+                .map(|s| {
+                    let port = validate::find_free_port(config, s, slot)?;
+                    Ok((s.name.clone(), port))
+                })
+                .collect::<Result<_>>()?;
+            let map: std::collections::HashMap<String, u16> = pairs.iter().cloned().collect();
+            (map, pairs)
+        } else {
+            (std::collections::HashMap::new(), vec![])
+        };
 
         let suffix = format!("{}_{}", config.prefix, slug);
         let overlay_dir = root.join(".ecluse").join("overlays");
@@ -71,7 +79,6 @@ impl super::ModeHandler for HybridMode {
 
         let overlay_yaml = if docker_port_overrides.is_empty() {
             // Fallback: use offset-based rewriting (no explicit service config)
-            // For the fallback, we use slot as offset so slot 1 = offset 1
             compose::generate_overlay(&compose_data, slot as u16, &suffix, Some(&data_svcs))?
         } else {
             compose::generate_overlay_with_ports(
@@ -102,27 +109,34 @@ impl super::ModeHandler for HybridMode {
             return Err(e);
         }
 
-        // Native ports from [[services]] config (or fallback)
+        // Native ports from [[services]] config (or fallback), with port search
         let native_ports: IndexMap<String, u16> = {
             let native = config.native_services();
             if native.is_empty() {
+                let fallback = crate::config::ServiceConfig {
+                    name: "app".into(),
+                    base_port: 3000,
+                    run: crate::config::ServiceRun::Native,
+                    compose: None,
+                };
+                let port = validate::find_free_port(config, &fallback, slot)?;
                 let mut m = IndexMap::new();
-                m.insert("app".to_string(), 3000u16 + slot as u16);
+                m.insert("app".to_string(), port);
                 m
             } else {
                 native
                     .iter()
-                    .map(|s| (s.name.clone(), s.port(slot)))
-                    .collect()
+                    .map(|s| {
+                        let port = validate::find_free_port(config, s, slot)?;
+                        Ok((s.name.clone(), port))
+                    })
+                    .collect::<Result<IndexMap<_, _>>>()?
             }
         };
 
-        // Docker service ports for env vars
-        let docker_ports: Vec<(String, u16)> = if !docker_svcs_config.is_empty() {
-            docker_svcs_config
-                .iter()
-                .map(|s| (s.name.clone(), s.port(slot)))
-                .collect()
+        // Docker service ports for env vars — use actually allocated ports
+        let docker_ports: Vec<(String, u16)> = if !allocated_docker_ports.is_empty() {
+            allocated_docker_ports
         } else {
             // Fallback: derive from compose data using slot as offset
             compose_data

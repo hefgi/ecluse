@@ -49,6 +49,8 @@ mod tests {
             worktree_dir: ".ecluse/worktrees".into(),
             app_label: "ecluse.role".into(),
             app_label_value: "app".into(),
+            strict_port: false,
+            port_search_range: 10,
             services: vec![],
             hooks: HookConfig::default(),
         }

@@ -29,6 +29,8 @@ pub enum Command {
     Shell(ShellArgs),
     /// Print a session's environment variables (worktree path + all env vars)
     Env(EnvArgs),
+    /// Validate .ecluse.toml — check port ranges, service gaps, and search range safety
+    Validate(ValidateArgs),
 }
 
 #[derive(Args)]
@@ -103,4 +105,11 @@ pub struct ShellArgs {
 pub struct EnvArgs {
     /// Session slug — omit when already inside a worktree
     pub slug: Option<String>,
+}
+
+#[derive(Args)]
+pub struct ValidateArgs {
+    /// Also print the port allocation table for all slots
+    #[arg(long)]
+    pub ports: bool,
 }
