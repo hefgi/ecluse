@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -49,6 +50,12 @@ pub struct Config {
     pub app_label: String,
     #[serde(default = "default_app_label_value")]
     pub app_label_value: String,
+    /// Named ports within a slot. Each entry maps a service name to an index
+    /// offset within the stride (0 = base_port + slot*stride, 1 = +1, etc.).
+    /// Generates ECLUSE_<NAME>_PORT env vars. The port at index 0 is also
+    /// exported as PORT for single-service compatibility.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub ports: IndexMap<String, u8>,
     #[serde(default, skip_serializing_if = "HookConfig::is_empty")]
     pub hooks: HookConfig,
 }
@@ -234,6 +241,7 @@ on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_DATABASE'"
             worktree_dir: ".ecluse/worktrees".into(),
             app_label: "ecluse.role".into(),
             app_label_value: "app".into(),
+            ports: Default::default(),
             hooks: HookConfig::default(),
         };
         original.save(dir.path()).unwrap();

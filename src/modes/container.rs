@@ -40,22 +40,19 @@ impl super::ModeHandler for ContainerMode {
         let overlay_yaml = compose::generate_overlay(&compose_data, offset, &suffix, None)?;
         std::fs::write(&overlay_path, &overlay_yaml).context("failed to write overlay file")?;
 
-        // Create worktree
         wt.create(&worktree_path, branch)?;
 
         let project = format!("{}_{}", config.prefix, slug);
         let compose_str = compose_path.to_string_lossy().to_string();
         let overlay_str = overlay_path.to_string_lossy().to_string();
 
-        // Bring up containers
         if let Err(e) = docker::compose_up(&project, &compose_str, Some(&overlay_str), watch) {
-            // Rollback worktree
             let _ = wt.remove(&worktree_path);
             let _ = std::fs::remove_file(&overlay_path);
             return Err(e);
         }
 
-        // Build env and write .env.ecluse
+        // In container mode all services come from compose — no [ports] config needed
         let data_service_ports: Vec<(String, u16)> = compose_data
             .services
             .iter()
@@ -64,7 +61,14 @@ impl super::ModeHandler for ContainerMode {
             })
             .collect();
 
-        let env_map = env::build_env(slot, slug, offset, "container", None, &data_service_ports);
+        let env_map = env::build_env(
+            slot,
+            slug,
+            offset,
+            "container",
+            &indexmap::IndexMap::new(),
+            &data_service_ports,
+        );
         env::write_env_file(&worktree_path, &env_map)?;
 
         if let Some(cmd) = &config.hooks.on_up {
@@ -76,7 +80,6 @@ impl super::ModeHandler for ContainerMode {
             }
         }
 
-        // Find the main web port for display
         let app_port = compose_data
             .services
             .values()
@@ -104,22 +107,18 @@ impl super::ModeHandler for ContainerMode {
         root: &Path,
         keep_volumes: bool,
     ) -> Result<()> {
-        // Bring down compose
         if let Some(project) = &session.compose_project {
             if let Some(overlay) = &session.overlay_file {
-                // Find compose file
                 if let Some(compose_path) = compose::find_compose_file(root) {
                     let compose_str = compose_path.to_string_lossy().to_string();
                     docker::compose_down(project, &compose_str, Some(overlay), !keep_volumes)?;
                 }
             }
-            // Remove overlay file
             if let Some(overlay) = &session.overlay_file {
                 let _ = std::fs::remove_file(overlay);
             }
         }
 
-        // Remove worktree
         let wt = WorktreeManager::new(root.to_owned());
         let wt_path = std::path::PathBuf::from(&session.worktree_path);
         wt.remove(&wt_path)?;

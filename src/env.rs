@@ -1,13 +1,24 @@
 use anyhow::{Context, Result};
+use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Build the env map for a session.
+///
+/// `named_ports` comes from two sources depending on mode:
+///   - host/hybrid: from `config.ports` (name → index) resolved to absolute ports
+///   - container: from compose service port mappings (name → actual host port)
+///
+/// For named ports, each entry generates `ECLUSE_<NAME>_PORT`.
+/// The first entry also sets `PORT` (primary service alias).
+/// `data_services` carries compose-derived ports in container/hybrid mode and
+/// are merged in after named ports.
 pub fn build_env(
     slot: u8,
     slug: &str,
     offset: u16,
     mode: &str,
-    app_port: Option<u16>,
+    named_ports: &IndexMap<String, u16>,
     data_services: &[(String, u16)],
 ) -> HashMap<String, String> {
     let mut env = HashMap::new();
@@ -16,29 +27,56 @@ pub fn build_env(
     env.insert("ECLUSE_OFFSET".into(), offset.to_string());
     env.insert("ECLUSE_MODE".into(), mode.to_string());
 
-    if let Some(port) = app_port {
-        env.insert("PORT".into(), port.to_string());
-        env.insert("ECLUSE_APP_PORT".into(), port.to_string());
+    // Named ports from [ports] config — order preserved via IndexMap
+    let mut first = true;
+    for (name, port) in named_ports {
+        let key = service_env_key(name);
+        env.insert(format!("ECLUSE_{}_PORT", key), port.to_string());
+        if first {
+            // Primary service → PORT alias for framework compatibility
+            env.insert("PORT".into(), port.to_string());
+            first = false;
+        }
     }
 
+    // Data services from compose (container/hybrid) — ECLUSE_<NAME>_PORT only
     for (name, port) in data_services {
         let key = service_env_key(name);
-        match name.as_str() {
-            n if n.contains("postgres") || n.contains("pg") || n == "db" => {
-                env.insert(
-                    "DATABASE_URL".into(),
-                    format!("postgres://localhost:{}/{}", port, n),
-                );
-            }
-            n if n.contains("redis") => {
-                env.insert("REDIS_URL".into(), format!("redis://localhost:{}", port));
-            }
-            _ => {}
-        }
         env.insert(format!("ECLUSE_{}_PORT", key), port.to_string());
     }
 
     env
+}
+
+/// Resolve config [ports] (name → index) to absolute port numbers for a slot.
+pub fn resolve_named_ports(
+    config_ports: &IndexMap<String, u8>,
+    base_port: u16,
+    offset: u16,
+) -> IndexMap<String, u16> {
+    config_ports
+        .iter()
+        .map(|(name, &idx)| {
+            let port = base_port + offset + idx as u16;
+            (name.clone(), port)
+        })
+        .collect()
+}
+
+/// Like `resolve_named_ports` but falls back to a single "app" port at index 0
+/// when no [ports] table is defined — preserving backward compatibility.
+pub fn effective_named_ports(
+    config_ports: &IndexMap<String, u8>,
+    base_port: u16,
+    offset: u16,
+) -> IndexMap<String, u16> {
+    if config_ports.is_empty() {
+        let mut m = IndexMap::new();
+        m.insert("app".to_string(), base_port + offset);
+        m
+    } else {
+        resolve_named_ports(config_ports, base_port, offset)
+    }
 }
 
 fn service_env_key(name: &str) -> String {
@@ -49,9 +87,16 @@ fn service_env_key(name: &str) -> String {
 mod tests {
     use super::*;
 
+    fn ports(entries: &[(&str, u16)]) -> IndexMap<String, u16> {
+        entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect()
+    }
+
     #[test]
     fn basic_env_vars_always_present() {
-        let env = build_env(2, "my-task", 200, "host", None, &[]);
+        let env = build_env(2, "my-task", 200, "host", &IndexMap::new(), &[]);
         assert_eq!(env["ECLUSE_SLOT"], "2");
         assert_eq!(env["ECLUSE_SLUG"], "my-task");
         assert_eq!(env["ECLUSE_OFFSET"], "200");
@@ -59,39 +104,62 @@ mod tests {
     }
 
     #[test]
-    fn app_port_sets_port_and_ecluse_app_port() {
-        let env = build_env(1, "feat", 100, "host", Some(3100), &[]);
+    fn first_named_port_sets_port_alias() {
+        let np = ports(&[("api", 3100), ("worker", 3101)]);
+        let env = build_env(1, "feat", 100, "host", &np, &[]);
         assert_eq!(env["PORT"], "3100");
-        assert_eq!(env["ECLUSE_APP_PORT"], "3100");
+        assert_eq!(env["ECLUSE_API_PORT"], "3100");
+        assert_eq!(env["ECLUSE_WORKER_PORT"], "3101");
     }
 
     #[test]
-    fn no_port_when_app_port_none() {
-        let env = build_env(1, "feat", 100, "container", None, &[]);
+    fn no_port_when_no_named_ports() {
+        let env = build_env(1, "feat", 100, "container", &IndexMap::new(), &[]);
         assert!(!env.contains_key("PORT"));
-        assert!(!env.contains_key("ECLUSE_APP_PORT"));
     }
 
     #[test]
-    fn data_service_postgres_sets_database_url() {
-        let env = build_env(1, "feat", 100, "hybrid", None, &[("postgres".into(), 5532)]);
-        assert_eq!(env["DATABASE_URL"], "postgres://localhost:5532/postgres");
+    fn data_services_set_port_vars() {
+        let env = build_env(
+            1,
+            "feat",
+            100,
+            "hybrid",
+            &IndexMap::new(),
+            &[("postgres".into(), 5532), ("redis".into(), 6479)],
+        );
+        assert_eq!(env["ECLUSE_POSTGRES_PORT"], "5532");
+        assert_eq!(env["ECLUSE_REDIS_PORT"], "6479");
+        // No automatic DATABASE_URL — user sets that via hooks or .env
+        assert!(!env.contains_key("DATABASE_URL"));
+    }
+
+    #[test]
+    fn named_port_and_data_service_coexist() {
+        let np = ports(&[("api", 3100)]);
+        let env = build_env(
+            1,
+            "feat",
+            100,
+            "hybrid",
+            &np,
+            &[("postgres".into(), 5532)],
+        );
+        assert_eq!(env["PORT"], "3100");
+        assert_eq!(env["ECLUSE_API_PORT"], "3100");
         assert_eq!(env["ECLUSE_POSTGRES_PORT"], "5532");
     }
 
     #[test]
-    fn data_service_redis_sets_redis_url() {
-        let env = build_env(1, "feat", 100, "hybrid", None, &[("redis".into(), 6479)]);
-        assert_eq!(env["REDIS_URL"], "redis://localhost:6479");
-        assert_eq!(env["ECLUSE_REDIS_PORT"], "6479");
-    }
-
-    #[test]
-    fn data_service_unknown_sets_port_only() {
-        let env = build_env(1, "feat", 100, "hybrid", None, &[("mailhog".into(), 8125)]);
-        assert_eq!(env["ECLUSE_MAILHOG_PORT"], "8125");
-        assert!(!env.contains_key("DATABASE_URL"));
-        assert!(!env.contains_key("REDIS_URL"));
+    fn resolve_named_ports_computes_absolute_ports() {
+        let mut cfg: IndexMap<String, u8> = IndexMap::new();
+        cfg.insert("api".into(), 0);
+        cfg.insert("worker".into(), 1);
+        cfg.insert("frontend".into(), 2);
+        let resolved = resolve_named_ports(&cfg, 3000, 100);
+        assert_eq!(resolved["api"], 3100);
+        assert_eq!(resolved["worker"], 3101);
+        assert_eq!(resolved["frontend"], 3102);
     }
 
     #[test]
@@ -104,7 +172,8 @@ mod tests {
     #[test]
     fn write_env_file_creates_sorted_file() {
         let dir = tempfile::TempDir::new().unwrap();
-        let env = build_env(1, "feat", 100, "host", Some(3100), &[]);
+        let np = ports(&[("api", 3100)]);
+        let env = build_env(1, "feat", 100, "host", &np, &[]);
         write_env_file(dir.path(), &env).unwrap();
         let content = std::fs::read_to_string(dir.path().join(".env.ecluse")).unwrap();
         let lines: Vec<&str> = content.lines().collect();

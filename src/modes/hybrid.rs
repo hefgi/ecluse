@@ -73,8 +73,10 @@ impl super::ModeHandler for HybridMode {
             return Err(e);
         }
 
-        let app_port = Some(config.base_port + offset);
+        // Named ports from [ports] config (app services running natively)
+        let named_ports = env::effective_named_ports(&config.ports, config.base_port, offset);
 
+        // Data service ports from compose
         let data_service_ports: Vec<(String, u16)> = compose_data
             .services
             .iter()
@@ -87,7 +89,7 @@ impl super::ModeHandler for HybridMode {
             })
             .collect();
 
-        let env_map = env::build_env(slot, slug, offset, "hybrid", app_port, &data_service_ports);
+        let env_map = env::build_env(slot, slug, offset, "hybrid", &named_ports, &data_service_ports);
         env::write_env_file(&worktree_path, &env_map)?;
 
         if let Some(cmd) = &config.hooks.on_up {
@@ -98,6 +100,8 @@ impl super::ModeHandler for HybridMode {
                 return Err(e);
             }
         }
+
+        let app_port = named_ports.values().next().copied();
 
         Ok(Session {
             slug: slug.to_string(),
@@ -121,12 +125,13 @@ impl super::ModeHandler for HybridMode {
         keep_volumes: bool,
     ) -> Result<()> {
         if let Some(cmd) = &config.hooks.on_down {
+            let named_ports = env::effective_named_ports(&config.ports, config.base_port, session.offset);
             let env_map = env::build_env(
                 session.slot,
                 &session.slug,
                 session.offset,
                 "hybrid",
-                session.app_port,
+                &named_ports,
                 &[],
             );
             hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;

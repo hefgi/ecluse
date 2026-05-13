@@ -116,6 +116,7 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         worktree_dir: ".ecluse/worktrees".into(),
         app_label: "ecluse.role".into(),
         app_label_value: "app".into(),
+        ports: Default::default(),
         hooks: config::HookConfig::default(),
     };
     cfg.save(&cwd)?;

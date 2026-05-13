@@ -27,6 +27,7 @@ fs2 = "0.4"
 tabled = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
 regex-lite = "0.1"
+indexmap = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
 tempfile = "3"

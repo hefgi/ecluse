@@ -190,6 +190,7 @@ dependencies = [
  "chrono",
  "clap",
  "fs2",
+ "indexmap",
  "regex-lite",
  "serde",
  "serde_json",

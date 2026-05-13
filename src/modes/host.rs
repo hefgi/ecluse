@@ -25,12 +25,15 @@ impl super::ModeHandler for HostMode {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
 
-        let app_port = config.base_port + offset;
-        check_port_free(app_port)?;
+        let named_ports = env::effective_named_ports(&config.ports, config.base_port, offset);
+
+        for port in named_ports.values() {
+            check_port_free(*port)?;
+        }
 
         wt.create(&worktree_path, branch)?;
 
-        let env_map = env::build_env(slot, slug, offset, "host", Some(app_port), &[]);
+        let env_map = env::build_env(slot, slug, offset, "host", &named_ports, &[]);
         env::write_env_file(&worktree_path, &env_map)?;
 
         if let Some(cmd) = &config.hooks.on_up {
@@ -39,6 +42,8 @@ impl super::ModeHandler for HostMode {
                 return Err(e);
             }
         }
+
+        let app_port = named_ports.values().next().copied();
 
         Ok(Session {
             slug: slug.to_string(),
@@ -49,7 +54,7 @@ impl super::ModeHandler for HostMode {
             worktree_path: worktree_path.display().to_string(),
             compose_project: None,
             overlay_file: None,
-            app_port: Some(app_port),
+            app_port,
             started_at: Utc::now().to_rfc3339(),
         })
     }
@@ -62,12 +67,13 @@ impl super::ModeHandler for HostMode {
         _keep_volumes: bool,
     ) -> Result<()> {
         if let Some(cmd) = &config.hooks.on_down {
+            let named_ports = env::effective_named_ports(&config.ports, config.base_port, session.offset);
             let env_map = env::build_env(
                 session.slot,
                 &session.slug,
                 session.offset,
                 "host",
-                session.app_port,
+                &named_ports,
                 &[],
             );
             hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
