@@ -125,3 +125,200 @@ impl StateGuard {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Mode;
+    use tempfile::TempDir;
+
+    fn make_session(slug: &str, slot: u8) -> Session {
+        Session {
+            slug: slug.to_string(),
+            mode: Mode::Host,
+            slot,
+            offset: slot as u16 * 100,
+            branch: format!("branch/{}", slug),
+            worktree_path: format!("/tmp/{}", slug),
+            compose_project: None,
+            overlay_file: None,
+            app_port: None,
+            started_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    // ── State methods ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn find_session_returns_existing() {
+        let mut state = State::default();
+        state.add_session(make_session("alpha", 1));
+        assert!(state.find_session("alpha").is_some());
+    }
+
+    #[test]
+    fn find_session_returns_none_when_missing() {
+        let state = State::default();
+        assert!(state.find_session("ghost").is_none());
+    }
+
+    #[test]
+    fn add_session_increases_count() {
+        let mut state = State::default();
+        assert_eq!(state.sessions.len(), 0);
+        state.add_session(make_session("alpha", 1));
+        assert_eq!(state.sessions.len(), 1);
+    }
+
+    #[test]
+    fn remove_session_returns_removed_session() {
+        let mut state = State::default();
+        state.add_session(make_session("alpha", 1));
+        let removed = state.remove_session("alpha");
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().slug, "alpha");
+        assert!(state.sessions.is_empty());
+    }
+
+    #[test]
+    fn remove_session_returns_none_when_absent() {
+        let mut state = State::default();
+        assert!(state.remove_session("ghost").is_none());
+    }
+
+    #[test]
+    fn used_slots_reflects_all_sessions() {
+        let mut state = State::default();
+        state.add_session(make_session("a", 1));
+        state.add_session(make_session("b", 3));
+        state.add_session(make_session("c", 5));
+        let slots = state.used_slots();
+        assert!(slots.contains(&1));
+        assert!(slots.contains(&3));
+        assert!(slots.contains(&5));
+        assert_eq!(slots.len(), 3);
+    }
+
+    #[test]
+    fn used_slots_empty_when_no_sessions() {
+        let state = State::default();
+        assert!(state.used_slots().is_empty());
+    }
+
+    #[test]
+    fn state_default_has_version_1() {
+        let state = State::default();
+        assert_eq!(state.version, 1);
+    }
+
+    // ── StateGuard acquire / commit ───────────────────────────────────────────
+
+    #[test]
+    fn acquire_creates_ecluse_dir_and_empty_state() {
+        let dir = TempDir::new().unwrap();
+        let guard = StateGuard::acquire(dir.path()).unwrap();
+        assert!(dir.path().join(".ecluse").exists());
+        assert!(guard.state.sessions.is_empty());
+    }
+
+    #[test]
+    fn acquire_reads_existing_state_json() {
+        let dir = TempDir::new().unwrap();
+        let ecluse = dir.path().join(".ecluse");
+        std::fs::create_dir_all(&ecluse).unwrap();
+        let state = State {
+            version: 1,
+            sessions: vec![make_session("alpha", 1)],
+        };
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        std::fs::write(ecluse.join("state.json"), json).unwrap();
+
+        let guard = StateGuard::acquire(dir.path()).unwrap();
+        assert_eq!(guard.state.sessions.len(), 1);
+        assert_eq!(guard.state.sessions[0].slug, "alpha");
+    }
+
+    #[test]
+    fn acquire_errors_on_corrupt_state_json() {
+        let dir = TempDir::new().unwrap();
+        let ecluse = dir.path().join(".ecluse");
+        std::fs::create_dir_all(&ecluse).unwrap();
+        std::fs::write(ecluse.join("state.json"), "{ not valid json {{").unwrap();
+
+        match StateGuard::acquire(dir.path()) {
+            Ok(_) => panic!("expected error for corrupt state"),
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("corrupt") || msg.contains("state"),
+                    "got: {}",
+                    msg
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn commit_writes_and_sessions_persist() {
+        let dir = TempDir::new().unwrap();
+        {
+            let mut guard = StateGuard::acquire(dir.path()).unwrap();
+            guard.state.add_session(make_session("beta", 2));
+            guard.commit().unwrap();
+            // guard dropped here, releasing lock
+        }
+        let guard2 = StateGuard::acquire(dir.path()).unwrap();
+        assert_eq!(guard2.state.sessions.len(), 1);
+        assert_eq!(guard2.state.sessions[0].slug, "beta");
+    }
+
+    #[test]
+    fn commit_is_atomic_tmp_file_gone_after() {
+        let dir = TempDir::new().unwrap();
+        let mut guard = StateGuard::acquire(dir.path()).unwrap();
+        guard.state.add_session(make_session("gamma", 1));
+        guard.commit().unwrap();
+
+        let tmp = dir.path().join(".ecluse").join("state.json.tmp");
+        assert!(!tmp.exists(), ".json.tmp should be removed after atomic rename");
+    }
+
+    #[test]
+    fn multiple_sessions_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        {
+            let mut guard = StateGuard::acquire(dir.path()).unwrap();
+            guard.state.add_session(make_session("a", 1));
+            guard.state.add_session(make_session("b", 2));
+            guard.state.add_session(make_session("c", 3));
+            guard.commit().unwrap();
+        }
+        let guard2 = StateGuard::acquire(dir.path()).unwrap();
+        assert_eq!(guard2.state.sessions.len(), 3);
+    }
+
+    #[test]
+    fn session_with_compose_fields_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        {
+            let mut guard = StateGuard::acquire(dir.path()).unwrap();
+            guard.state.add_session(Session {
+                slug: "compose-sess".into(),
+                mode: Mode::Container,
+                slot: 1,
+                offset: 100,
+                branch: "branch/compose-sess".into(),
+                worktree_path: "/tmp/wt".into(),
+                compose_project: Some("ecluse_compose-sess".into()),
+                overlay_file: Some("/tmp/overlay.yml".into()),
+                app_port: Some(3100),
+                started_at: "2026-01-01T00:00:00Z".into(),
+            });
+            guard.commit().unwrap();
+        }
+        let guard2 = StateGuard::acquire(dir.path()).unwrap();
+        let s = &guard2.state.sessions[0];
+        assert_eq!(s.compose_project.as_deref(), Some("ecluse_compose-sess"));
+        assert_eq!(s.app_port, Some(3100));
+    }
+}
