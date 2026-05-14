@@ -267,6 +267,16 @@ ecluse up feat-foo --port api=4001
 
 **Process management is spawn-and-kill only.** For `host` and `hybrid` modes, services with `command` are spawned on `up` and killed on `down`. ecluse does not monitor or restart crashed processes — `ecluse ls` warns if a nohup-managed process has died. For a fresh start, use `ecluse down feat-foo --keep-worktree && ecluse up feat-foo --reuse-worktree`.
 
+**`command` only works if the app reads its port from the environment.** ecluse injects `PORT` and `ECLUSE_<NAME>_PORT` into the spawned process, but cannot help if:
+- The port is **hardcoded in source code** — the app must be changed to read `$PORT`.
+- The port is **set in a config file** (e.g. `config/puma.rb`, `vite.config.ts`, `.env`) — ecluse does not modify app config files; update the config to read from the environment instead.
+
+If the framework accepts a CLI flag, pass the env var through the command directly:
+```toml
+command = "next dev --port $PORT"
+command = "bundle exec rails s -p $PORT"
+```
+
 ## Contributing
 
 Issues and PRs are welcome. Check the [open issues](https://github.com/hefgi/ecluse/issues) for ideas — good first issues are tagged. If you're adding a new isolation mode or provider, open an issue first to discuss the approach.
