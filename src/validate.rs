@@ -264,6 +264,7 @@ mod tests {
             run: ServiceRun::Native,
             compose: None,
             command: None,
+            port_env: vec![],
         }
     }
 
@@ -274,6 +275,7 @@ mod tests {
             run: ServiceRun::Docker,
             compose: compose.map(|s| s.into()),
             command: None,
+            port_env: vec![],
         }
     }
 
@@ -491,6 +493,7 @@ mod tests {
                 run: ServiceRun::Native,
                 compose: Some("docker-compose.yml".into()),
                 command: None,
+                port_env: vec![],
             }],
         );
         let warnings = validate_config(&config).unwrap();

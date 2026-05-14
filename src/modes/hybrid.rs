@@ -195,6 +195,7 @@ impl super::ModeHandler for HybridMode {
                         run: crate::config::ServiceRun::Native,
                         compose: None,
                         command: None,
+                        port_env: vec![],
                     };
                     validate::find_free_port(config, &fallback, slot)?
                 };
@@ -219,10 +220,18 @@ impl super::ModeHandler for HybridMode {
         };
 
         log.step("Writing .env.ecluse...");
-        let env_map = env::build_env(slot, slug, "hybrid", &native_ports, &allocated_docker_ports);
+        let native_svcs_config = config.native_services();
+        let env_map = env::build_env(
+            slot,
+            slug,
+            "hybrid",
+            &native_ports,
+            &allocated_docker_ports,
+            &native_svcs_config,
+        );
         env::write_env_file(&worktree_path, &env_map)?;
 
-        if let Some(cmd) = &config.hooks.on_up {
+        if let Some(cmd) = &config.hooks.pre_up {
             log.step("Running on_up hook...");
             log.detail(cmd);
             if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
@@ -238,7 +247,7 @@ impl super::ModeHandler for HybridMode {
         }
 
         let global = process::load_global_config()?;
-        let native_svcs = config.native_services();
+        let native_svcs = native_svcs_config.clone();
 
         let spawn = if native_svcs.iter().any(|s| s.command.is_some()) {
             log.step(&format!(
@@ -313,7 +322,7 @@ impl super::ModeHandler for HybridMode {
         keep_worktree: bool,
         log: &StepLogger,
     ) -> Result<()> {
-        if let Some(cmd) = &config.hooks.on_down {
+        if let Some(cmd) = &config.hooks.pre_down {
             log.step("Running on_down hook...");
             log.detail(cmd);
             let native = config.native_services();
@@ -327,7 +336,14 @@ impl super::ModeHandler for HybridMode {
                     .map(|s| (s.name.clone(), s.port(session.slot)))
                     .collect()
             };
-            let env_map = env::build_env(session.slot, &session.slug, "hybrid", &native_ports, &[]);
+            let env_map = env::build_env(
+                session.slot,
+                &session.slug,
+                "hybrid",
+                &native_ports,
+                &[],
+                &native,
+            );
             hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
         }
 

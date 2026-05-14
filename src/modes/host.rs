@@ -29,6 +29,14 @@ impl super::ModeHandler for HostMode {
     ) -> Result<Session> {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
+        let native_svcs = config.native_services();
+
+        // pre_up: before anything exists — runs from repo root, no env vars yet
+        if let Some(cmd) = &config.hooks.pre_up {
+            log.step("Running pre_up hook...");
+            log.detail(cmd);
+            hooks::run(cmd, root, &std::collections::HashMap::new())?;
+        }
 
         log.step("Allocating ports...");
         let native_ports = native_ports_for_slot(config, slot, port_overrides)?;
@@ -52,22 +60,10 @@ impl super::ModeHandler for HostMode {
         }
 
         log.step("Writing .env.ecluse...");
-        let env_map = env::build_env(slot, slug, "host", &native_ports, &[]);
+        let env_map = env::build_env(slot, slug, "host", &native_ports, &[], &native_svcs);
         env::write_env_file(&worktree_path, &env_map)?;
 
-        if let Some(cmd) = &config.hooks.on_up {
-            log.step("Running on_up hook...");
-            log.detail(cmd);
-            if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
-                if !reuse_worktree {
-                    let _ = wt.remove(&worktree_path);
-                }
-                return Err(e);
-            }
-        }
-
         let global = process::load_global_config()?;
-        let native_svcs = config.native_services();
 
         let spawn = if native_svcs.iter().any(|s| s.command.is_some()) {
             log.step(&format!(
@@ -96,6 +92,26 @@ impl super::ModeHandler for HostMode {
                 &env_map,
             )?
         };
+
+        // post_up: all services spawned, full env available
+        if let Some(cmd) = &config.hooks.post_up {
+            log.step("Running post_up hook...");
+            log.detail(cmd);
+            if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
+                let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
+                    Some(&global.process_manager)
+                } else {
+                    None
+                };
+                if let Some(pm) = pm {
+                    process::kill_services(pm, &spawn);
+                }
+                if !reuse_worktree {
+                    let _ = wt.remove(&worktree_path);
+                }
+                return Err(e);
+            }
+        }
 
         let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
             Some(global.process_manager)
@@ -135,12 +151,21 @@ impl super::ModeHandler for HostMode {
         keep_worktree: bool,
         log: &StepLogger,
     ) -> Result<()> {
-        if let Some(cmd) = &config.hooks.on_down {
-            log.step("Running on_down hook...");
+        let native_ports = native_ports_for_slot(config, session.slot, &session.port_overrides)?;
+        let native_svcs = config.native_services();
+        let env_map = env::build_env(
+            session.slot,
+            &session.slug,
+            "host",
+            &native_ports,
+            &[],
+            &native_svcs,
+        );
+
+        // pre_down: before services are killed — app can drain/flush
+        if let Some(cmd) = &config.hooks.pre_down {
+            log.step("Running pre_down hook...");
             log.detail(cmd);
-            let native_ports =
-                native_ports_for_slot(config, session.slot, &session.port_overrides)?;
-            let env_map = env::build_env(session.slot, &session.slug, "host", &native_ports, &[]);
             hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
         }
 
@@ -155,6 +180,13 @@ impl super::ModeHandler for HostMode {
             let wt = WorktreeManager::new(root.to_owned());
             let wt_path = std::path::PathBuf::from(&session.worktree_path);
             wt.remove(&wt_path)?;
+        }
+
+        // post_down: everything torn down, worktree may no longer exist
+        if let Some(cmd) = &config.hooks.post_down {
+            log.step("Running post_down hook...");
+            log.detail(cmd);
+            hooks::run(cmd, root, &env_map)?;
         }
 
         Ok(())
@@ -180,6 +212,7 @@ fn native_ports_for_slot(
                 run: crate::config::ServiceRun::Native,
                 compose: None,
                 command: None,
+                port_env: vec![],
             };
             validate::find_free_port(config, &fallback, slot)?
         };

@@ -403,6 +403,7 @@ mod tests {
             run: crate::config::ServiceRun::Native,
             compose: None,
             command: Some("echo hello".into()),
+            port_env: vec![],
         };
         let result = spawn_services(
             &ProcessManager::None,
@@ -470,6 +471,7 @@ mod tests {
             run: crate::config::ServiceRun::Native,
             compose: None,
             command: Some("sleep 60".into()),
+            port_env: vec![],
         };
         let result = spawn_services(
             &ProcessManager::Nohup,

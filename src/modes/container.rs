@@ -161,10 +161,11 @@ impl super::ModeHandler for ContainerMode {
             "container",
             &indexmap::IndexMap::new(),
             &allocated_ports,
+            &[],
         );
         env::write_env_file(&worktree_path, &env_map)?;
 
-        if let Some(cmd) = &config.hooks.on_up {
+        if let Some(cmd) = &config.hooks.pre_up {
             log.step("Running on_up hook...");
             log.detail(cmd);
             if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {

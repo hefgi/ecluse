@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -67,6 +67,47 @@ pub struct ServiceConfig {
     /// when process_manager is configured in ~/.config/ecluse/config.toml.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    /// Extra env var names to set to this service's allocated port.
+    /// Accepts a single string or an array of strings.
+    /// e.g. port_env = "DJANGO_PORT" or port_env = ["DJANGO_PORT", "APP_PORT"]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_string_or_vec"
+    )]
+    pub port_env: Vec<String>,
+}
+
+fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::{self, SeqAccess, Visitor};
+    use std::fmt;
+
+    struct StringOrVec;
+
+    impl<'de> Visitor<'de> for StringOrVec {
+        type Value = Vec<String>;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "a string or array of strings")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Vec<String>, E> {
+            Ok(vec![v.to_owned()])
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
+            let mut out = vec![];
+            while let Some(s) = seq.next_element::<String>()? {
+                out.push(s);
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec)
 }
 
 impl ServiceConfig {
@@ -118,17 +159,56 @@ impl Config {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct HookConfig {
+    /// Runs before any infrastructure is created (no env vars available yet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub on_up: Option<String>,
+    pub pre_up: Option<String>,
+    /// Runs after all services are up and the process manager has spawned native services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub on_down: Option<String>,
+    pub post_up: Option<String>,
+    /// Runs before services are killed or containers are stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_down: Option<String>,
+    /// Runs after all services are stopped and the worktree is removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_down: Option<String>,
 }
 
 impl HookConfig {
     pub fn is_empty(&self) -> bool {
-        self.on_up.is_none() && self.on_down.is_none()
+        self.pre_up.is_none()
+            && self.post_up.is_none()
+            && self.pre_down.is_none()
+            && self.post_down.is_none()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for HookConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(default)]
+            pre_up: Option<String>,
+            #[serde(default)]
+            post_up: Option<String>,
+            #[serde(default)]
+            pre_down: Option<String>,
+            #[serde(default)]
+            post_down: Option<String>,
+            // Deprecated aliases — on_up maps to pre_up, on_down maps to pre_down.
+            #[serde(default)]
+            on_up: Option<String>,
+            #[serde(default)]
+            on_down: Option<String>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(HookConfig {
+            pre_up: raw.pre_up.or(raw.on_up),
+            post_up: raw.post_up,
+            pre_down: raw.pre_down.or(raw.on_down),
+            post_down: raw.post_down,
+        })
     }
 }
 
@@ -267,13 +347,42 @@ app_label_value = "web"
             r#"
 mode = "host"
 [hooks]
-on_up = "prisma migrate deploy"
-on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_DATABASE'"
+pre_up = "echo pre_up"
+post_up = "prisma migrate deploy"
+pre_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_DATABASE'"
+post_down = "echo post_down"
 "#,
         );
         let config = Config::load(dir.path()).unwrap();
-        assert_eq!(config.hooks.on_up.as_deref(), Some("prisma migrate deploy"));
-        assert!(config.hooks.on_down.is_some());
+        assert_eq!(config.hooks.pre_up.as_deref(), Some("echo pre_up"));
+        assert_eq!(
+            config.hooks.post_up.as_deref(),
+            Some("prisma migrate deploy")
+        );
+        assert!(config.hooks.pre_down.is_some());
+        assert!(config.hooks.post_down.is_some());
+    }
+
+    #[test]
+    fn hooks_deprecated_on_up_maps_to_pre_up() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            r#"
+mode = "host"
+[hooks]
+on_up = "prisma migrate deploy"
+on_down = "echo bye"
+"#,
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(
+            config.hooks.pre_up.as_deref(),
+            Some("prisma migrate deploy")
+        );
+        assert_eq!(config.hooks.pre_down.as_deref(), Some("echo bye"));
+        assert!(config.hooks.post_up.is_none());
+        assert!(config.hooks.post_down.is_none());
     }
 
     #[test]
@@ -281,8 +390,10 @@ on_down = "psql $DATABASE_URL -c 'DROP DATABASE $ECLUSE_DATABASE'"
         let dir = TempDir::new().unwrap();
         write_toml(&dir, "mode = \"host\"\n");
         let config = Config::load(dir.path()).unwrap();
-        assert!(config.hooks.on_up.is_none());
-        assert!(config.hooks.on_down.is_none());
+        assert!(config.hooks.pre_up.is_none());
+        assert!(config.hooks.post_up.is_none());
+        assert!(config.hooks.pre_down.is_none());
+        assert!(config.hooks.post_down.is_none());
     }
 
     #[test]
@@ -390,6 +501,7 @@ base_port = 5432
             run: ServiceRun::Native,
             compose: None,
             command: None,
+            port_env: vec![],
         };
         assert_eq!(svc.port(1), 8001);
         assert_eq!(svc.port(2), 8002);
@@ -414,6 +526,7 @@ base_port = 5432
                     run: ServiceRun::Native,
                     compose: None,
                     command: None,
+                    port_env: vec![],
                 },
                 ServiceConfig {
                     name: "postgres".into(),
@@ -421,6 +534,7 @@ base_port = 5432
                     run: ServiceRun::Docker,
                     compose: None,
                     command: None,
+                    port_env: vec![],
                 },
             ],
             hooks: HookConfig::default(),
@@ -441,19 +555,37 @@ base_port = 5432
     }
 
     #[test]
-    fn hook_is_not_empty_when_on_up_set() {
+    fn hook_is_not_empty_when_pre_up_set() {
         let h = HookConfig {
-            on_up: Some("echo hi".into()),
-            on_down: None,
+            pre_up: Some("echo hi".into()),
+            ..Default::default()
         };
         assert!(!h.is_empty());
     }
 
     #[test]
-    fn hook_is_not_empty_when_on_down_set() {
+    fn hook_is_not_empty_when_post_up_set() {
         let h = HookConfig {
-            on_up: None,
-            on_down: Some("echo bye".into()),
+            post_up: Some("migrate".into()),
+            ..Default::default()
+        };
+        assert!(!h.is_empty());
+    }
+
+    #[test]
+    fn hook_is_not_empty_when_pre_down_set() {
+        let h = HookConfig {
+            pre_down: Some("echo bye".into()),
+            ..Default::default()
+        };
+        assert!(!h.is_empty());
+    }
+
+    #[test]
+    fn hook_is_not_empty_when_post_down_set() {
+        let h = HookConfig {
+            post_down: Some("echo done".into()),
+            ..Default::default()
         };
         assert!(!h.is_empty());
     }
@@ -517,6 +649,39 @@ base_port = 5432
         );
         let config = Config::load(dir.path()).unwrap();
         assert_eq!(config.services[0].command.as_deref(), Some("npm run dev"));
+    }
+
+    #[test]
+    fn service_port_env_defaults_to_empty() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"host\"\n[[services]]\nname = \"api\"\nbase_port = 3000\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert!(config.services[0].port_env.is_empty());
+    }
+
+    #[test]
+    fn service_port_env_loads_single_string() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"host\"\n[[services]]\nname = \"api\"\nbase_port = 3000\nport_env = \"DJANGO_PORT\"\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.services[0].port_env, vec!["DJANGO_PORT"]);
+    }
+
+    #[test]
+    fn service_port_env_loads_array() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"host\"\n[[services]]\nname = \"api\"\nbase_port = 3000\nport_env = [\"DJANGO_PORT\", \"APP_PORT\"]\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.services[0].port_env, vec!["DJANGO_PORT", "APP_PORT"]);
     }
 
     #[test]
