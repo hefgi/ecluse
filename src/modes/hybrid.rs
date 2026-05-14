@@ -182,6 +182,7 @@ impl super::ModeHandler for HybridMode {
             log.step(&format!("Creating worktree (branch: {branch})..."));
             log.detail(&worktree_path.display().to_string());
             if let Err(e) = wt.create(&worktree_path, branch) {
+                tear_down_all_overlays(&project, root, &written_overlays, true);
                 for ov in &written_overlays {
                     let _ = std::fs::remove_file(ov);
                 }
@@ -335,22 +336,38 @@ impl super::ModeHandler for HybridMode {
         log: &StepLogger,
     ) -> Result<()> {
         let native = config.native_services();
+        // Reconstruct native ports from the persisted port_overrides so pre/post-down
+        // hooks see the same ports that were actually allocated during bring_up (which
+        // may differ from nominal values when find_free_port bumped them).
+        let native_names: std::collections::HashSet<&str> =
+            native.iter().map(|s| s.name.as_str()).collect();
         let native_ports: IndexMap<String, u16> = if native.is_empty() {
-            let mut m = IndexMap::new();
-            m.insert("app".to_string(), 3000u16 + session.slot as u16);
-            m
-        } else {
-            native
+            session
+                .port_overrides
                 .iter()
-                .map(|s| (s.name.clone(), s.port(session.slot)))
+                .filter(|(k, _)| k.as_str() == "app")
+                .map(|(k, v)| (k.clone(), *v))
+                .collect()
+        } else {
+            session
+                .port_overrides
+                .iter()
+                .filter(|(k, _)| native_names.contains(k.as_str()))
+                .map(|(k, v)| (k.clone(), *v))
                 .collect()
         };
+        let allocated_docker_ports: Vec<(String, u16)> = session
+            .port_overrides
+            .iter()
+            .filter(|(k, _)| !native_names.contains(k.as_str()) && k.as_str() != "app")
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
         let env_map = env::build_env(
             session.slot,
             &session.slug,
             "hybrid",
             &native_ports,
-            &[],
+            &allocated_docker_ports,
             &native,
         );
 

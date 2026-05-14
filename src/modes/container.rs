@@ -154,6 +154,7 @@ impl super::ModeHandler for ContainerMode {
             log.step(&format!("Creating worktree (branch: {branch})..."));
             log.detail(&worktree_path.display().to_string());
             if let Err(e) = wt.create(&worktree_path, branch) {
+                tear_down_all_overlays(&project, root, &written_overlays, true);
                 for ov in &written_overlays {
                     let _ = std::fs::remove_file(ov);
                 }
