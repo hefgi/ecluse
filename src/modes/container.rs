@@ -37,6 +37,13 @@ impl super::ModeHandler for ContainerMode {
         let overlay_dir = root.join(".ecluse").join("overlays");
         std::fs::create_dir_all(&overlay_dir).context("failed to create overlays directory")?;
 
+        // pre_up: before anything exists — runs from repo root, no env vars yet
+        if let Some(cmd) = &config.hooks.pre_up {
+            log.step("Running pre_up hook...");
+            log.detail(cmd);
+            hooks::run(cmd, root, &std::collections::HashMap::new())?;
+        }
+
         let docker_svcs_config = config.docker_services();
 
         let mut allocated_ports: Vec<(String, u16)> = vec![];
@@ -165,8 +172,9 @@ impl super::ModeHandler for ContainerMode {
         );
         env::write_env_file(&worktree_path, &env_map)?;
 
-        if let Some(cmd) = &config.hooks.pre_up {
-            log.step("Running on_up hook...");
+        // post_up: all containers up, full env available
+        if let Some(cmd) = &config.hooks.post_up {
+            log.step("Running post_up hook...");
             log.detail(cmd);
             if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
                 tear_down_all_overlays(&project, root, &written_overlays, true);
@@ -209,12 +217,34 @@ impl super::ModeHandler for ContainerMode {
     fn bring_down(
         &self,
         session: &Session,
-        _config: &Config,
+        config: &Config,
         root: &Path,
         keep_volumes: bool,
         keep_worktree: bool,
         log: &StepLogger,
     ) -> Result<()> {
+        // Reconstruct env map so hooks have access to the session's ports.
+        let allocated_ports: Vec<(String, u16)> = session
+            .port_overrides
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        let env_map = env::build_env(
+            session.slot,
+            &session.slug,
+            "container",
+            &indexmap::IndexMap::new(),
+            &allocated_ports,
+            &[],
+        );
+
+        // pre_down: before containers are stopped — app can flush/drain
+        if let Some(cmd) = &config.hooks.pre_down {
+            log.step("Running pre_down hook...");
+            log.detail(cmd);
+            hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
+        }
+
         if let Some(project) = &session.compose_project {
             let all_overlays: Vec<String> = session
                 .overlay_file
@@ -240,6 +270,13 @@ impl super::ModeHandler for ContainerMode {
             let wt = WorktreeManager::new(root.to_owned());
             let wt_path = std::path::PathBuf::from(&session.worktree_path);
             wt.remove(&wt_path)?;
+        }
+
+        // post_down: everything torn down, worktree may no longer exist
+        if let Some(cmd) = &config.hooks.post_down {
+            log.step("Running post_down hook...");
+            log.detail(cmd);
+            hooks::run(cmd, root, &env_map)?;
         }
 
         Ok(())

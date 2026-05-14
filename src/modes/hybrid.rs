@@ -39,6 +39,13 @@ impl super::ModeHandler for HybridMode {
         let overlay_dir = root.join(".ecluse").join("overlays");
         std::fs::create_dir_all(&overlay_dir).context("failed to create overlays directory")?;
 
+        // pre_up: before anything exists — runs from repo root, no env vars yet
+        if let Some(cmd) = &config.hooks.pre_up {
+            log.step("Running pre_up hook...");
+            log.detail(cmd);
+            hooks::run(cmd, root, &std::collections::HashMap::new())?;
+        }
+
         let docker_svcs_config = config.docker_services();
 
         let mut allocated_docker_ports: Vec<(String, u16)> = vec![];
@@ -183,71 +190,52 @@ impl super::ModeHandler for HybridMode {
         }
 
         log.step("Allocating native ports...");
-        let native_ports: IndexMap<String, u16> = {
-            let native = config.native_services();
-            if native.is_empty() {
-                let port = if let Some(&p) = port_overrides.get("app") {
-                    p
-                } else {
-                    let fallback = crate::config::ServiceConfig {
-                        name: "app".into(),
-                        base_port: 3000,
-                        run: crate::config::ServiceRun::Native,
-                        compose: None,
-                        command: None,
-                        port_env: vec![],
-                    };
-                    validate::find_free_port(config, &fallback, slot)?
-                };
-                let mut m = IndexMap::new();
-                m.insert("app".to_string(), port);
-                log.detail(&format!("app: {port}"));
-                m
+        let native_svcs = config.native_services();
+        let native_ports: IndexMap<String, u16> = if native_svcs.is_empty() {
+            let port = if let Some(&p) = port_overrides.get("app") {
+                p
             } else {
-                native
-                    .iter()
-                    .map(|s| {
-                        let port = if let Some(&p) = port_overrides.get(&s.name) {
-                            p
-                        } else {
-                            validate::find_free_port(config, s, slot)?
-                        };
-                        log.detail(&format!("{}: {port}", s.name));
-                        Ok((s.name.clone(), port))
-                    })
-                    .collect::<Result<IndexMap<_, _>>>()?
-            }
+                let fallback = crate::config::ServiceConfig {
+                    name: "app".into(),
+                    base_port: 3000,
+                    run: crate::config::ServiceRun::Native,
+                    compose: None,
+                    command: None,
+                    port_env: vec![],
+                };
+                validate::find_free_port(config, &fallback, slot)?
+            };
+            let mut m = IndexMap::new();
+            m.insert("app".to_string(), port);
+            log.detail(&format!("app: {port}"));
+            m
+        } else {
+            native_svcs
+                .iter()
+                .map(|s| {
+                    let port = if let Some(&p) = port_overrides.get(&s.name) {
+                        p
+                    } else {
+                        validate::find_free_port(config, s, slot)?
+                    };
+                    log.detail(&format!("{}: {port}", s.name));
+                    Ok((s.name.clone(), port))
+                })
+                .collect::<Result<IndexMap<_, _>>>()?
         };
 
         log.step("Writing .env.ecluse...");
-        let native_svcs_config = config.native_services();
         let env_map = env::build_env(
             slot,
             slug,
             "hybrid",
             &native_ports,
             &allocated_docker_ports,
-            &native_svcs_config,
+            &native_svcs,
         );
         env::write_env_file(&worktree_path, &env_map)?;
 
-        if let Some(cmd) = &config.hooks.pre_up {
-            log.step("Running on_up hook...");
-            log.detail(cmd);
-            if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
-                tear_down_all_overlays(&project, root, &written_overlays, true);
-                if !reuse_worktree {
-                    let _ = wt.remove(&worktree_path);
-                }
-                for ov in &written_overlays {
-                    let _ = std::fs::remove_file(ov);
-                }
-                return Err(e);
-            }
-        }
-
         let global = process::load_global_config()?;
-        let native_svcs = native_svcs_config.clone();
 
         let spawn = if native_svcs.iter().any(|s| s.command.is_some()) {
             log.step(&format!(
@@ -276,6 +264,30 @@ impl super::ModeHandler for HybridMode {
                 &env_map,
             )?
         };
+
+        // post_up: all services up and spawned, full env available
+        if let Some(cmd) = &config.hooks.post_up {
+            log.step("Running post_up hook...");
+            log.detail(cmd);
+            if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
+                let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
+                    Some(&global.process_manager)
+                } else {
+                    None
+                };
+                if let Some(pm) = pm {
+                    process::kill_services(pm, &spawn);
+                }
+                tear_down_all_overlays(&project, root, &written_overlays, true);
+                if !reuse_worktree {
+                    let _ = wt.remove(&worktree_path);
+                }
+                for ov in &written_overlays {
+                    let _ = std::fs::remove_file(ov);
+                }
+                return Err(e);
+            }
+        }
 
         let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
             Some(global.process_manager)
@@ -322,28 +334,30 @@ impl super::ModeHandler for HybridMode {
         keep_worktree: bool,
         log: &StepLogger,
     ) -> Result<()> {
+        let native = config.native_services();
+        let native_ports: IndexMap<String, u16> = if native.is_empty() {
+            let mut m = IndexMap::new();
+            m.insert("app".to_string(), 3000u16 + session.slot as u16);
+            m
+        } else {
+            native
+                .iter()
+                .map(|s| (s.name.clone(), s.port(session.slot)))
+                .collect()
+        };
+        let env_map = env::build_env(
+            session.slot,
+            &session.slug,
+            "hybrid",
+            &native_ports,
+            &[],
+            &native,
+        );
+
+        // pre_down: before services are killed — app can drain/flush
         if let Some(cmd) = &config.hooks.pre_down {
-            log.step("Running on_down hook...");
+            log.step("Running pre_down hook...");
             log.detail(cmd);
-            let native = config.native_services();
-            let native_ports: IndexMap<String, u16> = if native.is_empty() {
-                let mut m = IndexMap::new();
-                m.insert("app".to_string(), 3000u16 + session.slot as u16);
-                m
-            } else {
-                native
-                    .iter()
-                    .map(|s| (s.name.clone(), s.port(session.slot)))
-                    .collect()
-            };
-            let env_map = env::build_env(
-                session.slot,
-                &session.slug,
-                "hybrid",
-                &native_ports,
-                &[],
-                &native,
-            );
             hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
         }
 
@@ -353,26 +367,18 @@ impl super::ModeHandler for HybridMode {
         }
 
         if let Some(project) = &session.compose_project {
-            let all_overlays: Vec<&str> = session
+            let all_overlays: Vec<String> = session
                 .overlay_file
                 .iter()
-                .map(|s| s.as_str())
-                .chain(session.overlay_files.iter().map(|s| s.as_str()))
+                .cloned()
+                .chain(session.overlay_files.iter().cloned())
                 .collect();
 
             if !all_overlays.is_empty() {
                 log.step("Stopping docker services...");
             }
 
-            tear_down_all_overlays(
-                project,
-                root,
-                &all_overlays
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<_>>(),
-                !keep_volumes,
-            );
+            tear_down_all_overlays(project, root, &all_overlays, !keep_volumes);
 
             for ov in &all_overlays {
                 let _ = std::fs::remove_file(ov);
@@ -385,6 +391,13 @@ impl super::ModeHandler for HybridMode {
             let wt = WorktreeManager::new(root.to_owned());
             let wt_path = std::path::PathBuf::from(&session.worktree_path);
             wt.remove(&wt_path)?;
+        }
+
+        // post_down: everything torn down, worktree may no longer exist
+        if let Some(cmd) = &config.hooks.post_down {
+            log.step("Running post_down hook...");
+            log.detail(cmd);
+            hooks::run(cmd, root, &env_map)?;
         }
 
         Ok(())
