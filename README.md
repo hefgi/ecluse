@@ -120,11 +120,11 @@ The `.env.ecluse` file in every worktree contains everything the agent needs:
 
 `ecluse init` detects the right mode automatically. You confirm before anything is written.
 
-| Mode | What gets isolated | Best for |
+| Mode | What `ecluse up` does | Best for |
 |---|---|---|
-| `container` | Everything — app and data run in Docker | Fully containerized stacks, devcontainer repos |
-| `host` | Ports and databases — app runs natively | Pure native stacks (`npm run dev`, `bin/rails server`) |
-| `hybrid` | Data services in containers, app on host | Rails/Django/Node apps with a postgres+redis compose file |
+| `container` | Runs all services in Docker (app + data) | Fully containerized stacks, devcontainer repos |
+| `hybrid` | Runs data services in Docker, writes env — you start the app | Rails/Django/Node with a postgres+redis compose file |
+| `host` | Writes env vars only — starts nothing | Pure native stacks with no Docker |
 
 ## How it works
 
