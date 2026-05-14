@@ -121,11 +121,16 @@ pub fn validate_config(config: &Config) -> Result<Vec<String>> {
             ));
         }
 
-        if svc.run == ServiceRun::Docker && svc.compose.is_none() {
-            errors.push(format!(
-                "service '{}': run is 'docker' but no compose file is specified",
-                svc.name
-            ));
+        // No compose field is fine — the service will use the root compose file.
+        // Only flag when the service has an explicit compose path that doesn't exist.
+        if let Some(ref compose_rel) = svc.compose {
+            // We can't check the path here without the repo root, so just validate format.
+            if compose_rel.is_empty() {
+                errors.push(format!(
+                    "service '{}': compose path must not be empty",
+                    svc.name
+                ));
+            }
         }
         if svc.run == ServiceRun::Native && svc.compose.is_some() {
             warnings.push(format!(
@@ -438,10 +443,10 @@ mod tests {
     // --- compose consistency ---
 
     #[test]
-    fn docker_run_without_compose_is_error() {
+    fn docker_run_without_compose_is_valid() {
+        // No explicit compose path is fine — the service uses the root compose file.
         let config = make_config(8, 10, vec![svc_docker("db", 5432, None)]);
-        let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("compose"));
+        assert!(validate_config(&config).is_ok());
     }
 
     #[test]

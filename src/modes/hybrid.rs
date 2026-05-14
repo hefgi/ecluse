@@ -12,6 +12,8 @@ use crate::state::Session;
 use crate::validate;
 use crate::worktree::WorktreeManager;
 
+use super::{group_by_compose, overlay_name_for_compose, tear_down_all_overlays};
+
 pub struct HybridMode;
 
 impl super::ModeHandler for HybridMode {
@@ -29,22 +31,89 @@ impl super::ModeHandler for HybridMode {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
 
-        let compose_path = compose::find_compose_file(root).ok_or_else(|| {
-            crate::error::EcluseError::ComposeFileNotFound(root.display().to_string())
-        })?;
+        let suffix = format!("{}_{}", config.prefix, slug);
+        let project = format!("{}_{}", config.prefix, slug);
+        let overlay_dir = root.join(".ecluse").join("overlays");
+        std::fs::create_dir_all(&overlay_dir).context("failed to create overlays directory")?;
 
-        let compose_data = compose::parse(&compose_path)?;
-
-        // Determine which compose services are "data" (docker) services
-        // Prefer config.docker_services() if [[services]] are defined,
-        // otherwise fall back to label-based detection.
         let docker_svcs_config = config.docker_services();
-        let data_svcs: Vec<String> = if !docker_svcs_config.is_empty() {
-            docker_svcs_config.iter().map(|s| s.name.clone()).collect()
+
+        // ── Determine data services and bring them up ─────────────────────────
+        // When [[services]] with run="docker" are defined, group them by their
+        // compose file so each group gets its own overlay + docker compose call.
+        // When no [[services]] are defined, fall back to label-based detection
+        // against the root compose file.
+
+        let mut allocated_docker_ports: Vec<(String, u16)> = vec![];
+        let mut written_overlays: Vec<String> = vec![]; // (overlay_path)
+
+        if !docker_svcs_config.is_empty() {
+            // Group docker services by their resolved compose file path.
+            let groups = group_by_compose(root, &docker_svcs_config)?;
+
+            for (compose_path, svcs) in &groups {
+                let compose_data = compose::parse(compose_path)?;
+
+                let port_map: std::collections::HashMap<String, u16> = svcs
+                    .iter()
+                    .map(|s| {
+                        let port = if let Some(&p) = port_overrides.get(&s.name) {
+                            p
+                        } else {
+                            validate::find_free_port(config, s, slot)?
+                        };
+                        allocated_docker_ports.push((s.name.clone(), port));
+                        Ok((s.name.clone(), port))
+                    })
+                    .collect::<Result<_>>()?;
+
+                let svc_names: Vec<String> = svcs.iter().map(|s| s.name.clone()).collect();
+                let overlay_name = overlay_name_for_compose(slug, compose_path, root);
+                let overlay_path = overlay_dir.join(&overlay_name);
+
+                let yaml = compose::generate_overlay_with_ports(
+                    &compose_data,
+                    &port_map,
+                    &suffix,
+                    Some(&svc_names),
+                )?;
+                std::fs::write(&overlay_path, &yaml)
+                    .context("failed to write overlay file")?;
+
+                let compose_str = compose_path.to_string_lossy().to_string();
+                let overlay_str = overlay_path.to_string_lossy().to_string();
+                let svc_refs: Vec<&str> = svc_names.iter().map(|s| s.as_str()).collect();
+
+                if let Err(e) = docker::compose_up_services(
+                    &project,
+                    &compose_str,
+                    Some(&overlay_str),
+                    &svc_refs,
+                    watch,
+                ) {
+                    // Roll back overlays written so far
+                    for ov in &written_overlays {
+                        let _ = std::fs::remove_file(ov);
+                    }
+                    let _ = std::fs::remove_file(&overlay_path);
+                    if !reuse_worktree {
+                        let _ = wt.remove(&worktree_path);
+                    }
+                    return Err(e);
+                }
+
+                written_overlays.push(overlay_str);
+            }
         } else {
+            // Fallback: no [[services]] defined — use label detection on root compose file
+            let compose_path = compose::find_compose_file(root).ok_or_else(|| {
+                crate::error::EcluseError::ComposeFileNotFound(root.display().to_string())
+            })?;
+            let compose_data = compose::parse(&compose_path)?;
+
             let app_svcs =
                 compose::app_services(&compose_data, &config.app_label, &config.app_label_value);
-            let data =
+            let data_svcs =
                 compose::data_services(&compose_data, &config.app_label, &config.app_label_value);
             if app_svcs.is_empty() {
                 tracing::warn!(
@@ -53,49 +122,47 @@ impl super::ModeHandler for HybridMode {
                     config.app_label_value
                 );
             }
-            data
-        };
 
-        // Build port overrides for docker services, finding free ports
-        let (docker_port_overrides, allocated_docker_ports): (
-            std::collections::HashMap<String, u16>,
-            Vec<(String, u16)>,
-        ) = if !docker_svcs_config.is_empty() {
-            let pairs: Vec<(String, u16)> = docker_svcs_config
-                .iter()
-                .map(|s| {
-                    let port = if let Some(&p) = port_overrides.get(&s.name) {
-                        p
-                    } else {
-                        validate::find_free_port(config, s, slot)?
-                    };
-                    Ok((s.name.clone(), port))
-                })
-                .collect::<Result<_>>()?;
-            let map: std::collections::HashMap<String, u16> = pairs.iter().cloned().collect();
-            (map, pairs)
-        } else {
-            (std::collections::HashMap::new(), vec![])
-        };
-
-        let suffix = format!("{}_{}", config.prefix, slug);
-        let overlay_dir = root.join(".ecluse").join("overlays");
-        std::fs::create_dir_all(&overlay_dir).context("failed to create overlays directory")?;
-        let overlay_path = overlay_dir.join(format!("{}.yml", slug));
-
-        let overlay_yaml = if docker_port_overrides.is_empty() {
-            // Fallback: use offset-based rewriting (no explicit service config)
-            compose::generate_overlay(&compose_data, slot as u16, &suffix, Some(&data_svcs))?
-        } else {
-            compose::generate_overlay_with_ports(
+            let overlay_path = overlay_dir.join(format!("{}.yml", slug));
+            let yaml = compose::generate_overlay(
                 &compose_data,
-                &docker_port_overrides,
+                slot as u16,
                 &suffix,
                 Some(&data_svcs),
-            )?
-        };
-        std::fs::write(&overlay_path, &overlay_yaml).context("failed to write overlay file")?;
+            )?;
+            std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
 
+            let compose_str = compose_path.to_string_lossy().to_string();
+            let overlay_str = overlay_path.to_string_lossy().to_string();
+            let data_refs: Vec<&str> = data_svcs.iter().map(|s| s.as_str()).collect();
+
+            if let Err(e) = docker::compose_up_services(
+                &project,
+                &compose_str,
+                Some(&overlay_str),
+                &data_refs,
+                watch,
+            ) {
+                let _ = std::fs::remove_file(&overlay_path);
+                if !reuse_worktree {
+                    let _ = wt.remove(&worktree_path);
+                }
+                return Err(e);
+            }
+
+            // Derive ports for env vars from compose data
+            for (name, svc) in &compose_data.services {
+                if data_svcs.contains(name) {
+                    if let Some(p) = compose::service_host_port(svc, slot as u16) {
+                        allocated_docker_ports.push((name.clone(), p));
+                    }
+                }
+            }
+
+            written_overlays.push(overlay_str);
+        }
+
+        // ── Worktree ──────────────────────────────────────────────────────────
         if reuse_worktree {
             if !worktree_path.exists() {
                 return Err(anyhow::anyhow!(
@@ -104,29 +171,15 @@ impl super::ModeHandler for HybridMode {
                 ));
             }
         } else {
-            wt.create(&worktree_path, branch)?;
-        }
-
-        let project = format!("{}_{}", config.prefix, slug);
-        let compose_str = compose_path.to_string_lossy().to_string();
-        let overlay_str = overlay_path.to_string_lossy().to_string();
-
-        let data_svc_refs: Vec<&str> = data_svcs.iter().map(|s| s.as_str()).collect();
-        if let Err(e) = docker::compose_up_services(
-            &project,
-            &compose_str,
-            Some(&overlay_str),
-            &data_svc_refs,
-            watch,
-        ) {
-            if !reuse_worktree {
-                let _ = wt.remove(&worktree_path);
+            if let Err(e) = wt.create(&worktree_path, branch) {
+                for ov in &written_overlays {
+                    let _ = std::fs::remove_file(ov);
+                }
+                return Err(e);
             }
-            let _ = std::fs::remove_file(&overlay_path);
-            return Err(e);
         }
 
-        // Native ports from [[services]] config (or fallback), with port search
+        // ── Native ports ──────────────────────────────────────────────────────
         let native_ports: IndexMap<String, u16> = {
             let native = config.native_services();
             if native.is_empty() {
@@ -159,34 +212,19 @@ impl super::ModeHandler for HybridMode {
             }
         };
 
-        // Docker service ports for env vars — use actually allocated ports
-        let docker_ports: Vec<(String, u16)> = if !allocated_docker_ports.is_empty() {
-            allocated_docker_ports
-        } else {
-            // Fallback: derive from compose data using slot as offset
-            compose_data
-                .services
-                .iter()
-                .filter_map(|(name, svc)| {
-                    if data_svcs.contains(name) {
-                        compose::service_host_port(svc, slot as u16).map(|p| (name.clone(), p))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
-
-        let env_map = env::build_env(slot, slug, "hybrid", &native_ports, &docker_ports);
+        let env_map = env::build_env(slot, slug, "hybrid", &native_ports, &allocated_docker_ports);
         env::write_env_file(&worktree_path, &env_map)?;
 
         if let Some(cmd) = &config.hooks.on_up {
             if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
-                let _ = docker::compose_down(&project, &compose_str, Some(&overlay_str), true);
+                // Best-effort teardown of all compose groups
+                tear_down_all_overlays(&project, root, &written_overlays, true);
                 if !reuse_worktree {
                     let _ = wt.remove(&worktree_path);
                 }
-                let _ = std::fs::remove_file(&overlay_path);
+                for ov in &written_overlays {
+                    let _ = std::fs::remove_file(ov);
+                }
                 return Err(e);
             }
         }
@@ -195,9 +233,14 @@ impl super::ModeHandler for HybridMode {
 
         let mut all_ports: std::collections::HashMap<String, u16> =
             native_ports.iter().map(|(k, v)| (k.clone(), *v)).collect();
-        for (name, port) in &docker_ports {
+        for (name, port) in &allocated_docker_ports {
             all_ports.insert(name.clone(), *port);
         }
+
+        // Primary overlay is the first one written (for backward compat with
+        // sessions that only have a single compose file).
+        let primary_overlay = written_overlays.first().cloned();
+        let extra_overlays: Vec<String> = written_overlays.into_iter().skip(1).collect();
 
         Ok(Session {
             slug: slug.to_string(),
@@ -206,7 +249,8 @@ impl super::ModeHandler for HybridMode {
             branch: branch.to_string(),
             worktree_path: worktree_path.display().to_string(),
             compose_project: Some(project),
-            overlay_file: Some(overlay_str),
+            overlay_file: primary_overlay,
+            overlay_files: extra_overlays,
             app_port,
             started_at: Utc::now().to_rfc3339(),
             port_overrides: all_ports,
@@ -233,19 +277,26 @@ impl super::ModeHandler for HybridMode {
                     .map(|s| (s.name.clone(), s.port(session.slot)))
                     .collect()
             };
-            let env_map = env::build_env(session.slot, &session.slug, "hybrid", &native_ports, &[]);
+            let env_map =
+                env::build_env(session.slot, &session.slug, "hybrid", &native_ports, &[]);
             hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
         }
 
         if let Some(project) = &session.compose_project {
-            if let Some(overlay) = &session.overlay_file {
-                if let Some(compose_path) = compose::find_compose_file(root) {
-                    let compose_str = compose_path.to_string_lossy().to_string();
-                    docker::compose_down(project, &compose_str, Some(overlay), !keep_volumes)?;
-                }
-            }
-            if let Some(overlay) = &session.overlay_file {
-                let _ = std::fs::remove_file(overlay);
+            // Collect all (compose_file, overlay) pairs to tear down.
+            // primary overlay_file pairs with the root compose; extra overlay_files
+            // are matched by extracting the compose path from the overlay name.
+            let all_overlays: Vec<&str> = session
+                .overlay_file
+                .iter()
+                .map(|s| s.as_str())
+                .chain(session.overlay_files.iter().map(|s| s.as_str()))
+                .collect();
+
+            tear_down_all_overlays(project, root, &all_overlays.iter().map(|s| s.to_string()).collect::<Vec<_>>(), !keep_volumes);
+
+            for ov in &all_overlays {
+                let _ = std::fs::remove_file(ov);
             }
         }
 
@@ -258,3 +309,4 @@ impl super::ModeHandler for HybridMode {
         Ok(())
     }
 }
+
