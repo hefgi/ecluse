@@ -15,17 +15,36 @@ ecluse up feat-foo --reuse-worktree
 ecluse up feat-foo --port api=4001
 ```
 
-## No native process management
+## Process management is spawn-and-kill only
 
-For `host` and `hybrid` modes, ecluse writes the environment and optionally runs `on_up` hooks — it does not start or stop your app. If a native service fails to start, ecluse has no way to retry it without a full `down`/`up` cycle.
+For `host` and `hybrid` modes, ecluse spawns native services on `up` (via `command` + `process_manager`) and kills them on `down`. It does not monitor or restart crashed processes. `ecluse ls` warns about dead nohup-managed processes. For a fresh start use:
+
+```bash
+ecluse down feat-foo --keep-worktree
+ecluse up feat-foo --reuse-worktree
+```
+
+## `command` requires the app to read its port from the environment
+
+ecluse injects `PORT` and `ECLUSE_<NAME>_PORT` into the spawned process. This only works if the app reads its port from the environment. It will not work if:
+
+- **The port is hardcoded in source code** — change the app to read `$PORT`.
+- **The port is set in a config file** (e.g. `config/puma.rb`, `vite.config.ts`, `.env`) — ecluse does not modify app config files; update the config to read from the environment instead.
+
+If the framework accepts a CLI flag, pass the env var through the command directly:
+
+```toml
+command = "next dev --port $PORT"
+command = "bundle exec rails s -p $PORT"
+```
 
 ## Mode is set at init time
 
 Mode is stored in `.ecluse.toml` and applies to all sessions. Changing mode requires editing `.ecluse.toml` and tearing down all existing sessions first.
 
-## One compose file per repo
+## Multiple compose files require explicit `compose` fields
 
-ecluse expects a single `docker-compose.yml` at repo root. Multi-compose setups are not supported in v0.
+ecluse supports multiple compose files via the `compose` field on each `[[services]]` block. Services without a `compose` field fall back to the root compose file. There is no automatic discovery of compose files in subdirectories.
 
 ## Localhost only
 
