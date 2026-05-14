@@ -17,6 +17,7 @@ Three **modes** determine what gets isolated:
 ecluse init       # detect mode, write .ecluse.toml
 ecluse up         # create worktree + allocate slot + bring up services
 ecluse down       # teardown session, free slot, remove worktree
+ecluse shutdown   # tear down ALL active sessions (--keep-worktrees to leave worktrees on disk)
 ecluse ls         # list active sessions
 ecluse env        # print session env vars as JSON
 ecluse shell      # drop into worktree with env loaded (interactive use only)
@@ -97,6 +98,14 @@ All tests are inline in source modules using `tempfile::TempDir` for isolation.
 4. Register it in `modes::get_handler`.
 5. Add detection signals in `detect.rs`.
 6. Add unit tests alongside the new code.
+
+## Releasing a new version
+
+1. Bump `version` in `Cargo.toml`.
+2. Add a `## [x.y.z] — YYYY-MM-DD` section to `CHANGELOG.md` with `Added`, `Changed`, and `Fixed` entries covering everything since the last release.
+3. Commit, tag (`git tag vx.y.z`), and push.
+
+The changelog entry is required — do not skip it when publishing a new version.
 
 ## Pull requests
 
