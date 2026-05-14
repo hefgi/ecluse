@@ -124,6 +124,38 @@ mod tests {
         assert!(msg.contains("garbage"));
         assert!(msg.contains("valid:"));
     }
+
+    #[test]
+    fn process_manager_unavailable_message_contains_name() {
+        let e = EcluseError::ProcessManagerUnavailable {
+            name: "tmux".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("tmux"));
+        assert!(msg.contains("process manager"));
+    }
+
+    #[test]
+    fn spawn_failed_message_contains_service() {
+        let e = EcluseError::SpawnFailed {
+            service: "api".into(),
+            reason: "no such file".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("api"));
+        assert!(msg.contains("no such file"));
+    }
+
+    #[test]
+    fn kill_failed_message_contains_pid() {
+        let e = EcluseError::KillFailed {
+            pid: 12345,
+            reason: "permission denied".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("12345"));
+        assert!(msg.contains("permission denied"));
+    }
 }
 
 use thiserror::Error;
@@ -188,4 +220,16 @@ pub enum EcluseError {
 
     #[error("unknown mode '{0}'; valid: container, host, hybrid")]
     ModeInvalid(String),
+
+    #[error(
+        "process manager '{name}' is not installed; \
+         install it or set process_manager = \"none\" in ~/.config/ecluse/config.toml"
+    )]
+    ProcessManagerUnavailable { name: String },
+
+    #[error("failed to spawn '{service}': {reason}; check the command field in .ecluse.toml")]
+    SpawnFailed { service: String, reason: String },
+
+    #[error("failed to kill PID {pid}: {reason}; kill it manually")]
+    KillFailed { pid: u32, reason: String },
 }
