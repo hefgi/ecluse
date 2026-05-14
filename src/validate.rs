@@ -1,12 +1,32 @@
 use anyhow::Result;
 use std::collections::HashSet;
 use std::process::Command;
+use std::sync::OnceLock;
 
 use crate::config::{Config, Mode, ServiceConfig, ServiceRun};
 use crate::process::ProcessManager;
 
+static LSOF_WARNED: OnceLock<()> = OnceLock::new();
+
+fn lsof_available() -> bool {
+    Command::new("lsof")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|_| true)
+        .unwrap_or_else(|_| {
+            // Try running with no args as some versions exit non-zero for --version
+            Command::new("lsof")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok()
+        })
+}
+
 /// Check if a TCP port is currently listening on localhost.
-/// Returns the PID of the process holding the port, or 0 if unknown.
+/// Returns the PID of the process holding the port, or None if free or lsof unavailable.
 fn port_listener_pid(port: u16) -> Option<u32> {
     let output = Command::new("lsof")
         .args(["-iTCP", &format!(":{}", port), "-sTCP:LISTEN", "-n", "-P"])
@@ -37,6 +57,15 @@ fn port_listener_pid(port: u16) -> Option<u32> {
 ///
 /// In strict mode, fails immediately if the nominal port is in use.
 pub fn find_free_port(config: &Config, service: &ServiceConfig, slot: u8) -> Result<u16> {
+    LSOF_WARNED.get_or_init(|| {
+        if !lsof_available() {
+            tracing::warn!(
+                "lsof is not available; port conflict detection is disabled — \
+                 install lsof to enable it"
+            );
+        }
+    });
+
     let nominal = service.port(slot);
     let max_slots = config.max_slots as u16;
 
@@ -47,9 +76,13 @@ pub fn find_free_port(config: &Config, service: &ServiceConfig, slot: u8) -> Res
         return Ok(nominal);
     }
 
-    // Try nominal port first, then bump by max_slots increments
-    let candidates = std::iter::once(nominal)
-        .chain((1..=config.port_search_range as u16).map(|i| nominal + i * max_slots));
+    // Try nominal port first, then bump by max_slots increments.
+    // Use saturating arithmetic to avoid wrapping on high base_port values.
+    let candidates = std::iter::once(nominal).chain(
+        (1..=config.port_search_range as u16)
+            .map(|i| nominal.saturating_add(i.saturating_mul(max_slots)))
+            .take_while(|&p| p != u16::MAX),
+    );
 
     for port in candidates {
         if port_listener_pid(port).is_none() {

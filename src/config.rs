@@ -112,7 +112,7 @@ where
 
 impl ServiceConfig {
     pub fn port(&self, slot: u8) -> u16 {
-        self.base_port + slot as u16
+        self.base_port.saturating_add(slot as u16)
     }
 }
 
