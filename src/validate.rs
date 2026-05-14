@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::process::Command;
 
 use crate::config::{Config, Mode, ServiceConfig, ServiceRun};
+use crate::process::ProcessManager;
 
 /// Check if a TCP port is currently listening on localhost.
 /// Returns the PID of the process holding the port, or 0 if unknown.
@@ -47,9 +48,8 @@ pub fn find_free_port(config: &Config, service: &ServiceConfig, slot: u8) -> Res
     }
 
     // Try nominal port first, then bump by max_slots increments
-    let candidates = std::iter::once(nominal).chain(
-        (1..=config.port_search_range as u16).map(|i| nominal + i * max_slots),
-    );
+    let candidates = std::iter::once(nominal)
+        .chain((1..=config.port_search_range as u16).map(|i| nominal + i * max_slots));
 
     for port in candidates {
         if port_listener_pid(port).is_none() {
@@ -71,6 +71,33 @@ pub fn find_free_port(config: &Config, service: &ServiceConfig, slot: u8) -> Res
         range: config.port_search_range,
     }
     .into())
+}
+
+/// Validate that the configured process manager binary is available.
+pub fn validate_process_manager(manager: &ProcessManager) -> Result<()> {
+    match manager {
+        ProcessManager::None => Ok(()),
+        ProcessManager::Tmux => {
+            if crate::process::binary_available("tmux") {
+                Ok(())
+            } else {
+                Err(crate::error::EcluseError::ProcessManagerUnavailable {
+                    name: "tmux".into(),
+                }
+                .into())
+            }
+        }
+        ProcessManager::Nohup => {
+            if crate::process::binary_available("nohup") {
+                Ok(())
+            } else {
+                Err(crate::error::EcluseError::ProcessManagerUnavailable {
+                    name: "nohup".into(),
+                }
+                .into())
+            }
+        }
+    }
 }
 
 /// Validate that the config is structurally sound and that `port_search_range`
@@ -215,11 +242,7 @@ mod tests {
     use super::*;
     use crate::config::{HookConfig, Mode, ServiceRun};
 
-    fn make_config(
-        max_slots: u8,
-        port_search_range: u8,
-        services: Vec<ServiceConfig>,
-    ) -> Config {
+    fn make_config(max_slots: u8, port_search_range: u8, services: Vec<ServiceConfig>) -> Config {
         Config {
             mode: Mode::Hybrid,
             max_slots,
@@ -240,6 +263,7 @@ mod tests {
             base_port,
             run: ServiceRun::Native,
             compose: None,
+            command: None,
         }
     }
 
@@ -249,6 +273,7 @@ mod tests {
             base_port,
             run: ServiceRun::Docker,
             compose: compose.map(|s| s.into()),
+            command: None,
         }
     }
 
@@ -291,11 +316,7 @@ mod tests {
         // b: base=3100, max_slots=8, range=10 → max = 3100+8+80 = 3188
         // c: base=3150 → min = 3151
         // 3188 >= 3151 ✗
-        let config = make_config(
-            8,
-            10,
-            vec![svc("a", 3000), svc("b", 3100), svc("c", 3150)],
-        );
+        let config = make_config(8, 10, vec![svc("a", 3000), svc("b", 3100), svc("c", 3150)]);
         assert!(validate_config(&config).is_err());
     }
 
@@ -469,6 +490,7 @@ mod tests {
                 base_port: 3000,
                 run: ServiceRun::Native,
                 compose: Some("docker-compose.yml".into()),
+                command: None,
             }],
         );
         let warnings = validate_config(&config).unwrap();
@@ -529,5 +551,28 @@ mod tests {
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("duplicate base_port"));
         assert!(err.to_string().contains("3000"));
+    }
+
+    // --- process manager ---
+
+    #[test]
+    fn validate_pm_none_always_ok() {
+        assert!(validate_process_manager(&ProcessManager::None).is_ok());
+    }
+
+    #[test]
+    fn validate_pm_nohup_when_present() {
+        // nohup is always available on Unix
+        assert!(validate_process_manager(&ProcessManager::Nohup).is_ok());
+    }
+
+    #[test]
+    fn validate_pm_tmux_unavailable_returns_error() {
+        // Only meaningful when tmux is not installed; skip otherwise
+        if crate::process::binary_available("tmux") {
+            return;
+        }
+        let err = validate_process_manager(&ProcessManager::Tmux).unwrap_err();
+        assert!(err.to_string().contains("tmux"));
     }
 }
