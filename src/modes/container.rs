@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::docker;
 use crate::env;
 use crate::hooks;
+use crate::log::StepLogger;
 use crate::state::Session;
 use crate::validate;
 use crate::worktree::WorktreeManager;
@@ -26,6 +27,7 @@ impl super::ModeHandler for ContainerMode {
         watch: bool,
         reuse_worktree: bool,
         port_overrides: &std::collections::HashMap<String, u16>,
+        log: &StepLogger,
     ) -> Result<Session> {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
@@ -41,10 +43,15 @@ impl super::ModeHandler for ContainerMode {
         let mut written_overlays: Vec<String> = vec![];
 
         if !docker_svcs_config.is_empty() {
-            // Group services by compose file — each group gets its own overlay + up call.
             let groups = group_by_compose(root, &docker_svcs_config)?;
 
             for (compose_path, svcs) in &groups {
+                let svc_names: Vec<String> = svcs.iter().map(|s| s.name.clone()).collect();
+                log.step(&format!(
+                    "Starting docker services: {}...",
+                    svc_names.join(", ")
+                ));
+
                 let compose_data = compose::parse(compose_path)?;
 
                 let port_map: std::collections::HashMap<String, u16> = svcs
@@ -56,6 +63,7 @@ impl super::ModeHandler for ContainerMode {
                             validate::find_free_port(config, s, slot)?
                         };
                         allocated_ports.push((s.name.clone(), port));
+                        log.detail(&format!("{}: {}", s.name, port));
                         Ok((s.name.clone(), port))
                     })
                     .collect::<Result<_>>()?;
@@ -86,11 +94,16 @@ impl super::ModeHandler for ContainerMode {
                 written_overlays.push(overlay_str);
             }
         } else {
-            // Fallback: no [[services]] — single root compose file, offset by slot
             let compose_path = compose::find_compose_file(root).ok_or_else(|| {
                 crate::error::EcluseError::ComposeFileNotFound(root.display().to_string())
             })?;
             let compose_data = compose::parse(&compose_path)?;
+
+            let all_svc_names: Vec<String> = compose_data.services.keys().cloned().collect();
+            log.step(&format!(
+                "Starting docker services: {}...",
+                all_svc_names.join(", ")
+            ));
 
             let overlay_path = overlay_dir.join(format!("{}.yml", slug));
             let yaml = compose::generate_overlay(&compose_data, slot as u16, &suffix, None)?;
@@ -111,7 +124,10 @@ impl super::ModeHandler for ContainerMode {
                 .services
                 .iter()
                 .filter_map(|(name, svc)| {
-                    compose::service_host_port(svc, slot as u16).map(|p| (name.clone(), p))
+                    compose::service_host_port(svc, slot as u16).map(|p| {
+                        log.detail(&format!("{name}: {p}"));
+                        (name.clone(), p)
+                    })
                 })
                 .collect();
 
@@ -125,7 +141,11 @@ impl super::ModeHandler for ContainerMode {
                     worktree_path.display()
                 ));
             }
+            log.step("Reusing existing worktree...");
+            log.detail(&worktree_path.display().to_string());
         } else {
+            log.step(&format!("Creating worktree (branch: {branch})..."));
+            log.detail(&worktree_path.display().to_string());
             if let Err(e) = wt.create(&worktree_path, branch) {
                 for ov in &written_overlays {
                     let _ = std::fs::remove_file(ov);
@@ -134,6 +154,7 @@ impl super::ModeHandler for ContainerMode {
             }
         }
 
+        log.step("Writing .env.ecluse...");
         let env_map = env::build_env(
             slot,
             slug,
@@ -144,6 +165,8 @@ impl super::ModeHandler for ContainerMode {
         env::write_env_file(&worktree_path, &env_map)?;
 
         if let Some(cmd) = &config.hooks.on_up {
+            log.step("Running on_up hook...");
+            log.detail(cmd);
             if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
                 tear_down_all_overlays(&project, root, &written_overlays, true);
                 if !reuse_worktree {
@@ -189,6 +212,7 @@ impl super::ModeHandler for ContainerMode {
         root: &Path,
         keep_volumes: bool,
         keep_worktree: bool,
+        log: &StepLogger,
     ) -> Result<()> {
         if let Some(project) = &session.compose_project {
             let all_overlays: Vec<String> = session
@@ -198,6 +222,10 @@ impl super::ModeHandler for ContainerMode {
                 .chain(session.overlay_files.iter().cloned())
                 .collect();
 
+            if !all_overlays.is_empty() {
+                log.step("Stopping docker services...");
+            }
+
             tear_down_all_overlays(project, root, &all_overlays, !keep_volumes);
 
             for ov in &all_overlays {
@@ -206,6 +234,8 @@ impl super::ModeHandler for ContainerMode {
         }
 
         if !keep_worktree {
+            log.step("Removing worktree...");
+            log.detail(&session.worktree_path);
             let wt = WorktreeManager::new(root.to_owned());
             let wt_path = std::path::PathBuf::from(&session.worktree_path);
             wt.remove(&wt_path)?;

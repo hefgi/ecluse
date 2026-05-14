@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::config::Config;
 use crate::env;
 use crate::hooks;
+use crate::log::StepLogger;
 use crate::process;
 use crate::state::Session;
 use crate::validate;
@@ -24,11 +25,16 @@ impl super::ModeHandler for HostMode {
         _watch: bool,
         reuse_worktree: bool,
         port_overrides: &std::collections::HashMap<String, u16>,
+        log: &StepLogger,
     ) -> Result<Session> {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
 
+        log.step("Allocating ports...");
         let native_ports = native_ports_for_slot(config, slot, port_overrides)?;
+        for (name, port) in &native_ports {
+            log.detail(&format!("{name}: {port}"));
+        }
 
         if reuse_worktree {
             if !worktree_path.exists() {
@@ -37,14 +43,21 @@ impl super::ModeHandler for HostMode {
                     worktree_path.display()
                 ));
             }
+            log.step("Reusing existing worktree...");
+            log.detail(&worktree_path.display().to_string());
         } else {
+            log.step(&format!("Creating worktree (branch: {branch})..."));
+            log.detail(&worktree_path.display().to_string());
             wt.create(&worktree_path, branch)?;
         }
 
+        log.step("Writing .env.ecluse...");
         let env_map = env::build_env(slot, slug, "host", &native_ports, &[]);
         env::write_env_file(&worktree_path, &env_map)?;
 
         if let Some(cmd) = &config.hooks.on_up {
+            log.step("Running on_up hook...");
+            log.detail(cmd);
             if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
                 if !reuse_worktree {
                     let _ = wt.remove(&worktree_path);
@@ -55,13 +68,34 @@ impl super::ModeHandler for HostMode {
 
         let global = process::load_global_config()?;
         let native_svcs = config.native_services();
-        let spawn = process::spawn_services(
-            &global.process_manager,
-            slug,
-            &native_svcs,
-            &worktree_path,
-            &env_map,
-        )?;
+
+        let spawn = if native_svcs.iter().any(|s| s.command.is_some()) {
+            log.step(&format!(
+                "Spawning native services ({})...",
+                global.process_manager
+            ));
+            for svc in &native_svcs {
+                if let Some(cmd) = &svc.command {
+                    let port = native_ports.get(&svc.name).copied().unwrap_or(0);
+                    log.detail(&format!("{} on port {} — {}", svc.name, port, cmd));
+                }
+            }
+            process::spawn_services(
+                &global.process_manager,
+                slug,
+                &native_svcs,
+                &worktree_path,
+                &env_map,
+            )?
+        } else {
+            process::spawn_services(
+                &global.process_manager,
+                slug,
+                &native_svcs,
+                &worktree_path,
+                &env_map,
+            )?
+        };
 
         let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
             Some(global.process_manager)
@@ -99,8 +133,11 @@ impl super::ModeHandler for HostMode {
         root: &Path,
         _keep_volumes: bool,
         keep_worktree: bool,
+        log: &StepLogger,
     ) -> Result<()> {
         if let Some(cmd) = &config.hooks.on_down {
+            log.step("Running on_down hook...");
+            log.detail(cmd);
             let native_ports =
                 native_ports_for_slot(config, session.slot, &session.port_overrides)?;
             let env_map = env::build_env(session.slot, &session.slug, "host", &native_ports, &[]);
@@ -108,10 +145,13 @@ impl super::ModeHandler for HostMode {
         }
 
         if let Some(pm) = &session.process_manager {
+            log.step(&format!("Killing native services ({pm})..."));
             process::kill_services(pm, &session.spawn_result());
         }
 
         if !keep_worktree {
+            log.step("Removing worktree...");
+            log.detail(&session.worktree_path);
             let wt = WorktreeManager::new(root.to_owned());
             let wt_path = std::path::PathBuf::from(&session.worktree_path);
             wt.remove(&wt_path)?;

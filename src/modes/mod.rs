@@ -23,6 +23,7 @@ pub trait ModeHandler {
         watch: bool,
         reuse_worktree: bool,
         port_overrides: &std::collections::HashMap<String, u16>,
+        log: &crate::log::StepLogger,
     ) -> Result<Session>;
 
     fn bring_down(
@@ -32,6 +33,7 @@ pub trait ModeHandler {
         root: &Path,
         keep_volumes: bool,
         keep_worktree: bool,
+        log: &crate::log::StepLogger,
     ) -> Result<()>;
 }
 
