@@ -106,7 +106,7 @@ fn up_output_shows_correct_port() {
     let out = ecluse(repo.path(), &["up", "feat-foo"]);
     // slot 1 + fallback base 3000 → 3001
     assert!(
-        stdout(&out).contains("App port:   3001"),
+        stdout(&out).contains("App port:  3001"),
         "got: {}",
         stdout(&out)
     );
@@ -122,7 +122,7 @@ fn parallel_sessions_get_different_slots_and_ports() {
     assert!(stdout(&out1).contains("slot 1"));
     // slot 1 → 3001
     assert!(
-        stdout(&out1).contains("App port:   3001"),
+        stdout(&out1).contains("App port:  3001"),
         "got: {}",
         stdout(&out1)
     );
@@ -132,7 +132,7 @@ fn parallel_sessions_get_different_slots_and_ports() {
     assert!(stdout(&out2).contains("slot 2"));
     // slot 2 → 3002
     assert!(
-        stdout(&out2).contains("App port:   3002"),
+        stdout(&out2).contains("App port:  3002"),
         "got: {}",
         stdout(&out2)
     );
@@ -220,7 +220,7 @@ fn slot_reuse_after_down() {
     assert!(stdout(&out).contains("slot 1"));
     // slot 1 → 3001
     assert!(
-        stdout(&out).contains("App port:   3001"),
+        stdout(&out).contains("App port:  3001"),
         "got: {}",
         stdout(&out)
     );
