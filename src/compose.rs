@@ -479,6 +479,52 @@ mod tests {
         assert!(err.to_string().contains("parse") || err.to_string().contains("compose"));
     }
 
+    // ── resolve_service_compose ───────────────────────────────────────────────
+
+    fn docker_svc(compose: Option<&str>) -> crate::config::ServiceConfig {
+        crate::config::ServiceConfig {
+            name: "db".into(),
+            base_port: 5432,
+            run: crate::config::ServiceRun::Docker,
+            compose: compose.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn resolve_service_compose_no_field_returns_root_compose() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("docker-compose.yml"), "").unwrap();
+        let svc = docker_svc(None);
+        let result = super::resolve_service_compose(dir.path(), &svc);
+        assert!(result.is_some());
+        assert!(result.unwrap().ends_with("docker-compose.yml"));
+    }
+
+    #[test]
+    fn resolve_service_compose_no_field_no_root_returns_none() {
+        let dir = TempDir::new().unwrap();
+        let svc = docker_svc(None);
+        assert!(super::resolve_service_compose(dir.path(), &svc).is_none());
+    }
+
+    #[test]
+    fn resolve_service_compose_explicit_existing_path_returned() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join("infra")).unwrap();
+        std::fs::write(dir.path().join("infra/docker-compose.yml"), "").unwrap();
+        let svc = docker_svc(Some("infra/docker-compose.yml"));
+        let result = super::resolve_service_compose(dir.path(), &svc);
+        assert!(result.is_some());
+        assert!(result.unwrap().ends_with("infra/docker-compose.yml"));
+    }
+
+    #[test]
+    fn resolve_service_compose_explicit_missing_path_returns_none() {
+        let dir = TempDir::new().unwrap();
+        let svc = docker_svc(Some("nonexistent/docker-compose.yml"));
+        assert!(super::resolve_service_compose(dir.path(), &svc).is_none());
+    }
+
     // ── find_compose_file ─────────────────────────────────────────────────────
 
     #[test]
