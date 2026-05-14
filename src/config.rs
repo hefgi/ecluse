@@ -112,13 +112,6 @@ impl Config {
             .collect()
     }
 
-    /// Returns port map for all services at a given slot
-    pub fn service_ports(&self, slot: u8) -> indexmap::IndexMap<String, u16> {
-        self.services
-            .iter()
-            .map(|s| (s.name.clone(), s.port(slot)))
-            .collect()
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -432,42 +425,6 @@ base_port = 5432
         let docker = config.docker_services();
         assert_eq!(docker.len(), 1);
         assert_eq!(docker[0].name, "postgres");
-    }
-
-    #[test]
-    fn config_service_ports_returns_correct_map() {
-        let config = Config {
-            mode: Mode::Hybrid,
-            max_slots: 8,
-            prefix: "ecluse".into(),
-            worktree_dir: ".ecluse/worktrees".into(),
-            app_label: "ecluse.role".into(),
-            app_label_value: "app".into(),
-            strict_port: false,
-            port_search_range: 10,
-            services: vec![
-                ServiceConfig {
-                    name: "api".into(),
-                    base_port: 8000,
-                    run: ServiceRun::Native,
-                    compose: None,
-                },
-                ServiceConfig {
-                    name: "postgres".into(),
-                    base_port: 5432,
-                    run: ServiceRun::Docker,
-                    compose: None,
-                },
-            ],
-            hooks: HookConfig::default(),
-        };
-        let ports = config.service_ports(1);
-        assert_eq!(ports["api"], 8001);
-        assert_eq!(ports["postgres"], 5433);
-
-        let ports2 = config.service_ports(2);
-        assert_eq!(ports2["api"], 8002);
-        assert_eq!(ports2["postgres"], 5434);
     }
 
     #[test]
