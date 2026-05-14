@@ -84,11 +84,25 @@ jobs:
           echo "x86_64_linux=$(shasum -a 256 ecluse-${VERSION}-x86_64-unknown-linux-musl.tar.gz | cut -d' ' -f1)" >> $GITHUB_OUTPUT
           echo "aarch64_linux=$(shasum -a 256 ecluse-${VERSION}-aarch64-unknown-linux-musl.tar.gz | cut -d' ' -f1)" >> $GITHUB_OUTPUT
 
+      - uses: actions/checkout@v4
+
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          VERSION=${{ github.ref_name }}
+          # Extract the block between ## [x.y.z] headers for this version
+          NOTES=$(awk "/^## \[${VERSION#v}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
+          {
+            echo "notes<<EOF"
+            echo "$NOTES"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: "*.tar.gz"
-          generate_release_notes: true
+          body: ${{ steps.changelog.outputs.notes }}
 
   publish-crates:
     needs: build
