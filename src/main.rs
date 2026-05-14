@@ -6,6 +6,7 @@ mod docker;
 mod env;
 mod error;
 mod hooks;
+mod log;
 mod modes;
 mod process;
 mod slot;
@@ -50,13 +51,17 @@ fn run(cli: cli::Cli) -> Result<()> {
 // ── init ─────────────────────────────────────────────────────────────────────
 
 fn cmd_init(args: cli::InitArgs) -> Result<()> {
+    let log = log::StepLogger::new(args.quiet);
+
     let cwd = std::env::current_dir().context("could not determine current directory")?;
+
+    log.step("Verifying git repository...");
     worktree::WorktreeManager::verify_git_repo(&cwd)?;
 
     let mode: config::Mode = if let Some(m) = &args.mode {
         m.parse()?
     } else {
-        // Run detection
+        log.step("Detecting mode...");
         let result = detect::detect(&cwd);
 
         if let Some(reason) = &result.unsupported_reason {
@@ -74,7 +79,7 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
             detect::print_detection_result(&result);
         } else {
             match &result.recommended {
-                Some(m) => println!("Recommended mode: {} ({})", m, result.confidence),
+                Some(m) => log.detail(&format!("{m} ({})", result.confidence)),
                 None => {
                     eprintln!("No mode could be recommended. Use --mode to specify one.");
                     detect::print_detection_result(&result);
@@ -98,6 +103,10 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         }
     };
 
+    log.step("Determining process manager...");
+    let pm = process::detect_process_manager();
+    log.detail(&pm.to_string());
+
     let config_path = cwd.join(".ecluse.toml");
     if config_path.exists() && !args.yes {
         print!(".ecluse.toml already exists. Overwrite? [y/N] ");
@@ -110,6 +119,7 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         }
     }
 
+    log.step("Writing .ecluse.toml...");
     let cfg = config::Config {
         mode: mode.clone(),
         max_slots: args.max_slots,
@@ -123,21 +133,18 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         hooks: config::HookConfig::default(),
     };
     cfg.save(&cwd)?;
+    log.detail(&format!("mode: {mode}, max_slots: {}", args.max_slots));
 
-    // Detect and save global process_manager config
-    let pm = process::detect_process_manager();
     let global_cfg = process::GlobalConfig {
         process_manager: pm.clone(),
     };
     match process::save_global_config(&global_cfg) {
-        Ok(()) => println!(
-            "process_manager = {} (written to ~/.config/ecluse/config.toml)",
-            pm
-        ),
-        Err(e) => eprintln!("warning: could not write global config: {}", e),
+        Ok(()) => log.detail(&format!(
+            "process_manager = {pm} (written to ~/.config/ecluse/config.toml)"
+        )),
+        Err(e) => log.warn(&format!("could not write global config: {e}")),
     }
 
-    // Create .ecluse/ and suggest .gitignore
     let ecluse_dir = cwd.join(".ecluse");
     std::fs::create_dir_all(&ecluse_dir)?;
 
@@ -151,6 +158,7 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
 
     if should_add {
         if args.yes {
+            log.step("Adding .ecluse/ to .gitignore...");
             append_gitignore(&gitignore_path)?;
         } else {
             print!("Add .ecluse/ to .gitignore? [Y/n] ");
@@ -158,17 +166,19 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
             let mut input = String::new();
             io::stdin().read_line(&mut input)?;
             if input.trim().is_empty() || input.trim().eq_ignore_ascii_case("y") {
+                log.step("Adding .ecluse/ to .gitignore...");
                 append_gitignore(&gitignore_path)?;
             }
         }
     }
 
     println!();
-    println!("Initialized ecluse in {} (mode: {})", cwd.display(), mode);
-    println!("Config written to .ecluse.toml");
+    log.success(&format!(
+        "Initialized ecluse in {} (mode: {mode})",
+        cwd.display()
+    ));
     println!();
-    println!("Next steps:");
-    println!("  ecluse up <slug>          create a new isolated session");
+    println!("Next step:  ecluse up <slug>");
 
     Ok(())
 }
@@ -316,16 +326,20 @@ fn validate_slug(slug: &str) -> Result<()> {
 }
 
 fn cmd_up(args: cli::UpArgs) -> Result<()> {
-    validate_slug(&args.slug)?;
-    let (config, root) = config::Config::find_and_load()?;
+    // --json implies --quiet for step output
+    let log = log::StepLogger::new(args.quiet || args.json);
 
-    // Validate config before acquiring the state lock
+    validate_slug(&args.slug)?;
+
+    log.step("Loading config...");
+    let (config, root) = config::Config::find_and_load()?;
+    log.detail(&format!("mode: {}", config.mode));
+
     let warnings = validate::validate_config(&config)?;
     for w in &warnings {
-        eprintln!("warning: {}", w);
+        log.warn(w);
     }
 
-    // Validate process manager availability early (before creating worktree)
     let global = process::load_global_config()?;
     validate::validate_process_manager(&global.process_manager)?;
 
@@ -335,8 +349,10 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         return Err(error::EcluseError::SessionExists(args.slug.clone()).into());
     }
 
+    log.step("Allocating slot...");
     let allocator = slot::SlotAllocator::new(&config, &guard.state);
     let slot = allocator.allocate_next()?;
+    log.detail(&format!("slot {slot}"));
 
     let branch = args
         .branch
@@ -357,12 +373,13 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         args.watch,
         args.reuse_worktree,
         &port_overrides,
+        &log,
     )?;
 
     if args.json {
         print_up_json(&session, &root)?;
     } else {
-        print_up_summary(&session, &config);
+        print_up_summary(&session, &config, &log);
     }
 
     guard.state.add_session(session);
@@ -371,31 +388,33 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
     Ok(())
 }
 
-fn print_up_summary(session: &state::Session, _config: &config::Config) {
+fn print_up_summary(session: &state::Session, _config: &config::Config, log: &log::StepLogger) {
     println!();
-    println!("Session:    {} (slot {})", session.slug, session.slot);
-    println!("Worktree:   {}", session.worktree_path);
-    println!("Mode:       {}", session.mode);
-    println!("Branch:     {}", session.branch);
+    log.success(&format!(
+        "Session '{}' ready (slot {})",
+        session.slug, session.slot
+    ));
+    println!();
+    println!("  Worktree:  {}", session.worktree_path);
+    println!("  Mode:      {}", session.mode);
+    println!("  Branch:    {}", session.branch);
 
     match &session.mode {
         config::Mode::Container => {
             if let Some(port) = session.app_port {
-                println!("App URL:    http://localhost:{}", port);
+                println!("  App URL:   http://localhost:{}", port);
             }
             println!(
-                "Project:    {}",
+                "  Project:   {}",
                 session.compose_project.as_deref().unwrap_or("-")
             );
         }
         config::Mode::Host | config::Mode::Hybrid => {
             if let Some(port) = session.app_port {
-                println!("App port:   {}", port);
+                println!("  App port:  {}", port);
             }
             println!();
-            println!("Next step:");
-            println!("  ecluse shell {}", session.slug);
-            println!("  <your dev command>  # e.g. npm run dev, bin/dev, bin/rails server");
+            println!("  Next:  ecluse shell {}", session.slug);
         }
     }
     println!();
@@ -427,14 +446,20 @@ fn print_up_json(session: &state::Session, _root: &std::path::Path) -> Result<()
 // ── down ──────────────────────────────────────────────────────────────────────
 
 fn cmd_down(args: cli::DownArgs) -> Result<()> {
+    let log = log::StepLogger::new(args.quiet);
+
+    log.step("Loading config...");
     let (config, root) = config::Config::find_and_load()?;
+
     let mut guard = state::StateGuard::acquire(&root)?;
 
+    log.step(&format!("Loading session '{}'...", args.slug));
     let session = guard
         .state
         .find_session(&args.slug)
         .ok_or_else(|| error::EcluseError::SessionNotFound(args.slug.clone()))?
         .clone();
+    log.detail(&format!("slot {}, mode: {}", session.slot, session.mode));
 
     let handler = modes::get_handler(&config);
     handler.bring_down(
@@ -443,6 +468,7 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         &root,
         args.keep_volumes,
         args.keep_worktree,
+        &log,
     )?;
 
     guard.state.remove_session(&args.slug);
@@ -455,14 +481,17 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         );
     }
 
+    println!();
     if args.keep_worktree {
-        println!(
+        log.success(&format!(
             "Session '{}' torn down (worktree kept at {}).",
             args.slug, session.worktree_path
-        );
+        ));
     } else {
-        println!("Session '{}' torn down.", args.slug);
+        log.success(&format!("Session '{}' torn down.", args.slug));
     }
+    println!();
+
     Ok(())
 }
 
@@ -518,10 +547,10 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
 
     println!("{}", Table::new(rows));
 
-    // Warn about any nohup-managed processes that have died
+    let log = log::StepLogger::new(false);
     for s in &guard.state.sessions {
         for w in process::check_processes_alive(&s.process_manager, &s.spawn_result(), &s.slug) {
-            eprintln!("warning: [{}] {}", s.slug, w);
+            log.warn(&format!("[{}] {}", s.slug, w));
         }
     }
 
@@ -543,7 +572,6 @@ fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
     let worktree = std::path::Path::new(&session.worktree_path);
     let env_file = worktree.join(".env.ecluse");
 
-    // Parse .env.ecluse into key=value pairs
     let env_vars: Vec<(String, String)> = if env_file.exists() {
         std::fs::read_to_string(&env_file)
             .context("failed to read .env.ecluse")?
@@ -561,7 +589,6 @@ fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
         vec![]
     };
 
-    // If the session was started with tmux, attach to that session
     if let Some(tmux_session) = &session.tmux_session {
         println!(
             "Attaching to tmux session '{}' for ecluse session '{}'.",
@@ -594,21 +621,29 @@ fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
 // ── validate ──────────────────────────────────────────────────────────────────
 
 fn cmd_validate(args: cli::ValidateArgs) -> Result<()> {
+    let log = log::StepLogger::new(args.quiet);
+
+    log.step("Loading config...");
     let (config, root) = config::Config::find_and_load()?;
+    log.detail(&format!("mode: {}", config.mode));
 
+    log.step("Checking port ranges...");
     let warnings = validate::validate_config(&config)?;
-
     for w in &warnings {
-        eprintln!("warning: {}", w);
+        log.warn(w);
     }
 
+    log.step("Checking process manager...");
     let global = process::load_global_config()?;
     validate::validate_process_manager(&global.process_manager)?;
+    log.detail(&global.process_manager.to_string());
 
-    println!(
+    println!();
+    log.success(&format!(
         "Config at {} is valid.",
         root.join(".ecluse.toml").display()
-    );
+    ));
+    println!();
     println!("  max_slots:         {}", config.max_slots);
     println!("  strict_port:       {}", config.strict_port);
     println!("  port_search_range: {}", config.port_search_range);
@@ -702,12 +737,13 @@ fn cmd_env(args: cli::EnvArgs) -> Result<()> {
     });
     println!("{}", serde_json::to_string_pretty(&out)?);
 
+    let log = log::StepLogger::new(false);
     for w in process::check_processes_alive(
         &session.process_manager,
         &session.spawn_result(),
         &session.slug,
     ) {
-        eprintln!("warning: {}", w);
+        log.warn(&w);
     }
 
     Ok(())
