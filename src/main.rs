@@ -476,8 +476,8 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     guard.commit()?;
 
     if args.keep_branch {
-        tracing::debug!(
-            "--keep-branch is a no-op in v0; branch '{}' is kept",
+        eprintln!(
+            "warning: --keep-branch has no effect; branches are never deleted by ecluse down (branch '{}' is kept)",
             session.branch
         );
     }
