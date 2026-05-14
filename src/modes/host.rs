@@ -64,6 +64,7 @@ impl super::ModeHandler for HostMode {
             worktree_path: worktree_path.display().to_string(),
             compose_project: None,
             overlay_file: None,
+            overlay_files: vec![],
             app_port,
             started_at: Utc::now().to_rfc3339(),
             port_overrides: stored_port_overrides,

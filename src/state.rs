@@ -37,6 +37,10 @@ pub struct Session {
     pub worktree_path: String,
     pub compose_project: Option<String>,
     pub overlay_file: Option<String>,
+    /// Additional overlay files when multiple compose files are involved (monorepo).
+    /// Indexed alongside the compose file they override.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlay_files: Vec<String>,
     pub app_port: Option<u16>,
     pub started_at: String,
     /// Actual allocated ports (may differ from nominal if auto-bump kicked in).
@@ -144,6 +148,7 @@ mod tests {
             worktree_path: format!("/tmp/{}", slug),
             compose_project: None,
             overlay_file: None,
+            overlay_files: vec![],
             app_port: None,
             started_at: "2026-01-01T00:00:00Z".into(),
             port_overrides: std::collections::HashMap::new(),
@@ -316,6 +321,7 @@ mod tests {
                 worktree_path: "/tmp/wt".into(),
                 compose_project: Some("ecluse_compose-sess".into()),
                 overlay_file: Some("/tmp/overlay.yml".into()),
+                overlay_files: vec![],
                 app_port: Some(3001),
                 started_at: "2026-01-01T00:00:00Z".into(),
                 port_overrides: std::collections::HashMap::new(),
