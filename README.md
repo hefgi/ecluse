@@ -190,6 +190,8 @@ worktree_dir = ".ecluse/worktrees"
 name = "api"
 base_port = 3000             # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
 command = "npm run dev"      # optional — ecluse spawns this on ecluse up
+# port_env = "DJANGO_PORT"  # also inject the port under a custom var name
+# port_env = ["DJANGO_PORT", "APP_PORT"]  # or multiple aliases
 
 [[services]]
 name = "postgres"
@@ -267,11 +269,17 @@ ecluse up feat-foo --port api=4001
 
 **Process management is spawn-and-kill only.** For `host` and `hybrid` modes, services with `command` are spawned on `up` and killed on `down`. ecluse does not monitor or restart crashed processes — `ecluse ls` warns if a nohup-managed process has died. For a fresh start, use `ecluse down feat-foo --keep-worktree && ecluse up feat-foo --reuse-worktree`.
 
-**`command` only works if the app reads its port from the environment.** ecluse injects `PORT` and `ECLUSE_<NAME>_PORT` into the spawned process, but cannot help if:
+**`command` only works if the app reads its port from the environment.** ecluse injects `PORT`, `ECLUSE_<NAME>_PORT`, and any `port_env` aliases, but cannot help if:
 - The port is **hardcoded in source code** — the app must be changed to read `$PORT`.
 - The port is **set in a config file** (e.g. `config/puma.rb`, `vite.config.ts`, `.env`) — ecluse does not modify app config files; update the config to read from the environment instead.
 
-If the framework accepts a CLI flag, pass the env var through the command directly:
+If the app reads a custom env var, use `port_env` to inject it under that name:
+```toml
+port_env = "DJANGO_PORT"                  # single alias
+port_env = ["DJANGO_PORT", "APP_PORT"]    # multiple aliases
+```
+
+If the framework accepts a CLI flag, pass the var through the command:
 ```toml
 command = "next dev --port $PORT"
 command = "bundle exec rails s -p $PORT"

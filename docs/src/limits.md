@@ -26,10 +26,19 @@ ecluse up feat-foo --reuse-worktree
 
 ## `command` requires the app to read its port from the environment
 
-ecluse injects `PORT` and `ECLUSE_<NAME>_PORT` into the spawned process. This only works if the app reads its port from the environment. It will not work if:
+ecluse injects `PORT`, `ECLUSE_<NAME>_PORT`, and any `port_env` aliases into the spawned process. This only works if the app reads its port from the environment. It will not work if:
 
 - **The port is hardcoded in source code** — change the app to read `$PORT`.
 - **The port is set in a config file** (e.g. `config/puma.rb`, `vite.config.ts`, `.env`) — ecluse does not modify app config files; update the config to read from the environment instead.
+
+If the app reads a custom env var name, use `port_env` to inject it:
+
+```toml
+[[services]]
+name = "api"
+base_port = 3000
+port_env = "DJANGO_PORT"   # ecluse sets DJANGO_PORT = allocated port
+```
 
 If the framework accepts a CLI flag, pass the env var through the command directly:
 

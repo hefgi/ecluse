@@ -462,7 +462,7 @@ What ecluse intentionally does not do in v0. These are design decisions, not bug
 
 - **Ports are checked, not reserved** — ecluse finds a free port at `up` time and writes it to `.env.ecluse`. There is a small window between that check and when your process actually binds. If another process takes the port in between, the value in `.env.ecluse` will be wrong. Fix: `ecluse down feat-foo --keep-worktree` then `ecluse up feat-foo --reuse-worktree`, or pin a specific port with `--port name=value`.
 - **No process lifecycle management beyond spawn/kill** — ecluse can spawn native services on `up` (via `command` + `process_manager`) and kill them on `down`, but cannot restart a crashed process. If a service dies, check logs and do a `down`/`up` cycle. `ecluse ls` and `ecluse env` warn about dead nohup processes.
-- **`command` requires the app to read its port from the environment** — ecluse injects `PORT` and `ECLUSE_<NAME>_PORT` into the spawned process. It will not work if the port is hardcoded in source code or set in a config file (e.g. `config/puma.rb`, `vite.config.ts`). If the framework accepts a CLI flag, pass it explicitly: `command = "next dev --port $PORT"`.
+- **`command` requires the app to read its port from the environment** — ecluse injects `PORT`, `ECLUSE_<NAME>_PORT`, and any `port_env` aliases. It will not work if the port is hardcoded in source code or set in a config file (e.g. `config/puma.rb`, `vite.config.ts`). Use `port_env = "DJANGO_PORT"` to inject a custom var name, or pass via CLI flag: `command = "next dev --port $PORT"`.
 - **Mode is set at `init`, not re-detected on `up`** — to change: `ecluse init --mode <new>`
 - **Multiple compose files supported via `compose` field** — each `[[services]]` block with `run = "docker"` can point at its own compose file; services without it fall back to the root compose file. Run `ecluse init` per subdirectory only when you need fully independent slot pools.
 - **`localhost:<port>` only** — no public URLs; use cloudflared or ngrok alongside ecluse
@@ -505,6 +505,8 @@ worktree_dir = ".ecluse/worktrees"
 name = "api"
 base_port = 3000        # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
 command = "npm run dev" # optional — ecluse spawns this on ecluse up
+# port_env = "DJANGO_PORT"              # also set DJANGO_PORT = allocated port
+# port_env = ["DJANGO_PORT", "APP_PORT"] # or multiple aliases
 
 [[services]]
 name = "postgres"
