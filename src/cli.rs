@@ -54,6 +54,10 @@ pub struct InitArgs {
     /// Prefix for compose project names and branches
     #[arg(long, default_value = "ecluse")]
     pub prefix: String,
+
+    /// Suppress step output
+    #[arg(long)]
+    pub quiet: bool,
 }
 
 #[derive(Args)]
@@ -80,6 +84,10 @@ pub struct UpArgs {
     /// Override a service port: --port <name>=<value> (repeatable)
     #[arg(long = "port", value_name = "NAME=PORT", value_parser = parse_port_override)]
     pub port_overrides: Vec<(String, u16)>,
+
+    /// Suppress step output (implied by --json)
+    #[arg(long)]
+    pub quiet: bool,
 }
 
 #[derive(Args)]
@@ -98,6 +106,10 @@ pub struct DownArgs {
     /// Tear down services but keep the git worktree on disk
     #[arg(long)]
     pub keep_worktree: bool,
+
+    /// Suppress step output
+    #[arg(long)]
+    pub quiet: bool,
 }
 
 fn parse_port_override(s: &str) -> Result<(String, u16), String> {
@@ -137,4 +149,8 @@ pub struct ValidateArgs {
     /// Also print the port allocation table for all slots
     #[arg(long)]
     pub ports: bool,
+
+    /// Suppress step output
+    #[arg(long)]
+    pub quiet: bool,
 }
