@@ -285,11 +285,8 @@ base_port = 8000
     let out2 = ecluse(repo.path(), &["up", "fix-bar"]);
     assert!(out2.status.success(), "{}", stderr(&out2));
 
-    let env2 = std::fs::read_to_string(
-        repo.path()
-            .join(".ecluse/worktrees/fix-bar/.env.ecluse"),
-    )
-    .unwrap();
+    let env2 =
+        std::fs::read_to_string(repo.path().join(".ecluse/worktrees/fix-bar/.env.ecluse")).unwrap();
     assert!(env2.contains("ECLUSE_API_PORT=8002"), "got env: {}", env2);
     assert!(env2.contains("PORT=8002"), "got env: {}", env2);
 }

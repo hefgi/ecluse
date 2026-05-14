@@ -12,6 +12,7 @@ use crate::docker;
 use crate::state::Session;
 
 pub trait ModeHandler {
+    #[allow(clippy::too_many_arguments)]
     fn bring_up(
         &self,
         slug: &str,
@@ -84,12 +85,22 @@ pub fn overlay_name_for_compose(slug: &str, compose_path: &Path, root: &Path) ->
 
 /// Tear down all (compose, overlay) pairs. For each overlay, reconstruct the
 /// compose file path from the overlay filename, falling back to the root compose.
-pub fn tear_down_all_overlays(project: &str, root: &Path, overlays: &[String], remove_volumes: bool) {
+pub fn tear_down_all_overlays(
+    project: &str,
+    root: &Path,
+    overlays: &[String],
+    remove_volumes: bool,
+) {
     for overlay_str in overlays {
         let compose_path = compose_file_for_overlay(root, overlay_str)
             .or_else(|| compose::find_compose_file(root));
         if let Some(cp) = compose_path {
-            let _ = docker::compose_down(project, &cp.to_string_lossy(), Some(overlay_str), remove_volumes);
+            let _ = docker::compose_down(
+                project,
+                &cp.to_string_lossy(),
+                Some(overlay_str),
+                remove_volumes,
+            );
         }
     }
 }
@@ -100,6 +111,7 @@ pub fn tear_down_all_overlays(project: &str, root: &Path, overlays: &[String], r
 fn compose_file_for_overlay(root: &Path, overlay_str: &str) -> Option<std::path::PathBuf> {
     let filename = std::path::Path::new(overlay_str).file_stem()?.to_str()?;
     // stem is the part after the last '-'; if no '-', this is a root overlay
+    #[allow(clippy::needless_splitn)]
     let stem = filename.rsplitn(2, '-').next()?;
     // If stem == filename there was no hyphen — root overlay, no subdir
     if stem == filename {
@@ -135,15 +147,12 @@ mod tests {
             base_port,
             run: ServiceRun::Docker,
             compose: compose.map(|s| s.to_string()),
+            command: None,
         }
     }
 
     fn write_compose(dir: &std::path::Path, name: &str) {
-        std::fs::write(
-            dir.join(name),
-            "services:\n  db:\n    image: postgres:16\n",
-        )
-        .unwrap();
+        std::fs::write(dir.join(name), "services:\n  db:\n    image: postgres:16\n").unwrap();
     }
 
     #[test]
@@ -165,7 +174,11 @@ mod tests {
         let svcs = vec![&pg, &redis];
 
         let groups = group_by_compose(dir.path(), &svcs).unwrap();
-        assert_eq!(groups.len(), 1, "both services share root compose → one group");
+        assert_eq!(
+            groups.len(),
+            1,
+            "both services share root compose → one group"
+        );
         assert_eq!(groups[0].1.len(), 2);
     }
 

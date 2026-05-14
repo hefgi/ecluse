@@ -63,19 +63,16 @@ impl super::ModeHandler for ContainerMode {
                 let overlay_name = overlay_name_for_compose(slug, compose_path, root);
                 let overlay_path = overlay_dir.join(&overlay_name);
 
-                let yaml = compose::generate_overlay_with_ports(
-                    &compose_data,
-                    &port_map,
-                    &suffix,
-                    None,
-                )?;
-                std::fs::write(&overlay_path, &yaml)
-                    .context("failed to write overlay file")?;
+                let yaml =
+                    compose::generate_overlay_with_ports(&compose_data, &port_map, &suffix, None)?;
+                std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
 
                 let compose_str = compose_path.to_string_lossy().to_string();
                 let overlay_str = overlay_path.to_string_lossy().to_string();
 
-                if let Err(e) = docker::compose_up(&project, &compose_str, Some(&overlay_str), watch) {
+                if let Err(e) =
+                    docker::compose_up(&project, &compose_str, Some(&overlay_str), watch)
+                {
                     for ov in &written_overlays {
                         let _ = std::fs::remove_file(ov);
                     }
@@ -178,6 +175,10 @@ impl super::ModeHandler for ContainerMode {
             app_port,
             started_at: Utc::now().to_rfc3339(),
             port_overrides: stored_port_overrides,
+            process_manager: None,
+            tmux_session: None,
+            pid_files: vec![],
+            log_dir: None,
         })
     }
 

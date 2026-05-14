@@ -8,6 +8,7 @@ use crate::config::Config;
 use crate::docker;
 use crate::env;
 use crate::hooks;
+use crate::process;
 use crate::state::Session;
 use crate::validate;
 use crate::worktree::WorktreeManager;
@@ -77,8 +78,7 @@ impl super::ModeHandler for HybridMode {
                     &suffix,
                     Some(&svc_names),
                 )?;
-                std::fs::write(&overlay_path, &yaml)
-                    .context("failed to write overlay file")?;
+                std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
 
                 let compose_str = compose_path.to_string_lossy().to_string();
                 let overlay_str = overlay_path.to_string_lossy().to_string();
@@ -124,12 +124,8 @@ impl super::ModeHandler for HybridMode {
             }
 
             let overlay_path = overlay_dir.join(format!("{}.yml", slug));
-            let yaml = compose::generate_overlay(
-                &compose_data,
-                slot as u16,
-                &suffix,
-                Some(&data_svcs),
-            )?;
+            let yaml =
+                compose::generate_overlay(&compose_data, slot as u16, &suffix, Some(&data_svcs))?;
             std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
 
             let compose_str = compose_path.to_string_lossy().to_string();
@@ -191,6 +187,7 @@ impl super::ModeHandler for HybridMode {
                         base_port: 3000,
                         run: crate::config::ServiceRun::Native,
                         compose: None,
+                        command: None,
                     };
                     validate::find_free_port(config, &fallback, slot)?
                 };
@@ -229,6 +226,22 @@ impl super::ModeHandler for HybridMode {
             }
         }
 
+        let global = process::load_global_config()?;
+        let native_svcs = config.native_services();
+        let spawn = process::spawn_services(
+            &global.process_manager,
+            slug,
+            &native_svcs,
+            &worktree_path,
+            &env_map,
+        )?;
+
+        let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
+            Some(global.process_manager)
+        } else {
+            None
+        };
+
         let app_port = native_ports.values().next().copied();
 
         let mut all_ports: std::collections::HashMap<String, u16> =
@@ -254,6 +267,10 @@ impl super::ModeHandler for HybridMode {
             app_port,
             started_at: Utc::now().to_rfc3339(),
             port_overrides: all_ports,
+            process_manager: pm,
+            tmux_session: spawn.tmux_session,
+            pid_files: spawn.pid_files,
+            log_dir: spawn.log_dir,
         })
     }
 
@@ -277,9 +294,12 @@ impl super::ModeHandler for HybridMode {
                     .map(|s| (s.name.clone(), s.port(session.slot)))
                     .collect()
             };
-            let env_map =
-                env::build_env(session.slot, &session.slug, "hybrid", &native_ports, &[]);
+            let env_map = env::build_env(session.slot, &session.slug, "hybrid", &native_ports, &[]);
             hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
+        }
+
+        if let Some(pm) = &session.process_manager {
+            process::kill_services(pm, &session.spawn_result());
         }
 
         if let Some(project) = &session.compose_project {
@@ -293,7 +313,15 @@ impl super::ModeHandler for HybridMode {
                 .chain(session.overlay_files.iter().map(|s| s.as_str()))
                 .collect();
 
-            tear_down_all_overlays(project, root, &all_overlays.iter().map(|s| s.to_string()).collect::<Vec<_>>(), !keep_volumes);
+            tear_down_all_overlays(
+                project,
+                root,
+                &all_overlays
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
+                !keep_volumes,
+            );
 
             for ov in &all_overlays {
                 let _ = std::fs::remove_file(ov);
@@ -309,4 +337,3 @@ impl super::ModeHandler for HybridMode {
         Ok(())
     }
 }
-

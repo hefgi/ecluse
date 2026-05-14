@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::config::Config;
 use crate::env;
 use crate::hooks;
+use crate::process;
 use crate::state::Session;
 use crate::validate;
 use crate::worktree::WorktreeManager;
@@ -52,6 +53,22 @@ impl super::ModeHandler for HostMode {
             }
         }
 
+        let global = process::load_global_config()?;
+        let native_svcs = config.native_services();
+        let spawn = process::spawn_services(
+            &global.process_manager,
+            slug,
+            &native_svcs,
+            &worktree_path,
+            &env_map,
+        )?;
+
+        let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
+            Some(global.process_manager)
+        } else {
+            None
+        };
+
         let app_port = native_ports.values().next().copied();
         let stored_port_overrides: std::collections::HashMap<String, u16> =
             native_ports.iter().map(|(k, v)| (k.clone(), *v)).collect();
@@ -68,6 +85,10 @@ impl super::ModeHandler for HostMode {
             app_port,
             started_at: Utc::now().to_rfc3339(),
             port_overrides: stored_port_overrides,
+            process_manager: pm,
+            tmux_session: spawn.tmux_session,
+            pid_files: spawn.pid_files,
+            log_dir: spawn.log_dir,
         })
     }
 
@@ -80,9 +101,14 @@ impl super::ModeHandler for HostMode {
         keep_worktree: bool,
     ) -> Result<()> {
         if let Some(cmd) = &config.hooks.on_down {
-            let native_ports = native_ports_for_slot(config, session.slot, &session.port_overrides)?;
+            let native_ports =
+                native_ports_for_slot(config, session.slot, &session.port_overrides)?;
             let env_map = env::build_env(session.slot, &session.slug, "host", &native_ports, &[]);
             hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
+        }
+
+        if let Some(pm) = &session.process_manager {
+            process::kill_services(pm, &session.spawn_result());
         }
 
         if !keep_worktree {
@@ -113,6 +139,7 @@ fn native_ports_for_slot(
                 base_port: 3000,
                 run: crate::config::ServiceRun::Native,
                 compose: None,
+                command: None,
             };
             validate::find_free_port(config, &fallback, slot)?
         };
