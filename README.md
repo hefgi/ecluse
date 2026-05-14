@@ -101,43 +101,6 @@ base_port = 6379         # slot 1 → ECLUSE_REDIS_PORT=6380, slot 2 → 6381
 
 Each `ecluse up` picks the next free slot, starts isolated services, and writes all ports to `.env.ecluse` in the worktree. Type `exit` (or `ecluse down`) to tear everything down.
 
-## Agent skills
-
-The skill teaches your agent every command, mode, and workflow. Install globally or project-local:
-
-| | Command |
-|---|---|
-| Global | `npx skills add hefgi/ecluse -y` |
-| Project-local | `npx skills add hefgi/ecluse -y --out .` |
-
-Canonical agent loop:
-
-```bash
-# 1. Create session — get worktree path + full env in one call
-ecluse up <task-slug> --json   # returns JSON with worktree_path and all env vars
-
-# 2. Work in the worktree (path from JSON above)
-# Edit files, run commands — env vars are in the JSON output
-
-# 3. Tear down
-ecluse down <task-slug>
-```
-
-Or query an existing session anytime:
-```bash
-ecluse env <task-slug>   # JSON: worktree_path + all env vars
-```
-
-The `.env.ecluse` file in every worktree contains everything the agent needs:
-
-| Variable | Description |
-|---|---|
-| `ECLUSE_SLOT` | Slot number |
-| `ECLUSE_MODE` | Active mode |
-| `ECLUSE_SLUG` | Session name |
-| `PORT` | Alias for the first native `[[services]]` entry (framework-compatible) |
-| `ECLUSE_<NAME>_PORT` | Per-service port — one per `[[services]]` entry |
-
 ## Choosing a mode
 
 `ecluse init` detects the right mode automatically. You confirm before anything is written.
@@ -173,6 +136,13 @@ ecluse env [<slug>]
 ecluse down <slug> [--keep-volumes] [--keep-branch] [--keep-worktree]
 ecluse ls [--json]
 ecluse validate [--ports]
+```
+
+**Env** — get the worktree path and all env vars for a running session as JSON:
+
+```bash
+ecluse env feat-foo          # full JSON: worktree_path, slot, all ECLUSE_* vars
+ecluse env                   # auto-detects session if run from inside a worktree
 ```
 
 **Soft restart** — tear down services without losing your worktree, then spin them up fresh:
@@ -251,27 +221,6 @@ compose = "services/worker/docker-compose.yml"   # its own compose file
 **Port collision handling** — by default ecluse searches for a free port if the nominal one is taken, trying `nominal + i × max_slots` to stay out of other slots' territory. Set `strict_port = true` to fail immediately instead. Run `ecluse validate` to check your config and preview the full port allocation table.
 
 Hooks run as shell commands inside the worktree directory with all `.env.ecluse` variables pre-loaded. Use them for migrations, seeding, or teardown. ecluse doesn't manage databases directly — your app's own tooling handles that via `on_up`.
-
-## Hybrid mode setup
-
-Add the `ecluse.role: app` label to your app service in `docker-compose.yml`:
-
-```yaml
-services:
-  web:
-    build: .
-    labels:
-      ecluse.role: app
-    ports: ["3000:3000"]
-  postgres:
-    image: postgres:16   # no label = data service = containerized
-  redis:
-    image: redis:7
-```
-
-Or define `run = "docker"` services in `[[services]]` to explicitly control which services stay in containers. Either approach works — the label is the simpler default for single-app stacks.
-
-`ecluse up feat-foo` starts postgres and redis in containers with per-slot ports, creates the worktree, and writes `.env.ecluse` with `ECLUSE_POSTGRES_PORT` and `ECLUSE_REDIS_PORT` pointing at the containerized data services. You run the app yourself.
 
 ## Known limits
 
