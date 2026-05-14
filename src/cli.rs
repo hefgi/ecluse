@@ -31,6 +31,8 @@ pub enum Command {
     Env(EnvArgs),
     /// Validate .ecluse.toml — check port ranges, service gaps, and search range safety
     Validate(ValidateArgs),
+    /// Tear down all active sessions
+    Shutdown(ShutdownArgs),
 }
 
 #[derive(Args)]
@@ -142,6 +144,21 @@ pub struct ShellArgs {
 pub struct EnvArgs {
     /// Session slug — omit when already inside a worktree
     pub slug: Option<String>,
+}
+
+#[derive(Args)]
+pub struct ShutdownArgs {
+    /// Keep named volumes (do not pass -v to docker compose down)
+    #[arg(long)]
+    pub keep_volumes: bool,
+
+    /// Tear down services but keep git worktrees on disk
+    #[arg(long)]
+    pub keep_worktrees: bool,
+
+    /// Suppress step output
+    #[arg(long)]
+    pub quiet: bool,
 }
 
 #[derive(Args)]

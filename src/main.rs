@@ -45,6 +45,7 @@ fn run(cli: cli::Cli) -> Result<()> {
         cli::Command::Shell(args) => cmd_shell(args),
         cli::Command::Env(args) => cmd_env(args),
         cli::Command::Validate(args) => cmd_validate(args),
+        cli::Command::Shutdown(args) => cmd_shutdown(args),
     }
 }
 
@@ -491,6 +492,80 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         log.success(&format!("Session '{}' torn down.", args.slug));
     }
     println!();
+
+    Ok(())
+}
+
+// ── shutdown ──────────────────────────────────────────────────────────────────
+
+fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
+    let log = log::StepLogger::new(args.quiet);
+
+    log.step("Loading config...");
+    let (config, root) = config::Config::find_and_load()?;
+
+    let mut guard = state::StateGuard::acquire(&root)?;
+
+    if guard.state.sessions.is_empty() {
+        println!("no active sessions");
+        return Ok(());
+    }
+
+    let sessions: Vec<state::Session> = guard.state.sessions.clone();
+    let total = sessions.len();
+    let handler = modes::get_handler(&config);
+    let mut failed: Vec<String> = Vec::new();
+
+    for session in sessions {
+        log.step(&format!("Tearing down '{}'...", session.slug));
+        log.detail(&format!("slot {}, mode: {}", session.slot, session.mode));
+
+        match handler.bring_down(
+            &session,
+            &config,
+            &root,
+            args.keep_volumes,
+            args.keep_worktrees,
+            &log,
+        ) {
+            Ok(()) => {
+                guard.state.remove_session(&session.slug);
+                guard.commit()?;
+            }
+            Err(e) => {
+                log.warn(&format!("'{}' failed: {}", session.slug, e));
+                failed.push(session.slug.clone());
+            }
+        }
+    }
+
+    println!();
+    let torn_down = total - failed.len();
+    if failed.is_empty() {
+        log.success(&format!(
+            "Shutdown complete — {} session{} torn down.",
+            torn_down,
+            if torn_down == 1 { "" } else { "s" }
+        ));
+    } else {
+        log.warn(&format!(
+            "{}/{} session{} torn down; {} failed: {}",
+            torn_down,
+            total,
+            if total == 1 { "" } else { "s" },
+            failed.len(),
+            failed.join(", ")
+        ));
+    }
+    println!();
+
+    if !failed.is_empty() {
+        return Err(anyhow::anyhow!(
+            "shutdown completed with errors; {} session(s) could not be torn down: {}",
+            failed.len(),
+            failed.join(", ")
+        ));
+    }
 
     Ok(())
 }
