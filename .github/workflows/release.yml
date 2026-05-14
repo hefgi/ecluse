@@ -17,16 +17,12 @@ jobs:
         include:
           - target: x86_64-apple-darwin
             os: macos-latest
-            archive: ecluse-${{ github.ref_name }}-x86_64-apple-darwin.tar.gz
           - target: aarch64-apple-darwin
             os: macos-latest
-            archive: ecluse-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            archive: ecluse-${{ github.ref_name }}-x86_64-unknown-linux-musl.tar.gz
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            archive: ecluse-${{ github.ref_name }}-aarch64-unknown-linux-musl.tar.gz
 
     steps:
       - uses: actions/checkout@v4
@@ -55,17 +51,15 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          BIN=target/${{ matrix.target }}/release/ecluse
-          ARCHIVE=${{ matrix.archive }}
-          tar czf "$ARCHIVE" -C "$(dirname $BIN)" "$(basename $BIN)"
-          echo "SHA256=$(shasum -a 256 $ARCHIVE | cut -d' ' -f1)" >> $GITHUB_ENV
+          VERSION=${{ github.ref_name }}
+          ARCHIVE="ecluse-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar czf "$ARCHIVE" -C "target/${{ matrix.target }}/release" ecluse
           echo "ARCHIVE=$ARCHIVE" >> $GITHUB_ENV
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.archive }}
-          path: ${{ matrix.archive }}
+          name: ecluse-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+          path: ecluse-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
 
   release:
     needs: build
@@ -125,7 +119,7 @@ jobs:
           AARCH64_LINUX_SHA: ${{ needs.release.outputs.aarch64_linux_sha }}
         run: |
           mkdir -p homebrew-tap/Formula
-          cat > homebrew-tap/Formula/ecluse.rb << EOF
+          cat > homebrew-tap/Formula/ecluse.rb << FORMULA
           class Ecluse < Formula
             desc "Per-worktree isolation for AI agentic engineering and multi-session development"
             homepage "https://github.com/hefgi/ecluse"
@@ -162,7 +156,7 @@ jobs:
               assert_match version.to_s, shell_output("#{bin}/ecluse --version")
             end
           end
-          EOF
+          FORMULA
 
       - name: Commit and push formula
         run: |
