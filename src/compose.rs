@@ -860,6 +860,21 @@ pub fn service_host_port(svc: &Service, offset: u16) -> Option<u16> {
     None
 }
 
+/// Resolve the compose file for a docker service.
+/// If the service has an explicit `compose` path, resolve it relative to `root`.
+/// Otherwise fall back to `find_compose_file(root)`.
+pub fn resolve_service_compose(
+    root: &Path,
+    svc: &crate::config::ServiceConfig,
+) -> Option<std::path::PathBuf> {
+    if let Some(ref rel) = svc.compose {
+        let p = root.join(rel);
+        if p.exists() { Some(p) } else { None }
+    } else {
+        find_compose_file(root)
+    }
+}
+
 /// Find the compose file — checks docker-compose.yml, compose.yaml, compose.yml
 pub fn find_compose_file(root: &Path) -> Option<std::path::PathBuf> {
     for name in &[
