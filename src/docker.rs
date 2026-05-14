@@ -11,21 +11,6 @@ pub fn is_available() -> bool {
         .unwrap_or(false)
 }
 
-#[allow(dead_code)]
-pub fn run(args: &[&str]) -> Result<String> {
-    let output = Command::new("docker")
-        .args(args)
-        .output()
-        .with_context(|| format!("failed to run: docker {}", args.join(" ")))?;
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        Err(crate::error::EcluseError::DockerFailed { stderr }.into())
-    }
-}
-
 pub fn compose_up(
     project: &str,
     compose_file: &str,

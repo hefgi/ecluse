@@ -62,11 +62,19 @@ impl WorktreeManager {
             .context("failed to run git worktree remove")?;
 
         if !status.success() {
-            // Fallback: prune
-            let _ = Command::new("git")
+            let prune_status = Command::new("git")
                 .args(["worktree", "prune"])
                 .current_dir(&self.project_root)
-                .status();
+                .status()
+                .context("failed to run git worktree prune")?;
+            if !prune_status.success() {
+                return Err(anyhow::anyhow!(
+                    "git worktree remove and git worktree prune both failed for {}; \
+                     remove it manually with `git worktree remove --force {}`",
+                    path.display(),
+                    path.display()
+                ));
+            }
         }
         Ok(())
     }
@@ -83,13 +91,6 @@ impl WorktreeManager {
         Ok(())
     }
 
-    #[allow(dead_code)]
-    pub fn repo_name(root: &Path) -> String {
-        root.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("ecluse")
-            .to_string()
-    }
 }
 
 #[cfg(test)]
@@ -169,22 +170,6 @@ mod tests {
         config.worktree_dir = ".wt".into();
         let path = wt.worktree_path(&config, "my-slug");
         assert!(path.ends_with(".wt/my-slug"));
-    }
-
-    // ── repo_name ─────────────────────────────────────────────────────────────
-
-    #[test]
-    fn repo_name_returns_directory_name() {
-        let dir = TempDir::new().unwrap();
-        // TempDir has a name like "tmp12345" — we just check it doesn't crash
-        let name = WorktreeManager::repo_name(dir.path());
-        assert!(!name.is_empty());
-    }
-
-    #[test]
-    fn repo_name_fallback_for_root() {
-        let name = WorktreeManager::repo_name(std::path::Path::new("/"));
-        assert_eq!(name, "ecluse");
     }
 
     // ── create / remove worktree ──────────────────────────────────────────────
