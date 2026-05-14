@@ -16,7 +16,7 @@ Best when your repo already has a `docker-compose.yml` that runs the full stack.
 
 ## host
 
-Your app runs natively. ecluse allocates ports and writes them to `.env.ecluse`. No containers are started. Hooks handle any setup (migrations, seeding).
+Your app runs natively. ecluse allocates ports and writes them to `.env.ecluse`. No containers are started. Hooks handle any setup (migrations, seeding). If a `command` is set on a native `[[services]]` entry, ecluse spawns it via your configured `process_manager` (tmux or nohup).
 
 Best when there are no data services or you manage them externally.
 
@@ -24,7 +24,7 @@ Best when there are no data services or you manage them externally.
 
 Data services (Postgres, Redis, etc.) run in containers with per-slot ports. Your app runs natively and connects to them via the ports in `.env.ecluse`.
 
-Best when you have a compose file for data services but run the app with `npm run dev` or similar. See [Hybrid mode setup](hybrid-setup.md) for how to label your compose file.
+Best when you have a compose file for data services but run the app with `npm run dev` or similar. Add `command = "npm run dev"` to the native `[[services]]` entry and ecluse will spawn it automatically. See [Hybrid mode setup](hybrid-setup.md) for how to label your compose file.
 
 ## Changing modes
 

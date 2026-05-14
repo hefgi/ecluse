@@ -15,15 +15,17 @@ worktree_dir = ".ecluse/worktrees"
 # One [[services]] block per service. port = base_port + slot.
 # Native services run on the host; docker services run in containers.
 # The first native entry also sets the PORT alias for framework compatibility.
+# Add command = "..." to have ecluse spawn the process on ecluse up.
 
 [[services]]
 name = "api"
-base_port = 3000   # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
+base_port = 3000             # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
+command = "npm run dev"      # optional — ecluse spawns this on ecluse up
 
 [[services]]
 name = "postgres"
 run = "docker"
-base_port = 5432   # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
+base_port = 5432             # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
 
 # Optional: lifecycle hooks — run in the worktree with all env vars set
 [hooks]
@@ -51,10 +53,29 @@ Each `[[services]]` block defines one service. Each gets a stable, collision-fre
 | `name` | string | Service name — becomes `ECLUSE_<NAME>_PORT` |
 | `base_port` | integer | Port formula: `base_port + slot` |
 | `run` | string | `"docker"` to run in a container; omit for native |
+| `command` | string | Shell command ecluse spawns on `ecluse up` (native services only; managed by your global `process_manager` setting) |
 
 The first native (non-docker) service entry also sets `PORT` for framework compatibility.
 
 Omit `[[services]]` entirely for single-service projects — ecluse falls back to `PORT = 3000 + slot`.
+
+## Global config (`~/.config/ecluse/config.toml`)
+
+Controls how ecluse spawns native service processes. Written by `ecluse init` based on what's installed.
+
+```toml
+process_manager = "tmux"   # "tmux" | "nohup" | "none"
+```
+
+| Value | Behaviour |
+|---|---|
+| `tmux` | Creates a detached tmux session `ecluse-<slug>` with one window per service. `ecluse shell <slug>` attaches to it. |
+| `nohup` | Spawns each service as a background process. Logs at `.ecluse/logs/<slug>/`, PIDs at `.ecluse/pids/<slug>/`. |
+| `none` | Spawns nothing — current behaviour before this was added. |
+
+`ecluse init` sets this automatically: tmux if available, otherwise nohup. Change it at any time — the setting is per-machine, not per-repo.
+
+Run `ecluse validate` to check the configured binary is installed.
 
 ## `[hooks]`
 

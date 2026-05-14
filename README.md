@@ -124,8 +124,8 @@ The `.env.ecluse` file in every worktree contains everything the agent needs:
 | Mode | What `ecluse up` does | Best for |
 |---|---|---|
 | `container` | Runs all services in Docker (app + data) | Fully containerized stacks, devcontainer repos |
-| `hybrid` | Runs data services in Docker, writes env — you start the app | Rails/Django/Node with a postgres+redis compose file |
-| `host` | Writes env vars only — starts nothing | Pure native stacks with no Docker |
+| `hybrid` | Runs data services in Docker, writes env, optionally spawns app | Rails/Django/Node with a postgres+redis compose file |
+| `host` | Writes env vars, optionally spawns native services | Pure native stacks with no Docker |
 
 ## How it works
 
@@ -179,21 +179,25 @@ worktree_dir = ".ecluse/worktrees"
 # One [[services]] block per service. port = base_port + slot.
 # Native services run on the host; docker services run in containers.
 # The first native entry also sets the PORT alias for framework compatibility.
+# Add command = "..." to have ecluse spawn the process on ecluse up.
 
 [[services]]
 name = "api"
-base_port = 3000   # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
+base_port = 3000             # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
+command = "npm run dev"      # optional — ecluse spawns this on ecluse up
 
 [[services]]
 name = "postgres"
 run = "docker"
-base_port = 5432   # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
+base_port = 5432             # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
 
 # Optional: lifecycle hooks — run in the worktree with all env vars set
 [hooks]
 on_up = "npx prisma migrate deploy"
 on_down = "npx prisma migrate reset --force"
 ```
+
+`ecluse init` writes `~/.config/ecluse/config.toml` with the detected process manager (`tmux` if installed, otherwise `nohup`). Services with `command` are spawned on `ecluse up` and killed on `ecluse down`. Set `process_manager = "none"` to opt out.
 
 **`[[services]]` for monorepos and multi-service stacks:** define one block per service. Each gets a stable, collision-free port per slot (`base_port + slot`). Omit `[[services]]` entirely for single-service projects — ecluse falls back to a single `PORT = 3000 + slot`.
 
@@ -256,7 +260,7 @@ Or pin a specific port manually:
 ecluse up feat-foo --port api=4001
 ```
 
-**ecluse does not manage native processes.** For `host` and `hybrid` modes, ecluse writes the environment and optionally runs `on_up` hooks — it does not start or stop your app. If a native service fails to start, ecluse has no way to retry it without a full `down`/`up` cycle.
+**Process management is spawn-and-kill only.** For `host` and `hybrid` modes, services with `command` are spawned on `up` and killed on `down`. ecluse does not monitor or restart crashed processes — `ecluse ls` warns if a nohup-managed process has died. For a fresh start, use `ecluse down feat-foo --keep-worktree && ecluse up feat-foo --reuse-worktree`.
 
 ## Contributing
 

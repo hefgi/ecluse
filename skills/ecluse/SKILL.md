@@ -255,7 +255,7 @@ ecluse down feat-foo --keep-volumes   # keeps volumes
 
 ## Host Mode
 
-No containers. ecluse reserves a port range, writes `.env.ecluse`, creates the worktree, runs `on_up`. You start your own dev server.
+No containers. ecluse reserves a port range, writes `.env.ecluse`, creates the worktree, runs `on_up`. If `command` is set on a `[[services]]` entry, ecluse spawns it automatically via your global `process_manager` (tmux or nohup). Otherwise you start your own dev server.
 
 ### Prerequisites
 
@@ -268,7 +268,8 @@ No containers. ecluse reserves a port range, writes `.env.ecluse`, creates the w
 ecluse up feat-foo
 # Session:   feat-foo (slot 1)
 # App port:  3001  (ECLUSE_APP_PORT + PORT alias, from [[services]] name="app" base_port=3000)
-# Next step: cd .ecluse/worktrees/feat-foo && source .env.ecluse
+# If command = "npm run dev" is set, the dev server is already running.
+# Otherwise: cd .ecluse/worktrees/feat-foo && source .env.ecluse
 
 cd .ecluse/worktrees/feat-foo
 source .env.ecluse
@@ -306,7 +307,7 @@ ecluse down feat-foo   # runs on_down hook, removes worktree
 
 ## Hybrid Mode
 
-Data services (postgres, redis, etc.) run in containers with offset ports and namespaced volumes. App runs on the host.
+Data services (postgres, redis, etc.) run in containers with offset ports and namespaced volumes. App runs on the host. If `command` is set on the native `[[services]]` entry, ecluse spawns it automatically — no manual `npm run dev` required.
 
 This is the fastest dev loop: isolated data, native app speed, hot reload, native debugger.
 
@@ -450,6 +451,8 @@ RUST_LOG=debug ecluse up feat-foo
 | `ComposeFileNotFound` | No compose file at repo root | Add compose file or switch mode |
 | `PortInUse` | Port bound by another process | `kill <pid>` then retry |
 | `HookFailed` | `on_up` or `on_down` exited non-zero | Check the hook command and its output |
+| `ProcessManagerUnavailable` | Configured `process_manager` binary not installed | Install it or set `process_manager = "none"` in `~/.config/ecluse/config.toml` |
+| `SpawnFailed` | Failed to spawn a native service process | Check the `command` field in `.ecluse.toml` and the binary's availability |
 
 ---
 
@@ -458,7 +461,7 @@ RUST_LOG=debug ecluse up feat-foo
 What ecluse intentionally does not do in v0. These are design decisions, not bugs.
 
 - **Ports are checked, not reserved** — ecluse finds a free port at `up` time and writes it to `.env.ecluse`. There is a small window between that check and when your process actually binds. If another process takes the port in between, the value in `.env.ecluse` will be wrong. Fix: `ecluse down feat-foo --keep-worktree` then `ecluse up feat-foo --reuse-worktree`, or pin a specific port with `--port name=value`.
-- **No process lifecycle management for native services** — for `host` and `hybrid` modes, ecluse writes the environment but does not start or stop your app. If a native service fails to bind after `up`, ecluse cannot retry or restart it. You must do a `down`/`up` cycle yourself.
+- **No process lifecycle management beyond spawn/kill** — ecluse can spawn native services on `up` (via `command` + `process_manager`) and kill them on `down`, but cannot restart a crashed process. If a service dies, check logs and do a `down`/`up` cycle. `ecluse ls` and `ecluse env` warn about dead nohup processes.
 - **Mode is set at `init`, not re-detected on `up`** — to change: `ecluse init --mode <new>`
 - **Multiple compose files supported via `compose` field** — each `[[services]]` block with `run = "docker"` can point at its own compose file; services without it fall back to the root compose file. Run `ecluse init` per subdirectory only when you need fully independent slot pools.
 - **`localhost:<port>` only** — no public URLs; use cloudflared or ngrok alongside ecluse
@@ -495,10 +498,12 @@ worktree_dir = ".ecluse/worktrees"
 # run = "native" (default) runs on host; run = "docker" runs in a container.
 # The first native entry also sets the PORT alias for framework compatibility.
 # Omit [[services]] entirely for single-service stacks — PORT = 3000 + slot.
+# Add command = "..." to have ecluse spawn the process on ecluse up (native only).
 
 [[services]]
 name = "api"
 base_port = 3000        # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
+command = "npm run dev" # optional — ecluse spawns this on ecluse up
 
 [[services]]
 name = "postgres"
@@ -511,6 +516,20 @@ base_port = 5432        # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
 on_up = "npx prisma migrate deploy"
 on_down = "npx prisma migrate reset --force"
 ```
+
+### Global config (`~/.config/ecluse/config.toml`)
+
+Controls how native service processes are spawned. Written by `ecluse init`:
+
+```toml
+process_manager = "tmux"   # "tmux" | "nohup" | "none"
+```
+
+- `tmux` — creates a detached tmux session `ecluse-<slug>`; `ecluse shell <slug>` attaches to it
+- `nohup` — background processes, logs at `.ecluse/logs/<slug>/`, PIDs at `.ecluse/pids/<slug>/`
+- `none` — spawns nothing (default pre-v0.3 behaviour)
+
+`ecluse init` auto-detects: tmux if present, otherwise nohup. `ecluse validate` checks the binary is installed. This is per-machine, not per-repo.
 
 Hooks run as shell commands inside the worktree directory. All `.env.ecluse` variables (`PORT`, `ECLUSE_SLUG`, `ECLUSE_<NAME>_PORT`, etc.) are available. ecluse does not manage databases directly — use `on_up` for migrations, `on_down` for teardown.
 

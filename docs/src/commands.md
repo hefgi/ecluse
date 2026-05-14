@@ -46,6 +46,8 @@ Tears down services, frees the slot, and removes the worktree.
 
 Drops into the worktree with all `.env.ecluse` variables loaded in the shell environment. Interactive use only.
 
+If the session has a tmux session (i.e. `process_manager = "tmux"` was set at `ecluse up` time), this attaches to that session instead of spawning a new shell — you'll see the running service windows directly.
+
 ## ecluse env
 
 Prints the session's environment variables as JSON. Includes `worktree_path` and all `ECLUSE_*` vars.
@@ -56,4 +58,4 @@ Lists active sessions. Use `--json` for machine-readable output.
 
 ## ecluse validate
 
-Validates port ranges in `.ecluse.toml` and checks for gaps or collisions. Use `--ports` to preview the full port allocation table across all slots.
+Validates port ranges in `.ecluse.toml` and checks for gaps or collisions. Use `--ports` to preview the full port allocation table across all slots. Also checks that the configured `process_manager` binary is installed (e.g. tmux or nohup).
