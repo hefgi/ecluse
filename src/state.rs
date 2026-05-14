@@ -130,6 +130,13 @@ impl StateGuard {
         }
 
         let state_path = ecluse_dir.join("state.json");
+
+        // Clean up any stale .tmp left by a previous crash between write and rename.
+        let tmp_path = state_path.with_extension("json.tmp");
+        if tmp_path.exists() {
+            let _ = std::fs::remove_file(&tmp_path);
+        }
+
         let state = if state_path.exists() {
             let content =
                 std::fs::read_to_string(&state_path).context("failed to read state.json")?;
