@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::config::Mode;
+use crate::process::{ProcessManager, SpawnResult};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct State {
@@ -47,6 +48,29 @@ pub struct Session {
     /// Stored so `ecluse env` always reflects what was really assigned.
     #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
     pub port_overrides: std::collections::HashMap<String, u16>,
+    /// Process manager used to spawn native service commands, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_manager: Option<ProcessManager>,
+    /// tmux session name when process_manager = tmux.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux_session: Option<String>,
+    /// PID files written when process_manager = nohup.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pid_files: Vec<PathBuf>,
+    /// Log directory for nohup-managed services.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_dir: Option<PathBuf>,
+}
+
+impl Session {
+    /// Reconstitute a SpawnResult from persisted session fields.
+    pub fn spawn_result(&self) -> SpawnResult {
+        SpawnResult {
+            tmux_session: self.tmux_session.clone(),
+            pid_files: self.pid_files.clone(),
+            log_dir: self.log_dir.clone(),
+        }
+    }
 }
 
 impl State {
@@ -152,6 +176,10 @@ mod tests {
             app_port: None,
             started_at: "2026-01-01T00:00:00Z".into(),
             port_overrides: std::collections::HashMap::new(),
+            process_manager: None,
+            tmux_session: None,
+            pid_files: vec![],
+            log_dir: None,
         }
     }
 
@@ -309,6 +337,69 @@ mod tests {
     }
 
     #[test]
+    fn session_with_process_manager_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        {
+            let mut guard = StateGuard::acquire(dir.path()).unwrap();
+            guard.state.add_session(Session {
+                slug: "pm-sess".into(),
+                mode: Mode::Host,
+                slot: 1,
+                branch: "branch/pm-sess".into(),
+                worktree_path: "/tmp/pm-sess".into(),
+                compose_project: None,
+                overlay_file: None,
+                overlay_files: vec![],
+                app_port: Some(3001),
+                started_at: "2026-01-01T00:00:00Z".into(),
+                port_overrides: std::collections::HashMap::new(),
+                process_manager: Some(crate::process::ProcessManager::Tmux),
+                tmux_session: Some("ecluse-pm-sess".into()),
+                pid_files: vec![],
+                log_dir: None,
+            });
+            guard.commit().unwrap();
+        }
+        let guard2 = StateGuard::acquire(dir.path()).unwrap();
+        let s = &guard2.state.sessions[0];
+        assert_eq!(
+            s.process_manager,
+            Some(crate::process::ProcessManager::Tmux)
+        );
+        assert_eq!(s.tmux_session.as_deref(), Some("ecluse-pm-sess"));
+    }
+
+    #[test]
+    fn session_pid_files_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        {
+            let mut guard = StateGuard::acquire(dir.path()).unwrap();
+            guard.state.add_session(Session {
+                slug: "nohup-sess".into(),
+                mode: Mode::Host,
+                slot: 2,
+                branch: "branch/nohup-sess".into(),
+                worktree_path: "/tmp/nohup-sess".into(),
+                compose_project: None,
+                overlay_file: None,
+                overlay_files: vec![],
+                app_port: None,
+                started_at: "2026-01-01T00:00:00Z".into(),
+                port_overrides: std::collections::HashMap::new(),
+                process_manager: Some(crate::process::ProcessManager::Nohup),
+                tmux_session: None,
+                pid_files: vec![PathBuf::from("/tmp/api.pid")],
+                log_dir: Some(PathBuf::from("/tmp/logs")),
+            });
+            guard.commit().unwrap();
+        }
+        let guard2 = StateGuard::acquire(dir.path()).unwrap();
+        let s = &guard2.state.sessions[0];
+        assert_eq!(s.pid_files, vec![PathBuf::from("/tmp/api.pid")]);
+        assert_eq!(s.log_dir, Some(PathBuf::from("/tmp/logs")));
+    }
+
+    #[test]
     fn session_with_compose_fields_roundtrips() {
         let dir = TempDir::new().unwrap();
         {
@@ -325,6 +416,10 @@ mod tests {
                 app_port: Some(3001),
                 started_at: "2026-01-01T00:00:00Z".into(),
                 port_overrides: std::collections::HashMap::new(),
+                process_manager: None,
+                tmux_session: None,
+                pid_files: vec![],
+                log_dir: None,
             });
             guard.commit().unwrap();
         }

@@ -39,6 +39,7 @@ pub enum ServiceRun {
     Docker,
 }
 
+#[allow(clippy::derivable_impls)]
 impl Default for ServiceRun {
     fn default() -> Self {
         ServiceRun::Native
@@ -62,6 +63,10 @@ pub struct ServiceConfig {
     pub run: ServiceRun,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compose: Option<String>,
+    /// Shell command to spawn on `ecluse up`. Only used for native services
+    /// when process_manager is configured in ~/.config/ecluse/config.toml.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 impl ServiceConfig {
@@ -111,7 +116,6 @@ impl Config {
             .filter(|s| s.run == ServiceRun::Docker)
             .collect()
     }
-
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -385,6 +389,7 @@ base_port = 5432
             base_port: 8000,
             run: ServiceRun::Native,
             compose: None,
+            command: None,
         };
         assert_eq!(svc.port(1), 8001);
         assert_eq!(svc.port(2), 8002);
@@ -408,12 +413,14 @@ base_port = 5432
                     base_port: 8000,
                     run: ServiceRun::Native,
                     compose: None,
+                    command: None,
                 },
                 ServiceConfig {
                     name: "postgres".into(),
                     base_port: 5432,
                     run: ServiceRun::Docker,
                     compose: None,
+                    command: None,
                 },
             ],
             hooks: HookConfig::default(),
@@ -488,6 +495,28 @@ base_port = 5432
         let dir = TempDir::new().unwrap();
         let result = Config::load(dir.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn service_command_is_optional() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"host\"\n[[services]]\nname = \"api\"\nbase_port = 3000\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert!(config.services[0].command.is_none());
+    }
+
+    #[test]
+    fn service_command_loads_from_toml() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"host\"\n[[services]]\nname = \"api\"\nbase_port = 3000\ncommand = \"npm run dev\"\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.services[0].command.as_deref(), Some("npm run dev"));
     }
 
     #[test]

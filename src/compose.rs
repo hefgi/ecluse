@@ -487,6 +487,7 @@ mod tests {
             base_port: 5432,
             run: crate::config::ServiceRun::Docker,
             compose: compose.map(|s| s.to_string()),
+            command: None,
         }
     }
 
@@ -915,7 +916,11 @@ pub fn resolve_service_compose(
 ) -> Option<std::path::PathBuf> {
     if let Some(ref rel) = svc.compose {
         let p = root.join(rel);
-        if p.exists() { Some(p) } else { None }
+        if p.exists() {
+            Some(p)
+        } else {
+            None
+        }
     } else {
         find_compose_file(root)
     }
