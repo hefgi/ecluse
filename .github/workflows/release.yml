@@ -31,7 +31,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.8.0
         with:
           key: ${{ matrix.target }}
 
@@ -96,7 +96,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.8.0
       - run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   update-homebrew:
