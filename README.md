@@ -197,6 +197,25 @@ on_down = "npx prisma migrate reset --force"
 
 **`[[services]]` for monorepos and multi-service stacks:** define one block per service. Each gets a stable, collision-free port per slot (`base_port + slot`). Omit `[[services]]` entirely for single-service projects — ecluse falls back to a single `PORT = 3000 + slot`.
 
+**Multiple compose files in a monorepo:** point each docker service at its own compose file with the `compose` field (path relative to repo root). Services without `compose` fall back to the root compose file. ecluse generates one overlay per compose file and brings them all up under the same project name.
+
+```toml
+[[services]]
+name = "api"
+base_port = 3000               # native — no compose needed
+
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432               # uses root docker-compose.yml (default)
+
+[[services]]
+name = "worker-queue"
+run = "docker"
+base_port = 6379
+compose = "services/worker/docker-compose.yml"   # its own compose file
+```
+
 **Port collision handling** — by default ecluse searches for a free port if the nominal one is taken, trying `nominal + i × max_slots` to stay out of other slots' territory. Set `strict_port = true` to fail immediately instead. Run `ecluse validate` to check your config and preview the full port allocation table.
 
 Hooks run as shell commands inside the worktree directory with all `.env.ecluse` variables pre-loaded. Use them for migrations, seeding, or teardown. ecluse doesn't manage databases directly — your app's own tooling handles that via `on_up`.

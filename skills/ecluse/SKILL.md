@@ -460,7 +460,7 @@ What ecluse intentionally does not do in v0. These are design decisions, not bug
 - **Ports are checked, not reserved** — ecluse finds a free port at `up` time and writes it to `.env.ecluse`. There is a small window between that check and when your process actually binds. If another process takes the port in between, the value in `.env.ecluse` will be wrong. Fix: `ecluse down feat-foo --keep-worktree` then `ecluse up feat-foo --reuse-worktree`, or pin a specific port with `--port name=value`.
 - **No process lifecycle management for native services** — for `host` and `hybrid` modes, ecluse writes the environment but does not start or stop your app. If a native service fails to bind after `up`, ecluse cannot retry or restart it. You must do a `down`/`up` cycle yourself.
 - **Mode is set at `init`, not re-detected on `up`** — to change: `ecluse init --mode <new>`
-- **One compose file per repo root** — monorepos: run `ecluse init` per subdirectory
+- **Multiple compose files supported via `compose` field** — each `[[services]]` block with `run = "docker"` can point at its own compose file; services without it fall back to the root compose file. Run `ecluse init` per subdirectory only when you need fully independent slot pools.
 - **`localhost:<port>` only** — no public URLs; use cloudflared or ngrok alongside ecluse
 - **No agent process sandboxing** — container mode isolates services, not the agent's filesystem
 - **`ecluse shell` is for humans, not agents** — agents use `ecluse up --json` or `ecluse env` to get the worktree path and env vars, then operate directly; `ecluse shell` spawns an interactive subshell which blocks non-interactive execution
@@ -504,6 +504,7 @@ base_port = 3000        # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 300
 name = "postgres"
 run = "docker"
 base_port = 5432        # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
+# compose = "services/postgres/docker-compose.yml"  # optional: per-service compose file
 
 # Optional: lifecycle hooks — run in the worktree with all env vars set
 [hooks]
