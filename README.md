@@ -10,6 +10,7 @@ Each git worktree gets its own slot — isolated ports, its own services, nothin
 [![Crates.io](https://img.shields.io/crates/v/ecluse.svg)](https://crates.io/crates/ecluse)
 [![Homebrew](https://img.shields.io/badge/homebrew-hefgi%2Ftap-orange)](https://github.com/hefgi/homebrew-tap)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-hefgi.github.io%2Fecluse-blue)](https://hefgi.github.io/ecluse/)
 
 ---
 
