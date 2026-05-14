@@ -7,6 +7,7 @@ mod env;
 mod error;
 mod hooks;
 mod modes;
+mod process;
 mod slot;
 mod state;
 mod validate;
@@ -122,6 +123,19 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         hooks: config::HookConfig::default(),
     };
     cfg.save(&cwd)?;
+
+    // Detect and save global process_manager config
+    let pm = process::detect_process_manager();
+    let global_cfg = process::GlobalConfig {
+        process_manager: pm.clone(),
+    };
+    match process::save_global_config(&global_cfg) {
+        Ok(()) => println!(
+            "process_manager = {} (written to ~/.config/ecluse/config.toml)",
+            pm
+        ),
+        Err(e) => eprintln!("warning: could not write global config: {}", e),
+    }
 
     // Create .ecluse/ and suggest .gitignore
     let ecluse_dir = cwd.join(".ecluse");
@@ -311,6 +325,10 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         eprintln!("warning: {}", w);
     }
 
+    // Validate process manager availability early (before creating worktree)
+    let global = process::load_global_config()?;
+    validate::validate_process_manager(&global.process_manager)?;
+
     let mut guard = state::StateGuard::acquire(&root)?;
 
     if guard.state.find_session(&args.slug).is_some() {
@@ -419,7 +437,13 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         .clone();
 
     let handler = modes::get_handler(&config);
-    handler.bring_down(&session, &config, &root, args.keep_volumes, args.keep_worktree)?;
+    handler.bring_down(
+        &session,
+        &config,
+        &root,
+        args.keep_volumes,
+        args.keep_worktree,
+    )?;
 
     guard.state.remove_session(&args.slug);
     guard.commit()?;
@@ -493,6 +517,14 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
         .collect();
 
     println!("{}", Table::new(rows));
+
+    // Warn about any nohup-managed processes that have died
+    for s in &guard.state.sessions {
+        for w in process::check_processes_alive(&s.process_manager, &s.spawn_result(), &s.slug) {
+            eprintln!("warning: [{}] {}", s.slug, w);
+        }
+    }
+
     Ok(())
 }
 
@@ -529,6 +561,19 @@ fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
         vec![]
     };
 
+    // If the session was started with tmux, attach to that session
+    if let Some(tmux_session) = &session.tmux_session {
+        println!(
+            "Attaching to tmux session '{}' for ecluse session '{}'.",
+            tmux_session, session.slug
+        );
+        let status = std::process::Command::new("tmux")
+            .args(["attach", "-t", tmux_session])
+            .status()
+            .context("failed to attach to tmux session")?;
+        std::process::exit(status.code().unwrap_or(0));
+    }
+
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
 
     println!(
@@ -557,19 +602,17 @@ fn cmd_validate(args: cli::ValidateArgs) -> Result<()> {
         eprintln!("warning: {}", w);
     }
 
-    println!("Config at {} is valid.", root.join(".ecluse.toml").display());
+    let global = process::load_global_config()?;
+    validate::validate_process_manager(&global.process_manager)?;
+
     println!(
-        "  max_slots:         {}",
-        config.max_slots
+        "Config at {} is valid.",
+        root.join(".ecluse.toml").display()
     );
-    println!(
-        "  strict_port:       {}",
-        config.strict_port
-    );
-    println!(
-        "  port_search_range: {}",
-        config.port_search_range
-    );
+    println!("  max_slots:         {}", config.max_slots);
+    println!("  strict_port:       {}", config.strict_port);
+    println!("  port_search_range: {}", config.port_search_range);
+    println!("  process_manager:   {}", global.process_manager);
 
     if !config.services.is_empty() {
         println!("  services:");
@@ -587,10 +630,18 @@ fn cmd_validate(args: cli::ValidateArgs) -> Result<()> {
     if args.ports {
         println!();
         println!("Port allocation across all slots:");
-        let header_parts: Vec<String> = config.services.iter().map(|s| format!("{:>20}", s.name)).collect();
+        let header_parts: Vec<String> = config
+            .services
+            .iter()
+            .map(|s| format!("{:>20}", s.name))
+            .collect();
         println!("  {:>6}  {}", "slot", header_parts.join("  "));
         for slot in 1..=config.max_slots {
-            let port_parts: Vec<String> = config.services.iter().map(|s| format!("{:>20}", s.port(slot))).collect();
+            let port_parts: Vec<String> = config
+                .services
+                .iter()
+                .map(|s| format!("{:>20}", s.port(slot)))
+                .collect();
             println!("  {:>6}  {}", slot, port_parts.join("  "));
         }
     }
@@ -650,5 +701,14 @@ fn cmd_env(args: cli::EnvArgs) -> Result<()> {
         "env": env_vars,
     });
     println!("{}", serde_json::to_string_pretty(&out)?);
+
+    for w in process::check_processes_alive(
+        &session.process_manager,
+        &session.spawn_result(),
+        &session.slug,
+    ) {
+        eprintln!("warning: {}", w);
+    }
+
     Ok(())
 }
