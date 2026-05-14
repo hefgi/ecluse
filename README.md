@@ -75,10 +75,31 @@ cd my-project
 ecluse init              # detects mode, writes .ecluse.toml
 ecluse up feat-foo       # creates worktree + slot
 ecluse shell feat-foo    # drops into worktree with env loaded
-npm run dev              # PORT, DATABASE_URL, etc. already set
+npm run dev              # PORT already set — app binds to its own port
 ```
 
-Your app runs on a unique port. Other sessions run in parallel without touching yours. Type `exit` to leave the session.
+`ecluse init` writes a `.ecluse.toml` at repo root. Here's what a typical one looks like:
+
+```toml
+mode = "hybrid"          # container | host | hybrid
+
+[[services]]
+name = "api"
+base_port = 3000         # slot 1 → PORT=3001, slot 2 → PORT=3002
+command = "npm run dev"  # ecluse spawns this; each session gets its own port
+
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432         # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
+
+[[services]]
+name = "redis"
+run = "docker"
+base_port = 6379         # slot 1 → ECLUSE_REDIS_PORT=6380, slot 2 → 6381
+```
+
+Each `ecluse up` picks the next free slot, starts isolated services, and writes all ports to `.env.ecluse` in the worktree. Type `exit` (or `ecluse down`) to tear everything down.
 
 ## Agent skills
 
