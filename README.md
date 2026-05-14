@@ -137,6 +137,11 @@ The central concept is a **slot** — an integer from 1 to `max_slots`. Every re
 
 Three thin mode implementations share this slot primitive. Mode is selected once at `init` time and stored in `.ecluse.toml`.
 
+**How services are started depends on mode:**
+
+- `container` — everything runs via Docker Compose. ecluse generates a per-slot overlay and calls `docker compose up`.
+- `host` / `hybrid` — native services are spawned using your system's process manager. ecluse uses **tmux** if available (one detached session per slot, one window per service), falling back to **nohup** otherwise (background processes with logs at `.ecluse/logs/<slug>/`). Docker data services in hybrid mode still go through Compose. Set `command` on a `[[services]]` entry to opt in; services without `command` are not spawned.
+
 ## Commands
 
 ```
