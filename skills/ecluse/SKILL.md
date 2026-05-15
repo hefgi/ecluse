@@ -158,6 +158,50 @@ Each session is a separate git branch and worktree. They don't interfere.
 - **"all slots in use"** — `ecluse ls` to find stale sessions, `ecluse down` the oldest
 - **Port in use** — `lsof -iTCP:<port> -sTCP:LISTEN` to find the blocker
 
+### Port wiring — exhaust .ecluse.toml options before touching app code
+
+When a service has a hardcoded port or reads it from a config file, resolve it through `.ecluse.toml` configuration. Only modify application source code as a last resort.
+
+**Resolution order (stop at the first that works):**
+
+1. **CLI flag in `command`** — most frameworks accept `--port` as a CLI argument. Pass the ecluse var directly:
+   ```toml
+   [[services]]
+   name = "web"
+   base_port = 3000
+   command = "vite --port $ECLUSE_WEB_PORT"        # Vite
+   # command = "next dev --port $ECLUSE_WEB_PORT"  # Next.js
+   # command = "bin/rails s -p $ECLUSE_WEB_PORT"   # Rails
+   # command = "pnpm dev --port $ECLUSE_WEB_PORT"  # any Vite-based monorepo package
+   ```
+
+2. **`port_env`** — app reads a custom env var name (not `PORT`). Map the allocated port to that name:
+   ```toml
+   [[services]]
+   name = "api"
+   base_port = 4000
+   port_env = "DJANGO_PORT"   # ecluse sets DJANGO_PORT = allocated port
+   command = "python manage.py runserver 0.0.0.0:$DJANGO_PORT"
+   ```
+   Multiple services that each need a distinct var (e.g. a monorepo with three APIs that all read `process.env.PORT`):
+   ```toml
+   [[services]]
+   name = "api"
+   base_port = 4444
+   port_env = "ECLUSE_API_PORT"
+   command = "pnpm --filter api dev --port $ECLUSE_API_PORT"
+
+   [[services]]
+   name = "admin-api"
+   base_port = 4544
+   port_env = "ECLUSE_ADMIN_API_PORT"
+   command = "pnpm --filter admin-api dev --port $ECLUSE_ADMIN_API_PORT"
+   ```
+
+3. **Modify app source code** — only if the framework has no `--port` flag and reads no env var at all (rare). Document why the other options were not viable before making the change.
+
+**Do not** modify `vite.config.ts`, `next.config.js`, `config/puma.rb`, or similar config files when a CLI flag or `port_env` can achieve the same result.
+
 ---
 
 ## Choosing a Mode
@@ -250,7 +294,7 @@ ecluse down feat-foo --keep-volumes   # keeps volumes
 
 ### Common pitfalls
 
-- **Hardcoded `localhost:3000` in app code** — read from `$PORT` and `$ECLUSE_<SERVICE>_PORT` instead
+- **Hardcoded port in app code or config file** — use a CLI flag in `command` or `port_env` in `.ecluse.toml` before modifying app source; see Port wiring section in Agent Workflow
 - **`--watch` requires Compose v2.22+** — pass `ecluse up --watch`
 - **Invoking `docker compose` directly** — the overlay won't be included; use `ecluse up` or add `-f .ecluse/overlays/<slug>.yml`
 
@@ -465,7 +509,7 @@ What ecluse intentionally does not do in v0. These are design decisions, not bug
 
 - **Ports are checked, not reserved** — ecluse finds a free port at `up` time and writes it to `.env.ecluse`. There is a small window between that check and when your process actually binds. If another process takes the port in between, the value in `.env.ecluse` will be wrong. Fix: `ecluse down feat-foo --keep-worktree` then `ecluse up feat-foo --reuse-worktree`, or pin a specific port with `--port name=value`.
 - **No process lifecycle management beyond spawn/kill** — ecluse can spawn native services on `up` (via `command` + `process_manager`) and kill them on `down`, but cannot restart a crashed process. If a service dies, check logs and do a `down`/`up` cycle. `ecluse ls` and `ecluse env` warn about dead nohup processes.
-- **`command` requires the app to read its port from the environment** — ecluse injects the full `.env.ecluse` contents (`PORT`, `ECLUSE_SLOT`, `ECLUSE_SLUG`, `ECLUSE_MODE`, all `ECLUSE_<NAME>_PORT` vars, and any `port_env` aliases) directly into the spawned process environment — no separate sourcing step needed. This fails only if the app ignores the environment entirely: port hardcoded in source, or set in a config file (e.g. `config/puma.rb`, `vite.config.ts`). Use `port_env = "DJANGO_PORT"` to inject a custom var name, or pass via CLI flag: `command = "next dev --port $PORT"`.
+- **`command` requires the app to expose a port entry point** — ecluse injects the full `.env.ecluse` contents (`PORT`, `ECLUSE_SLOT`, `ECLUSE_SLUG`, `ECLUSE_MODE`, all `ECLUSE_<NAME>_PORT` vars, and any `port_env` aliases) directly into the spawned process environment — no separate sourcing step needed. If the port is hardcoded or set in a config file, resolve it via `.ecluse.toml` first: pass it as a CLI flag (`command = "vite --port $ECLUSE_WEB_PORT"`), or use `port_env` to inject it under the var name the app already reads. Modifying app source code is the last resort — see [Port wiring](#port-wiring--exhaust-eclusetoml-options-before-touching-app-code) above.
 - **Mode is set at `init`, not re-detected on `up`** — to change: `ecluse init --mode <new>`
 - **Multiple compose files supported via `compose` field** — each `[[services]]` block with `run = "docker"` can point at its own compose file; services without it fall back to the root compose file. Run `ecluse init` per subdirectory only when you need fully independent slot pools.
 - **`localhost:<port>` only** — no public URLs; use cloudflared or ngrok alongside ecluse
