@@ -1,13 +1,14 @@
 # Commands
 
 ```
-ecluse init [--mode container|host|hybrid] [--explain] [--yes]
-ecluse up <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>]
-ecluse shell <slug>
-ecluse env [<slug>]
-ecluse down <slug> [--keep-volumes] [--keep-branch] [--keep-worktree]
-ecluse ls [--json]
-ecluse validate [--ports]
+ecluse init     [--mode container|host|hybrid] [--explain] [--yes] [--quiet]
+ecluse up       <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--quiet]
+ecluse down     <slug> [--keep-volumes] [--keep-branch] [--keep-worktree] [--quiet]
+ecluse ls       [--json]
+ecluse shell    <slug>
+ecluse env      [<slug>]
+ecluse validate [--ports] [--quiet]
+ecluse shutdown [--keep-volumes] [--keep-worktrees] [--quiet]
 ```
 
 ## ecluse init
@@ -19,6 +20,7 @@ Detects the right mode for your repo and writes `.ecluse.toml`. Runs interactive
 | `--mode container\|host\|hybrid` | Override detected mode |
 | `--explain` | Show detection signals |
 | `--yes` | Skip confirmation prompt |
+| `--quiet` | Suppress step output |
 
 ## ecluse up
 
@@ -31,6 +33,7 @@ Creates a git worktree, allocates a slot, starts services, and writes `.env.eclu
 | `--json` | Output worktree path + env vars as JSON |
 | `--reuse-worktree` | Reuse an existing worktree instead of creating one |
 | `--port <name>=<value>` | Pin a service to a specific port for this session |
+| `--quiet` | Suppress step output (implied by `--json`) |
 
 ## ecluse down
 
@@ -39,8 +42,19 @@ Tears down services, frees the slot, and removes the worktree.
 | Flag | Description |
 |---|---|
 | `--keep-volumes` | Preserve named Docker volumes |
-| `--keep-branch` | Keep the git branch |
-| `--keep-worktree` | Keep the worktree directory |
+| `--keep-branch` | Keep the git branch (no-op — branches are never deleted by ecluse) |
+| `--keep-worktree` | Keep the worktree directory on disk |
+| `--quiet` | Suppress step output |
+
+## ecluse shutdown
+
+Tears down all active sessions at once. Equivalent to running `ecluse down` on every session.
+
+| Flag | Description |
+|---|---|
+| `--keep-volumes` | Preserve named Docker volumes |
+| `--keep-worktrees` | Keep worktree directories on disk |
+| `--quiet` | Suppress step output |
 
 ## ecluse shell
 
@@ -59,3 +73,8 @@ Lists active sessions. Use `--json` for machine-readable output.
 ## ecluse validate
 
 Validates port ranges in `.ecluse.toml` and checks for gaps or collisions. Use `--ports` to preview the full port allocation table across all slots. Also checks that the configured `process_manager` binary is installed (e.g. tmux or nohup).
+
+| Flag | Description |
+|---|---|
+| `--ports` | Print the full port allocation table for all slots |
+| `--quiet` | Suppress step output |

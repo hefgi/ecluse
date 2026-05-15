@@ -30,7 +30,7 @@ cargo test detect::tests
 
 ```
 src/
-├── main.rs       command handlers (init/up/down/ls/shell/env)
+├── main.rs       command handlers (init/up/down/ls/shell/env/validate/shutdown)
 ├── cli.rs        clap CLI definitions
 ├── config.rs     .ecluse.toml parsing, Config struct, Mode enum
 ├── slot.rs       slot allocation (first free in 1..max_slots)
@@ -39,7 +39,7 @@ src/
 ├── error.rs      EcluseError variants with actionable messages
 ├── detect.rs     mode auto-detection via signal scoring
 ├── worktree.rs   git worktree create/remove wrappers
-├── hooks.rs      on_up/on_down lifecycle hook execution
+├── hooks.rs      pre_up/post_up/pre_down/post_down lifecycle hook execution
 ├── compose.rs    docker-compose.yml parsing + overlay generation
 ├── docker.rs     Docker CLI wrappers
 └── modes/        ModeHandler trait + container/host/hybrid impls
