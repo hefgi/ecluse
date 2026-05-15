@@ -4,7 +4,8 @@
 
 **Ephemeral local environments for coding agents — any stack.**
 
-Each git worktree gets its own slot — isolated ports, its own services, nothing shared.
+Each git worktree gets its own slot — isolated ports, isolated services, isolated data.
+Works whether your stack runs in Docker, on the host, or a mix. No collisions, clean teardown.
 
 [![CI](https://github.com/hefgi/ecluse/actions/workflows/ci.yml/badge.svg)](https://github.com/hefgi/ecluse/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/ecluse.svg)](https://crates.io/crates/ecluse)
