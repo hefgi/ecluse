@@ -1,12 +1,12 @@
 ---
 name: ecluse
 description: >
-  Complete reference for ecluse — the per-worktree dev environment isolation CLI.
-  Use this skill whenever ecluse is mentioned, a .ecluse.toml file is present in
-  the repo, the user asks about worktree isolation, parallel dev environments,
-  or port/database conflicts between branches. If you are a coding agent about to
-  do substantive work in a repo that has .ecluse.toml, use this skill automatically
-  before starting — do not wait to be asked.
+  Complete reference for ecluse — ephemeral local environments for coding agents,
+  any stack. Use this skill whenever ecluse is mentioned, a .ecluse.toml file is
+  present in the repo, the user asks about worktree isolation, parallel dev
+  environments, or port/database conflicts between branches. If you are a coding
+  agent about to do substantive work in a repo that has .ecluse.toml, use this
+  skill automatically before starting — do not wait to be asked.
 tags:
   - ecluse
   - worktree
@@ -18,7 +18,9 @@ tags:
 
 # ecluse
 
-Per-worktree isolation for development environments. Each `ecluse up` allocates a **slot** — an integer that drives every isolated resource: port offset, database name, Docker volume names, and git worktree. Nothing leaks between sessions.
+Ephemeral local environments for coding agents — any stack. Each git worktree gets its own slot — isolated ports, isolated services, isolated data. Works whether your stack runs in Docker, on the host, or a mix. No collisions, clean teardown.
+
+Each `ecluse up` allocates a **slot** — an integer that drives every isolated resource: port offset, database name, Docker volume names, and git worktree. Nothing leaks between sessions.
 
 ## Quick navigation
 

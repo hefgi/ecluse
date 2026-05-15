@@ -1,8 +1,8 @@
 # ecluse
 
-**Per-worktree isolation. Pick what you need isolated.**
+**Ephemeral local environments for coding agents — any stack.**
 
-Each git worktree gets its own slot — isolated ports, its own services, nothing shared. Built for coding agents running tasks in parallel.
+Each git worktree gets its own slot — isolated ports, isolated services, isolated data. Works whether your stack runs in Docker, on the host, or a mix. No collisions, clean teardown.
 
 ---
 

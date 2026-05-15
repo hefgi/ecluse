@@ -1,6 +1,6 @@
 [book]
 title = "ecluse"
-description = "Per-worktree isolation for parallel coding agents"
+description = "Ephemeral local environments for coding agents — any stack."
 authors = ["Hefgi"]
 language = "en"
 src = "src"
