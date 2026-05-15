@@ -1,35 +1,68 @@
 # Hooks
 
-Hooks run shell commands at lifecycle points. They execute inside the worktree directory with all `.env.ecluse` variables pre-loaded.
+Hooks run shell commands at lifecycle points. Define them in `.ecluse.toml`:
 
 ```toml
 [hooks]
-on_up = "npx prisma migrate deploy"
-on_down = "npx prisma migrate reset --force"
+pre_up   = "echo starting"
+post_up  = "npx prisma migrate deploy"
+pre_down = "npx prisma migrate reset --force"
+post_down = "echo done"
 ```
 
-## on_up
+## Lifecycle order
 
-Runs after services start and env vars are written, before `ecluse up` returns. Use it for:
+```
+ecluse up
+  └─ pre_up    → runs from repo root, no env vars yet
+  └─ [services start, worktree created, .env.ecluse written]
+  └─ post_up   → runs from worktree root, full env available
 
+ecluse down
+  └─ pre_down  → runs from worktree root, full env available (services still running)
+  └─ [services stopped, worktree removed]
+  └─ post_down → runs from repo root, env vars still available
+```
+
+## pre_up
+
+Runs before any infrastructure is created. Working directory is the repo root. No `ECLUSE_*` variables are available yet.
+
+Use it for: pre-flight checks, pulling images, anything that must happen before services start.
+
+## post_up
+
+Runs after all services are up and `.env.ecluse` is written. Working directory is the worktree root. All `ECLUSE_*` variables are available.
+
+Use it for:
 - Database migrations
 - Seeding
 - Any setup your app needs before it can run
 
-## on_down
+## pre_down
 
-Runs before services stop. Use it for:
+Runs before services are killed or containers are stopped. Working directory is the worktree root. All `ECLUSE_*` variables are available.
 
-- Resetting database state
-- Cleanup that must happen while services are still running
+Use it for:
+- Draining connections
+- Resetting database state while the database is still running
+
+## post_down
+
+Runs after all services are stopped and the worktree is removed. Working directory is the repo root. Env vars from the session are still available.
+
+Use it for: cleanup that should happen after everything is gone (notifications, CI status updates, etc.).
 
 ## Environment
 
-All hooks run with:
+All hooks receive the session's env vars except `pre_up` (which runs before anything exists):
 
-- Working directory set to the worktree root
-- All `ECLUSE_*` variables in the environment
-- `PORT`, `ECLUSE_SLOT`, `ECLUSE_SLUG`, `ECLUSE_MODE` available
+| Hook | Working dir | Env vars |
+|---|---|---|
+| `pre_up` | repo root | none |
+| `post_up` | worktree root | all `ECLUSE_*` + `PORT` |
+| `pre_down` | worktree root | all `ECLUSE_*` + `PORT` |
+| `post_down` | repo root | all `ECLUSE_*` + `PORT` |
 
 ## Examples
 
@@ -37,23 +70,25 @@ All hooks run with:
 
 ```toml
 [hooks]
-on_up = "npx prisma migrate deploy"
-on_down = "npx prisma migrate reset --force"
+post_up  = "npx prisma migrate deploy"
+pre_down = "npx prisma migrate reset --force"
 ```
 
 ### Rails
 
 ```toml
 [hooks]
-on_up = "bundle exec rails db:migrate"
-on_down = "bundle exec rails db:drop"
+post_up  = "bundle exec rails db:migrate"
+pre_down = "bundle exec rails db:drop"
 ```
 
 ### Multiple commands
 
 ```toml
 [hooks]
-on_up = "npx prisma migrate deploy && npx prisma db seed"
+post_up = "npx prisma migrate deploy && npx prisma db seed"
 ```
 
-ecluse doesn't manage databases directly — your app's own tooling handles that via hooks.
+## Deprecated field names
+
+`on_up` and `on_down` still work as aliases for `pre_up` and `pre_down` respectively, but are deprecated. Migrate to the four-field form above.

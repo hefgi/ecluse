@@ -29,10 +29,10 @@ name = "postgres"
 run = "docker"
 base_port = 5432             # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
 
-# Optional: lifecycle hooks — run in the worktree with all env vars set
+# Optional: lifecycle hooks (see Hooks page for full details)
 [hooks]
-on_up = "npx prisma migrate deploy"
-on_down = "npx prisma migrate reset --force"
+post_up  = "npx prisma migrate deploy"
+pre_down = "npx prisma migrate reset --force"
 ```
 
 ## Fields
@@ -45,6 +45,8 @@ on_down = "npx prisma migrate reset --force"
 | `worktree_dir` | string | `".ecluse/worktrees"` | Directory for git worktrees |
 | `strict_port` | bool | `false` | Fail immediately on port collision instead of searching |
 | `port_search_range` | integer | `10` | How many alternatives to try on collision |
+| `app_label` | string | `"ecluse.role"` | Docker Compose label key used to identify app vs data services in hybrid mode |
+| `app_label_value` | string | `"app"` | Value of `app_label` that marks a service as the app (not a data service) |
 
 ## `[[services]]`
 
@@ -82,9 +84,11 @@ Run `ecluse validate` to check the configured binary is installed.
 
 ## `[hooks]`
 
-| Field | Description |
-|---|---|
-| `on_up` | Shell command run after services start, inside the worktree with all env vars loaded |
-| `on_down` | Shell command run before services stop |
+| Field | When it runs | Env vars |
+|---|---|---|
+| `pre_up` | Before any infrastructure is created | None (runs from repo root) |
+| `post_up` | After all services are up and `.env.ecluse` is written | All `ECLUSE_*` + `PORT` |
+| `pre_down` | Before services are stopped | All `ECLUSE_*` + `PORT` |
+| `post_down` | After all services are stopped and worktree is removed | All `ECLUSE_*` + `PORT` |
 
-Use hooks for migrations, seeding, or teardown. ecluse doesn't manage databases directly — your app's own tooling handles that via `on_up`.
+Use `post_up` for migrations and seeding, `pre_down` for teardown that needs a live database. See the [Hooks](hooks.md) page for full details and examples.
