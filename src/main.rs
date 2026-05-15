@@ -326,6 +326,29 @@ fn validate_slug(slug: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_branch(branch: &str) -> Result<()> {
+    if branch.is_empty() {
+        return Err(anyhow::anyhow!("branch name must not be empty"));
+    }
+    if branch.starts_with('-') {
+        return Err(anyhow::anyhow!(
+            "invalid branch name '{}': must not start with '-'",
+            branch
+        ));
+    }
+    // Reject git refspec metacharacters that could resolve to unintended commits
+    for ch in ["..", "~", "^", ":"] {
+        if branch.contains(ch) {
+            return Err(anyhow::anyhow!(
+                "invalid branch name '{}': must not contain '{}'",
+                branch,
+                ch
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn cmd_up(args: cli::UpArgs) -> Result<()> {
     // --json implies --quiet for step output
     let log = log::StepLogger::new(args.quiet || args.json);
@@ -359,6 +382,7 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         .branch
         .clone()
         .unwrap_or_else(|| format!("{}/{}", config.prefix, args.slug));
+    validate_branch(&branch)?;
 
     let handler = modes::get_handler(&config);
 
