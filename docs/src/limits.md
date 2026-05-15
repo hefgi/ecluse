@@ -26,7 +26,7 @@ ecluse up feat-foo --reuse-worktree
 
 ## `command` requires the app to read its port from the environment
 
-ecluse injects `PORT`, `ECLUSE_<NAME>_PORT`, and any `port_env` aliases into the spawned process. This only works if the app reads its port from the environment. It will not work if:
+ecluse injects the full `.env.ecluse` contents — `PORT`, `ECLUSE_SLOT`, `ECLUSE_SLUG`, `ECLUSE_MODE`, all `ECLUSE_<NAME>_PORT` vars, and any `port_env` aliases — directly into the environment of the spawned process. There is no separate sourcing step; the same map written to `.env.ecluse` is passed to the child process before exec. This only fails if the app ignores the environment entirely:
 
 - **The port is hardcoded in source code** — change the app to read `$PORT`.
 - **The port is set in a config file** (e.g. `config/puma.rb`, `vite.config.ts`, `.env`) — ecluse does not modify app config files; update the config to read from the environment instead.
