@@ -2,7 +2,7 @@
 
 <img src="banner.png" alt="ecluse" width="600" />
 
-**Per-worktree isolation. Pick what you need isolated.**
+**Ephemeral local environments for coding agents — any stack.**
 
 Each git worktree gets its own slot — isolated ports, its own services, nothing shared.
 
