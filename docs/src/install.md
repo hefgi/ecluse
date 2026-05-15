@@ -19,13 +19,13 @@ Requires Rust 1.85+.
 Install the agent skill so your coding agent knows every command, mode, and workflow:
 
 ```bash
-npx skills add hefgi/ecluse -y
+npx skills add hefgi/ecluse -g
 ```
 
 | | Command |
 |---|---|
-| Global | `npx skills add hefgi/ecluse -y` |
-| Project-local | `npx skills add hefgi/ecluse -y --out .` |
+| Global | `npx skills add hefgi/ecluse -g` |
+| Project-local | `npx skills add hefgi/ecluse` |
 
 ## Dependencies
 

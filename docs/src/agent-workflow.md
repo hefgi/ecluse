@@ -62,5 +62,5 @@ All three run the full verification loop simultaneously — build, migrate, test
 The skill teaches your agent every command, failure mode, and config option. Install it so your agent doesn't have to figure this out from scratch:
 
 ```bash
-npx skills add hefgi/ecluse -y
+npx skills add hefgi/ecluse -g
 ```

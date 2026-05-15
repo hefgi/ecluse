@@ -64,7 +64,7 @@ cargo install ecluse
 Then install the agent skill:
 
 ```bash
-npx skills add hefgi/ecluse -y
+npx skills add hefgi/ecluse -g
 ```
 
 Requires Rust 1.85+. For container and hybrid modes, [OrbStack](https://orbstack.dev) is recommended over Docker Desktop on macOS — faster, less memory.
