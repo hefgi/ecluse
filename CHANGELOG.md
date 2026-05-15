@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.2.2] — 2026-05-15
+
+### Fixed
+- `--branch` flag now validates the value to block git option injection and malformed refspecs
+- Compose file paths that escape the repo root are now rejected, preventing path traversal
+- Removed `set_var(HOME)` call in process config tests that introduced a race condition under parallel test execution
+
+---
+
 ## [0.2.1] — 2026-05-14
 
 ### Added
