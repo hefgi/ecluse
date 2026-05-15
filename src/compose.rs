@@ -917,8 +917,14 @@ pub fn resolve_service_compose(
 ) -> Option<std::path::PathBuf> {
     if let Some(ref rel) = svc.compose {
         let p = root.join(rel);
-        if p.exists() {
-            Some(p)
+        // Reject paths that escape the repo root via ../ or symlinks
+        let canonical_p = p.canonicalize().ok()?;
+        let canonical_root = root.canonicalize().ok()?;
+        if !canonical_p.starts_with(&canonical_root) {
+            return None;
+        }
+        if canonical_p.exists() {
+            Some(canonical_p)
         } else {
             None
         }
