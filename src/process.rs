@@ -388,7 +388,8 @@ mod tests {
         };
         let content = toml::to_string_pretty(&original).unwrap();
         std::fs::write(&path, &content).unwrap();
-        let loaded: GlobalConfig = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let loaded: GlobalConfig =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(loaded.process_manager, ProcessManager::Tmux);
     }
 

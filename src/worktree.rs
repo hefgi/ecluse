@@ -90,7 +90,6 @@ impl WorktreeManager {
         }
         Ok(())
     }
-
 }
 
 #[cfg(test)]
