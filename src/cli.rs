@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "ecluse",
     version,
-    about = "Per-worktree isolation. Pick what you need isolated.",
+    about = "Ephemeral local environments for coding agents — any stack.",
     long_about = None
 )]
 pub struct Cli {

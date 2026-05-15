@@ -2,7 +2,7 @@
 name = "ecluse"
 version = "0.2.1"
 edition = "2021"
-description = "Per-worktree isolation. Pick what you need isolated."
+description = "Ephemeral local environments for coding agents — any stack."
 license = "Apache-2.0"
 homepage = "https://github.com/hefgi/ecluse"
 repository = "https://github.com/hefgi/ecluse"

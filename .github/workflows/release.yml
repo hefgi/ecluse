@@ -138,7 +138,7 @@ jobs:
           mkdir -p homebrew-tap/Formula
           cat > homebrew-tap/Formula/ecluse.rb << FORMULA
           class Ecluse < Formula
-            desc "Per-worktree isolation for AI agentic engineering and multi-session development"
+            desc "Ephemeral local environments for coding agents — any stack."
             homepage "https://github.com/hefgi/ecluse"
             version "${VERSION#v}"
             license "Apache-2.0"
