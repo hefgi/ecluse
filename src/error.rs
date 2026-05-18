@@ -156,6 +156,37 @@ mod tests {
         assert!(msg.contains("12345"));
         assert!(msg.contains("permission denied"));
     }
+
+    #[test]
+    fn worktree_not_found_message_contains_slug() {
+        let e = EcluseError::WorktreeNotFound {
+            slug: "my-feat".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("my-feat"));
+        assert!(msg.contains("ecluse up"));
+    }
+
+    #[test]
+    fn no_processes_found_message_contains_path() {
+        let e = EcluseError::NoProcessesFound {
+            path: "/some/worktree".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("/some/worktree"));
+        assert!(msg.contains("start your services"));
+    }
+
+    #[test]
+    fn sync_failed_message_contains_service_and_reason() {
+        let e = EcluseError::SyncFailed {
+            service: "api".into(),
+            reason: "process not found".into(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("api"));
+        assert!(msg.contains("process not found"));
+    }
 }
 
 use thiserror::Error;
@@ -232,4 +263,13 @@ pub enum EcluseError {
 
     #[error("failed to kill PID {pid}: {reason}; kill it manually")]
     KillFailed { pid: u32, reason: String },
+
+    #[error("worktree not found for slug '{slug}'; run `ecluse up {slug}` or cd into the worktree first")]
+    WorktreeNotFound { slug: String },
+
+    #[error("no running processes found in worktree '{path}'; start your services first, then run `ecluse sync`")]
+    NoProcessesFound { path: String },
+
+    #[error("sync failed for service '{service}': {reason}")]
+    SyncFailed { service: String, reason: String },
 }
