@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.2.3] — 2026-05-18
 
+### Added
+- `--services <name>,<name>` flag on `ecluse up` — bring up only a subset of the services defined in `.ecluse.toml`. Unknown service names are rejected before any worktree is created. The subset is stored in session state and surfaced in `ecluse env` output.
+
 ### Fixed
 - Compose overlay now clears hardcoded `container_name` fields by setting them to `null`, preventing Docker name conflicts when an ecluse session runs alongside the main dev environment.
 
