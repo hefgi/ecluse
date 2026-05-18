@@ -5,11 +5,12 @@ ecluse init     [--mode container|host|hybrid] [--explain] [--yes] [--quiet]
 ecluse up       <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--quiet]
 ecluse sync     <slug> [--json] [--quiet]
 ecluse down     <slug> [--keep-volumes] [--keep-branch] [--keep-worktree] [--quiet]
+ecluse shutdown [--keep-volumes] [--keep-worktrees] [--quiet]
+ecluse flush    [--yes] [--quiet]
 ecluse ls       [--json]
 ecluse shell    <slug>
 ecluse env      [<slug>]
 ecluse validate [--ports] [--quiet]
-ecluse shutdown [--keep-volumes] [--keep-worktrees] [--quiet]
 ```
 
 ## ecluse init
@@ -76,6 +77,33 @@ Tears down all active sessions at once. Equivalent to running `ecluse down` on e
 |---|---|
 | `--keep-volumes` | Preserve named Docker volumes |
 | `--keep-worktrees` | Keep worktree directories on disk |
+| `--quiet` | Suppress step output |
+
+## ecluse flush
+
+Hard reset — returns the repo to a clean state as if `ecluse init` was just run. Use this when sessions are stuck, state is corrupted, or you want to wipe everything and start fresh.
+
+```bash
+ecluse flush        # prompts for confirmation
+ecluse flush --yes  # skip the prompt (CI / agent use)
+```
+
+What flush does:
+
+1. Gracefully tears down all sessions known to `state.json` (same as `ecluse shutdown`).
+2. Kills orphaned tmux sessions named `ecluse-*`.
+3. Stops orphaned Docker Compose projects matching `<prefix>_*` (detected via `docker ps`).
+4. Runs `git worktree remove --force` on every directory under `worktree_dir`, then `git worktree prune`.
+5. Removes `.ecluse/pids/`, `.ecluse/logs/`, and `.ecluse/overlays/`.
+6. Resets `state.json` to `{"version": 1, "sessions": []}`.
+
+**Docker volumes are not removed** — flush clears infra but preserves data volumes. Run `docker volume prune` separately if you also want those gone.
+
+Steps 1–5 are best-effort: failures are logged and ignored. Step 6 (resetting state) is required — flush fails only if it cannot write `state.json`.
+
+| Flag | Description |
+|---|---|
+| `--yes` | Skip confirmation prompt |
 | `--quiet` | Suppress step output |
 
 ## ecluse shell

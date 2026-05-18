@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- `ecluse flush` — hard reset to clean state, regardless of what `state.json` says. Tears down all known sessions (via the same path as `ecluse shutdown`), kills orphaned tmux sessions named `ecluse-*`, stops orphaned Docker Compose projects matching `<prefix>_*`, removes all worktrees under `worktree_dir` with `git worktree remove --force`, wipes `.ecluse/pids/`, `.ecluse/logs/`, and `.ecluse/overlays/`, then resets `state.json` to an empty sessions list. Docker volumes are not removed. Steps 1–5 are best-effort; only the state reset is required. `--yes` skips the confirmation prompt for agent/CI use.
+
+---
+
 ## [0.2.4] — 2026-05-18
 
 ### Added

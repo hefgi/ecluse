@@ -154,6 +154,30 @@ After sync, `ecluse ls`, `ecluse env`, and `ecluse down` all work normally. If a
 
 **Requirement:** native services must have a `command` field in `.ecluse.toml` for sync to find them. Docker services are matched by container name.
 
+### Hard reset with ecluse flush
+
+Use `ecluse flush` when sessions are stuck, `state.json` is corrupted, or you want to wipe all ecluse state and start fresh:
+
+```bash
+ecluse flush        # prompts for confirmation
+ecluse flush --yes  # skip prompt — use in CI or agent scripts
+```
+
+Flush does the following, in order:
+
+1. Tears down all sessions known to `state.json` (same as `ecluse shutdown`)
+2. Kills orphaned tmux sessions named `ecluse-*`
+3. Stops orphaned Docker Compose projects matching `<prefix>_*` (detected via `docker ps`)
+4. Removes all directories under `worktree_dir` with `git worktree remove --force`, then `git worktree prune`
+5. Deletes `.ecluse/pids/`, `.ecluse/logs/`, `.ecluse/overlays/`
+6. Resets `state.json` to `{"version": 1, "sessions": []}`
+
+Steps 1–5 are best-effort: failures are logged and ignored. The only hard failure is step 6 (cannot reset state.json).
+
+**Docker volumes are not removed.** Run `docker volume prune` separately if you also want data volumes gone.
+
+After flush, `ecluse ls` returns "no active sessions" and all slots are free.
+
 ### Environment variables
 
 All vars are in the JSON from `ecluse up --json` or `ecluse env <slug>`.

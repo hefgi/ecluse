@@ -136,6 +136,8 @@ ecluse sync <slug> [--json]
 ecluse shell <slug>
 ecluse env [<slug>]
 ecluse down <slug> [--keep-volumes] [--keep-branch] [--keep-worktree]
+ecluse shutdown [--keep-volumes] [--keep-worktrees]
+ecluse flush [--yes]
 ecluse ls [--json]
 ecluse validate [--ports]
 ```
