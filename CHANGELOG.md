@@ -11,6 +11,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ecluse sync <slug>` — register a manually-started environment with ecluse. Discovers running processes whose cwd is inside the worktree, matches them to services declared in `.ecluse.toml` by walking the process tree from the service's `command`, and registers the session in `state.json` (including PID files so `ecluse down` can kill those processes). Docker services in hybrid mode are detected via `docker ps`. If a session already exists for the slug, sync updates its port_overrides and PID tracking in place.
 - `command` is now required for native services (`run = "native"`) in `.ecluse.toml`. Previously optional, it was always needed in practice — ecluse now enforces this at config validation time with a clear error message.
 
+### Fixed
+- Running any ecluse command from inside an ecluse-managed worktree now correctly resolves the main worktree root. Previously, `find_and_load` would walk the filesystem and find `.ecluse.toml` inside the worktree (which contains it as a committed file), treating the worktree as the project root and writing a stray `state.json` inside it. It now asks git for the main worktree root first via `git worktree list --porcelain`.
+
 ---
 
 ## [0.2.3] — 2026-05-18
