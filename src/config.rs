@@ -252,6 +252,16 @@ impl Config {
 
     pub fn find_and_load() -> Result<(Self, PathBuf)> {
         let cwd = std::env::current_dir().context("could not determine current directory")?;
+        // Use git to find the main worktree root so that running ecluse from
+        // inside an ecluse-managed worktree (which also contains .ecluse.toml)
+        // doesn't accidentally treat the worktree as the project root.
+        if let Ok(root) = crate::worktree::WorktreeManager::main_worktree_root(&cwd) {
+            if root.join(".ecluse.toml").exists() {
+                let config = Self::load(&root)?;
+                return Ok((config, root));
+            }
+        }
+        // Fall back to filesystem walk for non-git directories.
         let mut dir = cwd.as_path();
         loop {
             let candidate = dir.join(".ecluse.toml");
