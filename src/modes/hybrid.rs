@@ -29,6 +29,7 @@ impl super::ModeHandler for HybridMode {
         watch: bool,
         reuse_worktree: bool,
         port_overrides: &std::collections::HashMap<String, u16>,
+        service_filter: Option<&std::collections::HashSet<String>>,
         log: &StepLogger,
     ) -> Result<Session> {
         let wt = WorktreeManager::new(root.to_owned());
@@ -46,7 +47,11 @@ impl super::ModeHandler for HybridMode {
             hooks::run(cmd, root, &std::collections::HashMap::new())?;
         }
 
-        let docker_svcs_config = config.docker_services();
+        let docker_svcs_config: Vec<_> = config
+            .docker_services()
+            .into_iter()
+            .filter(|s| service_filter.is_none_or(|f| f.contains(&s.name)))
+            .collect();
 
         let mut allocated_docker_ports: Vec<(String, u16)> = vec![];
         let mut written_overlays: Vec<String> = vec![];
@@ -191,7 +196,11 @@ impl super::ModeHandler for HybridMode {
         }
 
         log.step("Allocating native ports...");
-        let native_svcs = config.native_services();
+        let native_svcs: Vec<_> = config
+            .native_services()
+            .into_iter()
+            .filter(|s| service_filter.is_none_or(|f| f.contains(&s.name)))
+            .collect();
         let native_ports: IndexMap<String, u16> = if native_svcs.is_empty() {
             let port = if let Some(&p) = port_overrides.get("app") {
                 p
@@ -323,6 +332,11 @@ impl super::ModeHandler for HybridMode {
             tmux_session: spawn.tmux_session,
             pid_files: spawn.pid_files,
             log_dir: spawn.log_dir,
+            services_subset: service_filter.map(|f| {
+                let mut v: Vec<String> = f.iter().cloned().collect();
+                v.sort();
+                v
+            }),
         })
     }
 

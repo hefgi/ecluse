@@ -389,6 +389,35 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
     let port_overrides: std::collections::HashMap<String, u16> =
         args.port_overrides.iter().cloned().collect();
 
+    let service_filter: Option<std::collections::HashSet<String>> =
+        match args.services.as_deref() {
+            None | Some([]) => None,
+            Some(names) => {
+                let set: std::collections::HashSet<String> =
+                    names.iter().cloned().collect();
+                for name in &set {
+                    if !config.services.iter().any(|s| &s.name == name) {
+                        let list = config
+                            .services
+                            .iter()
+                            .map(|s| s.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let hint = if list.is_empty() {
+                            "no services are defined in .ecluse.toml".to_string()
+                        } else {
+                            format!("defined services are: {list}")
+                        };
+                        return Err(anyhow::anyhow!(
+                            "unknown service '{}'; {hint}",
+                            name
+                        ));
+                    }
+                }
+                Some(set)
+            }
+        };
+
     let session = handler.bring_up(
         &args.slug,
         slot,
@@ -398,6 +427,7 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         args.watch,
         args.reuse_worktree,
         &port_overrides,
+        service_filter.as_ref(),
         &log,
     )?;
 

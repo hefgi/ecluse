@@ -25,11 +25,16 @@ impl super::ModeHandler for HostMode {
         _watch: bool,
         reuse_worktree: bool,
         port_overrides: &std::collections::HashMap<String, u16>,
+        service_filter: Option<&std::collections::HashSet<String>>,
         log: &StepLogger,
     ) -> Result<Session> {
         let wt = WorktreeManager::new(root.to_owned());
         let worktree_path = wt.worktree_path(config, slug);
-        let native_svcs = config.native_services();
+        let native_svcs: Vec<_> = config
+            .native_services()
+            .into_iter()
+            .filter(|s| service_filter.is_none_or(|f| f.contains(&s.name)))
+            .collect();
 
         // pre_up: before anything exists — runs from repo root, no env vars yet
         if let Some(cmd) = &config.hooks.pre_up {
@@ -139,6 +144,11 @@ impl super::ModeHandler for HostMode {
             tmux_session: spawn.tmux_session,
             pid_files: spawn.pid_files,
             log_dir: spawn.log_dir,
+            services_subset: service_filter.map(|f| {
+                let mut v: Vec<String> = f.iter().cloned().collect();
+                v.sort();
+                v
+            }),
         })
     }
 

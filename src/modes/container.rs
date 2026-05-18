@@ -27,6 +27,7 @@ impl super::ModeHandler for ContainerMode {
         watch: bool,
         reuse_worktree: bool,
         port_overrides: &std::collections::HashMap<String, u16>,
+        service_filter: Option<&std::collections::HashSet<String>>,
         log: &StepLogger,
     ) -> Result<Session> {
         let wt = WorktreeManager::new(root.to_owned());
@@ -44,7 +45,11 @@ impl super::ModeHandler for ContainerMode {
             hooks::run(cmd, root, &std::collections::HashMap::new())?;
         }
 
-        let docker_svcs_config = config.docker_services();
+        let docker_svcs_config: Vec<_> = config
+            .docker_services()
+            .into_iter()
+            .filter(|s| service_filter.is_none_or(|f| f.contains(&s.name)))
+            .collect();
 
         let mut allocated_ports: Vec<(String, u16)> = vec![];
         let mut written_overlays: Vec<String> = vec![];
@@ -212,6 +217,11 @@ impl super::ModeHandler for ContainerMode {
             tmux_session: None,
             pid_files: vec![],
             log_dir: None,
+            services_subset: service_filter.map(|f| {
+                let mut v: Vec<String> = f.iter().cloned().collect();
+                v.sort();
+                v
+            }),
         })
     }
 

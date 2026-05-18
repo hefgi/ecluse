@@ -60,6 +60,9 @@ pub struct Session {
     /// Log directory for nohup-managed services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_dir: Option<PathBuf>,
+    /// Services subset requested via --services; None means all services were started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub services_subset: Option<Vec<String>>,
 }
 
 impl Session {
@@ -187,6 +190,7 @@ mod tests {
             tmux_session: None,
             pid_files: vec![],
             log_dir: None,
+            services_subset: None,
         }
     }
 
@@ -364,6 +368,7 @@ mod tests {
                 tmux_session: Some("ecluse-pm-sess".into()),
                 pid_files: vec![],
                 log_dir: None,
+                services_subset: None,
             });
             guard.commit().unwrap();
         }
@@ -397,6 +402,7 @@ mod tests {
                 tmux_session: None,
                 pid_files: vec![PathBuf::from("/tmp/api.pid")],
                 log_dir: Some(PathBuf::from("/tmp/logs")),
+                services_subset: None,
             });
             guard.commit().unwrap();
         }
@@ -427,6 +433,7 @@ mod tests {
                 tmux_session: None,
                 pid_files: vec![],
                 log_dir: None,
+                services_subset: None,
             });
             guard.commit().unwrap();
         }
@@ -434,5 +441,30 @@ mod tests {
         let s = &guard2.state.sessions[0];
         assert_eq!(s.compose_project.as_deref(), Some("ecluse_compose-sess"));
         assert_eq!(s.app_port, Some(3001));
+    }
+
+    #[test]
+    fn session_services_subset_roundtrips() {
+        let dir = TempDir::new().unwrap();
+        {
+            let mut guard = StateGuard::acquire(dir.path()).unwrap();
+            let mut s = make_session("sub-sess", 1);
+            s.services_subset = Some(vec!["api".into(), "postgres".into()]);
+            guard.state.add_session(s);
+            guard.commit().unwrap();
+        }
+        let guard2 = StateGuard::acquire(dir.path()).unwrap();
+        let s = &guard2.state.sessions[0];
+        assert_eq!(
+            s.services_subset,
+            Some(vec!["api".into(), "postgres".into()])
+        );
+    }
+
+    #[test]
+    fn session_services_subset_none_not_serialized() {
+        let s = make_session("no-sub", 1);
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("services_subset"), "got: {json}");
     }
 }

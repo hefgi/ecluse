@@ -45,6 +45,7 @@ mod tests {
                     tmux_session: None,
                     pid_files: vec![],
                     log_dir: None,
+                    services_subset: None,
                 })
                 .collect(),
         }

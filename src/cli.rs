@@ -87,6 +87,10 @@ pub struct UpArgs {
     #[arg(long = "port", value_name = "NAME=PORT", value_parser = parse_port_override)]
     pub port_overrides: Vec<(String, u16)>,
 
+    /// Only bring up these services (comma-separated). Omit to start all.
+    #[arg(long, value_delimiter = ',', value_name = "NAME")]
+    pub services: Option<Vec<String>>,
+
     /// Suppress step output (implied by --json)
     #[arg(long)]
     pub quiet: bool,
