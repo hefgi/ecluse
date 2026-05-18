@@ -57,6 +57,16 @@ ecluse up fix-bug-123 --json    # slot 3, PORT=3003
 
 All three run the full verification loop simultaneously — build, migrate, test, e2e — without waiting for each other.
 
+## Recovering a manually-started environment
+
+If services were started by hand (not via `ecluse up`) or `state.json` was lost, use `ecluse sync` to register the running session:
+
+```bash
+ecluse sync <slug> --json   # discover processes, register session, return env JSON
+```
+
+After sync, `ecluse ls`, `ecluse env`, and `ecluse down` all work normally. The discovered ports appear in `port_overrides` and `.env.ecluse` is rewritten to reflect reality.
+
 ## Install the skill
 
 The skill teaches your agent every command, failure mode, and config option. Install it so your agent doesn't have to figure this out from scratch:

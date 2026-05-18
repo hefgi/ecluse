@@ -3,6 +3,7 @@
 ```
 ecluse init     [--mode container|host|hybrid] [--explain] [--yes] [--quiet]
 ecluse up       <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--quiet]
+ecluse sync     <slug> [--json] [--quiet]
 ecluse down     <slug> [--keep-volumes] [--keep-branch] [--keep-worktree] [--quiet]
 ecluse ls       [--json]
 ecluse shell    <slug>
@@ -35,6 +36,26 @@ Creates a git worktree, allocates a slot, starts services, and writes `.env.eclu
 | `--port <name>=<value>` | Pin a service to a specific port for this session |
 | `--services <name>,...` | Bring up only this subset of services; unknown names are rejected before any worktree is created |
 | `--quiet` | Suppress step output (implied by `--json`) |
+
+## ecluse sync
+
+Registers a manually-started environment with ecluse. Use this when services were started by hand (not via `ecluse up`) or when `state.json` was lost.
+
+```bash
+ecluse sync <slug>          # discover + register
+ecluse sync <slug> --json   # machine-readable output
+```
+
+`ecluse sync` finds all processes whose cwd is inside the worktree, matches them to services in `.ecluse.toml` by walking the process tree from each service's `command`, and records the actual listening ports. Docker services (hybrid mode) are detected via `docker ps` by container name. PID files are written so `ecluse down` can kill discovered processes normally.
+
+If a session for the slug already exists in `state.json`, sync refreshes its port_overrides and PID tracking without changing the slot or branch.
+
+| Flag | Description |
+|---|---|
+| `--json` | Output session info as JSON |
+| `--quiet` | Suppress step output (implied by `--json`) |
+
+**Requirements:** native services must have a `command` field in `.ecluse.toml`. Services with no matching running process are reported as warnings — partial sync is still registered.
 
 ## ecluse down
 

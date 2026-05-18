@@ -15,12 +15,13 @@ worktree_dir = ".ecluse/worktrees"
 # One [[services]] block per service. port = base_port + slot.
 # Native services run on the host; docker services run in containers.
 # The first native entry also sets the PORT alias for framework compatibility.
-# Add command = "..." to have ecluse spawn the process on ecluse up.
+# command is required for native services — ecluse spawns it on up and uses it
+# to identify the process during ecluse sync.
 
 [[services]]
 name = "api"
 base_port = 3000             # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
-command = "npm run dev"      # optional — ecluse spawns this on ecluse up
+command = "npm run dev"      # required for native services
 # port_env = "DJANGO_PORT"  # optional — also set DJANGO_PORT to the allocated port
 # port_env = ["DJANGO_PORT", "APP_PORT"]  # or multiple aliases
 
@@ -57,7 +58,7 @@ Each `[[services]]` block defines one service. Each gets a stable, collision-fre
 | `name` | string | Service name — becomes `ECLUSE_<NAME>_PORT` |
 | `base_port` | integer | Port formula: `base_port + slot` |
 | `run` | string | `"docker"` to run in a container; omit for native |
-| `command` | string | Shell command ecluse spawns on `ecluse up` (native services only; managed by your global `process_manager` setting) |
+| `command` | string | **Required for native services.** Shell command ecluse spawns on `ecluse up` and uses to identify the process during `ecluse sync`. Managed by your global `process_manager` setting. |
 | `port_env` | string or array | Extra env var names to set to this service's allocated port — accepts a single string or an array |
 
 The first native (non-docker) service entry also sets `PORT` for framework compatibility.
