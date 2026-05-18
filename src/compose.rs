@@ -113,6 +113,12 @@ pub fn generate_overlay(
 
         let mut svc_override: HashMap<String, serde_yaml::Value> = HashMap::new();
 
+        // Clear any hardcoded container_name so Docker derives a unique name from the
+        // compose project name + service name (avoids conflicts with the main dev env).
+        if svc.other.contains_key("container_name") {
+            svc_override.insert("container_name".into(), serde_yaml::Value::Null);
+        }
+
         // Rewrite ports
         if !svc.ports.is_empty() {
             let new_ports: Vec<serde_yaml::Value> =
@@ -193,6 +199,12 @@ pub fn generate_overlay_with_ports(
         }
 
         let mut svc_override: HashMap<String, serde_yaml::Value> = HashMap::new();
+
+        // Clear any hardcoded container_name so Docker derives a unique name from the
+        // compose project name + service name (avoids conflicts with the main dev env).
+        if svc.other.contains_key("container_name") {
+            svc_override.insert("container_name".into(), serde_yaml::Value::Null);
+        }
 
         // Rewrite ports using explicit host port if provided, otherwise keep as-is
         if !svc.ports.is_empty() {
@@ -882,6 +894,48 @@ mod tests {
         let cf = make_compose(vec![("app", null_svc(&["3000:3000"], &[]))]);
         let yaml = generate_overlay(&cf, 0, "slug", None).unwrap();
         assert!(yaml.contains("3000:3000"), "got: {}", yaml);
+    }
+
+    fn svc_with_container_name(name: &str, ports: &[&str]) -> Service {
+        let mut svc = null_svc(ports, &[]);
+        svc.other.insert(
+            "container_name".into(),
+            serde_yaml::Value::String(name.to_string()),
+        );
+        svc
+    }
+
+    #[test]
+    fn overlay_container_name_cleared_when_present() {
+        let cf = make_compose(vec![(
+            "postgres",
+            svc_with_container_name("onyx-postgres", &["5432:5432"]),
+        )]);
+        let yaml = generate_overlay(&cf, 1, "feat-foo", None).unwrap();
+        // null overrides the hardcoded name
+        assert!(yaml.contains("container_name: ~") || yaml.contains("container_name: null"), "got: {}", yaml);
+        assert!(!yaml.contains("onyx-postgres"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_with_ports_container_name_cleared_when_present() {
+        let cf = make_compose(vec![(
+            "redis",
+            svc_with_container_name("onyx-redis", &["6379:6379"]),
+        )]);
+        let mut ports = HashMap::new();
+        ports.insert("redis".to_string(), 6380u16);
+        let yaml = generate_overlay_with_ports(&cf, &ports, "feat-foo", None).unwrap();
+        assert!(yaml.contains("container_name: ~") || yaml.contains("container_name: null"), "got: {}", yaml);
+        assert!(!yaml.contains("onyx-redis"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_no_container_name_field_not_injected() {
+        // Services without container_name should not get a null entry added
+        let cf = make_compose(vec![("db", null_svc(&["5432:5432"], &[]))]);
+        let yaml = generate_overlay(&cf, 1, "feat-foo", None).unwrap();
+        assert!(!yaml.contains("container_name"), "got: {}", yaml);
     }
 }
 

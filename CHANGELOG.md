@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- Compose overlay now clears hardcoded `container_name` fields by setting them to `null`, preventing Docker name conflicts when an ecluse session runs alongside the main dev environment.
+
+---
+
 ## [0.2.2] — 2026-05-15
 
 ### Fixed
