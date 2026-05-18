@@ -47,6 +47,7 @@ fn run(cli: cli::Cli) -> Result<()> {
         cli::Command::Env(args) => cmd_env(args),
         cli::Command::Validate(args) => cmd_validate(args),
         cli::Command::Shutdown(args) => cmd_shutdown(args),
+        cli::Command::Sync(args) => cmd_sync(args),
     }
 }
 
@@ -402,34 +403,29 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
     let port_overrides: std::collections::HashMap<String, u16> =
         args.port_overrides.iter().cloned().collect();
 
-    let service_filter: Option<std::collections::HashSet<String>> =
-        match args.services.as_deref() {
-            None | Some([]) => None,
-            Some(names) => {
-                let set: std::collections::HashSet<String> =
-                    names.iter().cloned().collect();
-                for name in &set {
-                    if !config.services.iter().any(|s| &s.name == name) {
-                        let list = config
-                            .services
-                            .iter()
-                            .map(|s| s.name.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        let hint = if list.is_empty() {
-                            "no services are defined in .ecluse.toml".to_string()
-                        } else {
-                            format!("defined services are: {list}")
-                        };
-                        return Err(anyhow::anyhow!(
-                            "unknown service '{}'; {hint}",
-                            name
-                        ));
-                    }
+    let service_filter: Option<std::collections::HashSet<String>> = match args.services.as_deref() {
+        None | Some([]) => None,
+        Some(names) => {
+            let set: std::collections::HashSet<String> = names.iter().cloned().collect();
+            for name in &set {
+                if !config.services.iter().any(|s| &s.name == name) {
+                    let list = config
+                        .services
+                        .iter()
+                        .map(|s| s.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let hint = if list.is_empty() {
+                        "no services are defined in .ecluse.toml".to_string()
+                    } else {
+                        format!("defined services are: {list}")
+                    };
+                    return Err(anyhow::anyhow!("unknown service '{}'; {hint}", name));
                 }
-                Some(set)
             }
-        };
+            Some(set)
+        }
+    };
 
     let session = handler.bring_up(
         &args.slug,
@@ -886,6 +882,228 @@ fn cmd_env(args: cli::EnvArgs) -> Result<()> {
         &session.slug,
     ) {
         log.warn(&w);
+    }
+
+    Ok(())
+}
+
+// ── sync ──────────────────────────────────────────────────────────────────────
+
+fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
+    let log = log::StepLogger::new(args.quiet || args.json);
+
+    validate_slug(&args.slug)?;
+
+    log.step("Loading config...");
+    let (config, root) = config::Config::find_and_load()?;
+    log.detail(&format!("mode: {}", config.mode));
+
+    // Determine worktree path: prefer the standard ecluse location, fall back to cwd.
+    let wt_manager = worktree::WorktreeManager::new(root.clone());
+    let canonical_path = wt_manager.worktree_path(&config, &args.slug);
+
+    let worktree_path = if canonical_path.exists() {
+        canonical_path
+    } else {
+        let cwd = std::env::current_dir().context("could not determine current directory")?;
+        // Accept cwd if it looks like it's inside this repo's worktree area.
+        if cwd.starts_with(&root) || cwd.to_str().is_some_and(|s| s.contains(&args.slug)) {
+            cwd
+        } else {
+            return Err(error::EcluseError::WorktreeNotFound {
+                slug: args.slug.clone(),
+            }
+            .into());
+        }
+    };
+
+    log.detail(&format!("worktree: {}", worktree_path.display()));
+
+    // Acquire state lock.
+    let mut guard = state::StateGuard::acquire(&root)?;
+    let existing = guard.state.find_session(&args.slug).cloned();
+    let update_mode = existing.is_some();
+
+    // Allocate or reuse slot.
+    let slot = match &existing {
+        Some(s) => s.slot,
+        None => {
+            log.step("Allocating slot...");
+            let allocator = slot::SlotAllocator::new(&config, &guard.state);
+            let s = allocator.allocate_next()?;
+            log.detail(&format!("slot {s}"));
+            s
+        }
+    };
+
+    // Determine current branch.
+    let branch = {
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&worktree_path)
+            .output()
+            .context("failed to run git rev-parse")?;
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+
+    // Discover native processes.
+    log.step("Discovering processes in worktree...");
+    let discovered = sync::find_processes_in_worktree(&worktree_path);
+    log.detail(&format!("found {} process(es)", discovered.len()));
+
+    let native_svcs: Vec<&config::ServiceConfig> = config
+        .services
+        .iter()
+        .filter(|s| s.run == config::ServiceRun::Native)
+        .collect();
+
+    let docker_svcs: Vec<&config::ServiceConfig> = config
+        .services
+        .iter()
+        .filter(|s| s.run == config::ServiceRun::Docker)
+        .collect();
+
+    // Match native services to discovered processes.
+    log.step("Matching services...");
+    let native_matches = sync::match_services(&native_svcs, &discovered);
+
+    // Detect docker services.
+    let docker_matches = if !docker_svcs.is_empty() {
+        log.step("Detecting docker services...");
+        sync::find_docker_services(&docker_svcs, &args.slug)
+    } else {
+        vec![]
+    };
+
+    if native_matches.is_empty() && docker_matches.is_empty() {
+        return Err(error::EcluseError::NoProcessesFound {
+            path: worktree_path.display().to_string(),
+        }
+        .into());
+    }
+
+    // Warn about unmatched native services.
+    for svc in &native_svcs {
+        if svc.command.is_some() && !native_matches.iter().any(|m| m.service_name == svc.name) {
+            log.warn(&format!(
+                "could not find a running process for service '{}' (command: {})",
+                svc.name,
+                svc.command.as_deref().unwrap_or(""),
+            ));
+        }
+    }
+
+    // Write PID files and collect port_overrides.
+    let ecluse_dir = root.join(".ecluse");
+    let mut port_overrides: std::collections::HashMap<String, u16> =
+        std::collections::HashMap::new();
+    let mut pid_files: Vec<std::path::PathBuf> = vec![];
+
+    for m in &native_matches {
+        log.detail(&format!(
+            "service '{}': PID {} port {:?}",
+            m.service_name, m.pid, m.port
+        ));
+        let pid_path = sync::write_pid_file(&ecluse_dir, &args.slug, &m.service_name, m.pid)?;
+        pid_files.push(pid_path);
+        if let Some(port) = m.port {
+            port_overrides.insert(m.service_name.clone(), port);
+        }
+    }
+    for (name, port) in &docker_matches {
+        log.detail(&format!("docker service '{}': port {}", name, port));
+        port_overrides.insert(name.clone(), *port);
+    }
+
+    // Build and write .env.ecluse.
+    log.step("Writing .env.ecluse...");
+    let mut native_ports = indexmap::IndexMap::new();
+    for m in &native_matches {
+        if let Some(port) = m.port {
+            native_ports.insert(m.service_name.clone(), port);
+        }
+    }
+    let env_map = env::build_env(
+        slot,
+        &args.slug,
+        &config.mode.to_string(),
+        &native_ports,
+        &docker_matches,
+        &native_svcs,
+    );
+    env::write_env_file(&worktree_path, &env_map)?;
+
+    let app_port = native_matches
+        .first()
+        .and_then(|m| m.port)
+        .or_else(|| docker_matches.first().map(|(_, p)| *p));
+
+    let session = state::Session {
+        slug: args.slug.clone(),
+        mode: config.mode.clone(),
+        slot,
+        branch,
+        worktree_path: worktree_path.display().to_string(),
+        app_port,
+        port_overrides,
+        process_manager: Some(process::ProcessManager::Nohup),
+        pid_files,
+        log_dir: None,
+        compose_project: None,
+        overlay_file: None,
+        overlay_files: vec![],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        tmux_session: None,
+        services_subset: None,
+    };
+
+    if update_mode {
+        guard.state.remove_session(&args.slug);
+        log.step("Updating existing session...");
+    } else {
+        log.step("Registering new session...");
+    }
+    guard.state.add_session(session.clone());
+    guard.commit()?;
+
+    if args.json {
+        print_up_json(&session, &root)?;
+    } else {
+        println!();
+        log.success(&format!(
+            "Session '{}' synced (slot {})",
+            session.slug, session.slot
+        ));
+        println!();
+        println!("  Worktree:  {}", session.worktree_path);
+        println!("  Mode:      {}", session.mode);
+        println!("  Branch:    {}", session.branch);
+        if let Some(port) = session.app_port {
+            println!("  App port:  {}", port);
+        }
+        println!();
+        println!(
+            "  Services synced: {}",
+            if native_matches.is_empty() && docker_matches.is_empty() {
+                "none".to_string()
+            } else {
+                native_matches
+                    .iter()
+                    .map(|m| {
+                        m.port
+                            .map(|p| format!("{}:{}", m.service_name, p))
+                            .unwrap_or_else(|| format!("{}:(no port)", m.service_name))
+                    })
+                    .chain(
+                        docker_matches
+                            .iter()
+                            .map(|(n, p)| format!("{}:{} (docker)", n, p)),
+                    )
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        );
+        println!();
     }
 
     Ok(())

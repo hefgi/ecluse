@@ -33,6 +33,8 @@ pub enum Command {
     Validate(ValidateArgs),
     /// Tear down all active sessions
     Shutdown(ShutdownArgs),
+    /// Register a manually-started environment by discovering its running processes
+    Sync(SyncArgs),
 }
 
 #[derive(Args)]
@@ -159,6 +161,20 @@ pub struct ShutdownArgs {
     /// Tear down services but keep git worktrees on disk
     #[arg(long)]
     pub keep_worktrees: bool,
+
+    /// Suppress step output
+    #[arg(long)]
+    pub quiet: bool,
+}
+
+#[derive(Args)]
+pub struct SyncArgs {
+    /// Session slug — used to locate the worktree and name the session
+    pub slug: String,
+
+    /// Output session info as JSON (useful for agents)
+    #[arg(long)]
+    pub json: bool,
 
     /// Suppress step output
     #[arg(long)]

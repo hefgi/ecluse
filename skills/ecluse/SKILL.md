@@ -128,6 +128,32 @@ ecluse env <slug>   # same JSON as up --json: worktree_path + all env vars
 ecluse env          # auto-detects current session if run from inside a worktree
 ```
 
+### Sync a manually-started environment
+
+If services were started by hand (not via `ecluse up`), or state.json was lost, use `ecluse sync` to make ecluse aware of the running session:
+
+```bash
+ecluse sync <slug>          # discover processes + register session in state.json
+ecluse sync <slug> --json   # machine-readable output
+```
+
+`ecluse sync` works by:
+1. Finding all processes whose cwd is inside the worktree (via `lsof +d`)
+2. Matching each native service in `.ecluse.toml` by walking the process tree from its `command` and finding the descendant that is listening on a port
+3. Detecting docker services (hybrid mode) via `docker ps`, matching by container name containing the slug
+4. Writing PID files for discovered processes so `ecluse down` can kill them
+5. Writing `.env.ecluse` with the actual ports found
+6. Registering (or updating) the session in `state.json`
+
+After sync, `ecluse ls`, `ecluse env`, and `ecluse down` all work normally. If a session already exists for the slug, sync refreshes its port_overrides and PID tracking without changing the slot or branch.
+
+**Failure modes:**
+- `"no running processes found in worktree"` — start your services first, then sync
+- `"worktree not found for slug"` — either run from inside the worktree, or ensure the worktree exists at `.ecluse/worktrees/<slug>`
+- Unmatched services are reported as warnings (not errors) — partial sync is still registered
+
+**Requirement:** native services must have a `command` field in `.ecluse.toml` for sync to find them. Docker services are matched by container name.
+
 ### Environment variables
 
 All vars are in the JSON from `ecluse up --json` or `ecluse env <slug>`.

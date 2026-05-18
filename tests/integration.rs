@@ -238,18 +238,20 @@ fn services_config_sets_per_service_ports() {
 name = "api"
 run = "native"
 base_port = 8000
+command = "echo api"
 
 [[services]]
 name = "frontend"
 run = "native"
 base_port = 3000
+command = "echo frontend"
 "#,
     )
     .unwrap();
-    let out = ecluse(repo.path(), &["up", "feat-foo"]);
+    let out = ecluse(repo.path(), &["up", "svc-ports"]);
     assert!(out.status.success(), "{}", stderr(&out));
 
-    let worktree = repo.path().join(".ecluse/worktrees/feat-foo");
+    let worktree = repo.path().join(".ecluse/worktrees/svc-ports");
     let env = std::fs::read_to_string(worktree.join(".env.ecluse")).unwrap();
 
     // api: 8000 + 1 = 8001; frontend: 3000 + 1 = 3001
@@ -261,6 +263,8 @@ base_port = 3000
     );
     // PORT alias = first native service (api)
     assert!(env.contains("PORT=8001"), "got env: {}", env);
+
+    ecluse(repo.path(), &["down", "svc-ports"]);
 }
 
 #[test]
@@ -274,21 +278,25 @@ fn services_config_slot2_increments_correctly() {
 name = "api"
 run = "native"
 base_port = 8000
+command = "echo api"
 "#,
     )
     .unwrap();
     // First session: slot 1 → 8001
-    let out1 = ecluse(repo.path(), &["up", "feat-foo"]);
+    let out1 = ecluse(repo.path(), &["up", "svc-slot1"]);
     assert!(out1.status.success(), "{}", stderr(&out1));
 
     // Second session: slot 2 → 8002
-    let out2 = ecluse(repo.path(), &["up", "fix-bar"]);
+    let out2 = ecluse(repo.path(), &["up", "svc-slot2"]);
     assert!(out2.status.success(), "{}", stderr(&out2));
 
-    let env2 =
-        std::fs::read_to_string(repo.path().join(".ecluse/worktrees/fix-bar/.env.ecluse")).unwrap();
+    let env2 = std::fs::read_to_string(repo.path().join(".ecluse/worktrees/svc-slot2/.env.ecluse"))
+        .unwrap();
     assert!(env2.contains("ECLUSE_API_PORT=8002"), "got env: {}", env2);
     assert!(env2.contains("PORT=8002"), "got env: {}", env2);
+
+    ecluse(repo.path(), &["down", "svc-slot1"]);
+    ecluse(repo.path(), &["down", "svc-slot2"]);
 }
 
 #[test]
