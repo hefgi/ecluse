@@ -913,7 +913,11 @@ mod tests {
         )]);
         let yaml = generate_overlay(&cf, 1, "feat-foo", None).unwrap();
         // null overrides the hardcoded name
-        assert!(yaml.contains("container_name: ~") || yaml.contains("container_name: null"), "got: {}", yaml);
+        assert!(
+            yaml.contains("container_name: ~") || yaml.contains("container_name: null"),
+            "got: {}",
+            yaml
+        );
         assert!(!yaml.contains("onyx-postgres"), "got: {}", yaml);
     }
 
@@ -926,7 +930,11 @@ mod tests {
         let mut ports = HashMap::new();
         ports.insert("redis".to_string(), 6380u16);
         let yaml = generate_overlay_with_ports(&cf, &ports, "feat-foo", None).unwrap();
-        assert!(yaml.contains("container_name: ~") || yaml.contains("container_name: null"), "got: {}", yaml);
+        assert!(
+            yaml.contains("container_name: ~") || yaml.contains("container_name: null"),
+            "got: {}",
+            yaml
+        );
         assert!(!yaml.contains("onyx-redis"), "got: {}", yaml);
     }
 

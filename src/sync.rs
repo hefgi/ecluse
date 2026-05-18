@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -62,7 +61,9 @@ pub fn match_services(
             continue;
         }
 
-        let root = processes.iter().find(|p| cmdline_matches(&p.cmdline, &tokens));
+        let root = processes
+            .iter()
+            .find(|p| cmdline_matches(&p.cmdline, &tokens));
 
         let (pid, port) = match root {
             Some(proc) => {
@@ -93,10 +94,7 @@ pub fn match_services(
 /// For each docker service, returns the first host port bound to the container's
 /// `base_port` (or any port the container exposes if base_port doesn't match).
 /// Best-effort: returns empty if docker is unavailable or nothing matches.
-pub fn find_docker_services(
-    services: &[&ServiceConfig],
-    slug: &str,
-) -> Vec<(String, u16)> {
+pub fn find_docker_services(services: &[&ServiceConfig], slug: &str) -> Vec<(String, u16)> {
     let output = match Command::new("docker")
         .args(["ps", "--format", "{{.Names}}\t{{.Ports}}"])
         .output()
@@ -119,8 +117,7 @@ pub fn find_docker_services(
         let container = containers
             .iter()
             .find(|(name, _)| {
-                name.contains(slug)
-                    && (name.contains(&svc.name) || containers.len() == 1)
+                name.contains(slug) && (name.contains(&svc.name) || containers.len() == 1)
             })
             .or_else(|| containers.iter().find(|(name, _)| name.contains(slug)));
 
@@ -137,7 +134,12 @@ pub fn find_docker_services(
 /// Write a PID file for a discovered process at the standard ecluse path.
 ///
 /// Path: `<ecluse_dir>/pids/<slug>/<service>.pid`
-pub fn write_pid_file(ecluse_dir: &Path, slug: &str, service: &str, pid: u32) -> std::io::Result<PathBuf> {
+pub fn write_pid_file(
+    ecluse_dir: &Path,
+    slug: &str,
+    service: &str,
+    pid: u32,
+) -> std::io::Result<PathBuf> {
     let pid_dir = ecluse_dir.join("pids").join(slug);
     std::fs::create_dir_all(&pid_dir)?;
     let pid_path = pid_dir.join(format!("{}.pid", service));
@@ -176,13 +178,26 @@ fn process_cmdline(pid: u32) -> Option<String> {
         .output()
         .ok()?;
     let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Return all TCP ports this PID is currently listening on.
 fn pid_listening_ports(pid: u32) -> Vec<u16> {
     let output = match Command::new("lsof")
-        .args(["-p", &pid.to_string(), "-iTCP", "-sTCP:LISTEN", "-n", "-P", "-F", "n"])
+        .args([
+            "-p",
+            &pid.to_string(),
+            "-iTCP",
+            "-sTCP:LISTEN",
+            "-n",
+            "-P",
+            "-F",
+            "n",
+        ])
         .output()
     {
         Ok(o) if o.status.success() => o,
@@ -276,9 +291,7 @@ fn meaningful_tokens(command: &str) -> Vec<String> {
 /// Return true if `cmdline` contains all `tokens` as substrings (case-insensitive).
 fn cmdline_matches(cmdline: &str, tokens: &[String]) -> bool {
     let lower = cmdline.to_lowercase();
-    tokens
-        .iter()
-        .all(|t| lower.contains(&t.to_lowercase()))
+    tokens.iter().all(|t| lower.contains(&t.to_lowercase()))
 }
 
 /// Parse the first host port from a docker port mapping string.

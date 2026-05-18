@@ -90,6 +90,33 @@ impl WorktreeManager {
         }
         Ok(())
     }
+
+    /// Returns the path of the main (primary) worktree, regardless of where
+    /// the command is run from.  git always lists the main worktree first in
+    /// `git worktree list --porcelain`.
+    pub fn main_worktree_root(cwd: &Path) -> Result<PathBuf> {
+        let output = Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(cwd)
+            .output()
+            .context("failed to run git worktree list")?;
+
+        if !output.status.success() {
+            return Err(crate::error::EcluseError::NotAGitRepo.into());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        // First non-empty "worktree <path>" line is the main worktree.
+        for line in stdout.lines() {
+            if let Some(path) = line.strip_prefix("worktree ") {
+                return Ok(PathBuf::from(path));
+            }
+        }
+
+        Err(anyhow::anyhow!(
+            "could not determine main worktree path; git worktree list produced no output"
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -208,6 +235,42 @@ mod tests {
 
         wt.create(&path, "my-existing-branch").unwrap();
         assert!(path.exists());
+        wt.remove(&path).unwrap();
+    }
+
+    // ── main_worktree_root ────────────────────────────────────────────────────
+
+    #[test]
+    fn main_worktree_root_from_main_worktree() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+        let root = WorktreeManager::main_worktree_root(dir.path()).unwrap();
+        // Resolve symlinks so the comparison is stable on macOS (/var → /private/var).
+        let expected = std::fs::canonicalize(dir.path()).unwrap();
+        let got = std::fs::canonicalize(&root).unwrap();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn main_worktree_root_from_linked_worktree() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+
+        let wt_path = dir.path().join(".ecluse/worktrees/feat");
+        std::fs::create_dir_all(&wt_path).unwrap();
+
+        let wt = WorktreeManager::new(dir.path().to_owned());
+        let config = make_config_for_worktree();
+        let path = wt.worktree_path(&config, "feat");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        wt.create(&path, "ecluse/feat").unwrap();
+
+        // When called from the linked worktree, should still return the main root.
+        let root = WorktreeManager::main_worktree_root(&path).unwrap();
+        let expected = std::fs::canonicalize(dir.path()).unwrap();
+        let got = std::fs::canonicalize(&root).unwrap();
+        assert_eq!(got, expected);
+
         wt.remove(&path).unwrap();
     }
 }
