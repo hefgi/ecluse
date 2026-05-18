@@ -199,6 +199,13 @@ pub fn validate_config(config: &Config) -> Result<Vec<String>> {
             ));
         }
 
+        if svc.run == ServiceRun::Native && svc.command.is_none() {
+            errors.push(format!(
+                "service '{}': command is required for native services",
+                svc.name
+            ));
+        }
+
         if config.mode == Mode::Host && svc.run == ServiceRun::Docker {
             errors.push(format!(
                 "service '{}': run is 'docker' but mode is 'host'; host mode does not run containers",
@@ -296,7 +303,7 @@ mod tests {
             base_port,
             run: ServiceRun::Native,
             compose: None,
-            command: None,
+            command: Some("echo hello".into()),
             port_env: vec![],
         }
     }
@@ -525,7 +532,7 @@ mod tests {
                 base_port: 3000,
                 run: ServiceRun::Native,
                 compose: Some("docker-compose.yml".into()),
-                command: None,
+                command: Some("npm run dev".into()),
                 port_env: vec![],
             }],
         );
@@ -534,6 +541,48 @@ mod tests {
     }
 
     // --- mode × run ---
+
+    #[test]
+    fn native_service_without_command_is_error() {
+        let config = make_config(
+            8,
+            10,
+            vec![ServiceConfig {
+                name: "api".into(),
+                base_port: 3000,
+                run: ServiceRun::Native,
+                compose: None,
+                command: None,
+                port_env: vec![],
+            }],
+        );
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("command is required"));
+        assert!(err.to_string().contains("api"));
+    }
+
+    #[test]
+    fn native_service_with_command_is_ok() {
+        let config = make_config(
+            8,
+            0,
+            vec![ServiceConfig {
+                name: "api".into(),
+                base_port: 3000,
+                run: ServiceRun::Native,
+                compose: None,
+                command: Some("npm run dev".into()),
+                port_env: vec![],
+            }],
+        );
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn docker_service_without_command_is_ok() {
+        let config = make_config(8, 10, vec![svc_docker("db", 5432, None)]);
+        assert!(validate_config(&config).is_ok());
+    }
 
     #[test]
     fn host_mode_with_docker_service_is_error() {
