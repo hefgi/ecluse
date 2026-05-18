@@ -11,6 +11,7 @@ mod modes;
 mod process;
 mod slot;
 mod state;
+mod sync;
 mod validate;
 mod worktree;
 
@@ -58,6 +59,14 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
 
     log.step("Verifying git repository...");
     worktree::WorktreeManager::verify_git_repo(&cwd)?;
+
+    let root = worktree::WorktreeManager::main_worktree_root(&cwd)?;
+    if root != cwd {
+        log.detail(&format!(
+            "running from a worktree — writing config to main worktree at {}",
+            root.display()
+        ));
+    }
 
     let mode: config::Mode = if let Some(m) = &args.mode {
         m.parse()?
@@ -108,7 +117,7 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
     let pm = process::detect_process_manager();
     log.detail(&pm.to_string());
 
-    let config_path = cwd.join(".ecluse.toml");
+    let config_path = root.join(".ecluse.toml");
     if config_path.exists() && !args.yes {
         print!(".ecluse.toml already exists. Overwrite? [y/N] ");
         io::stdout().flush()?;
@@ -133,7 +142,7 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         services: vec![],
         hooks: config::HookConfig::default(),
     };
-    cfg.save(&cwd)?;
+    cfg.save(&root)?;
     log.detail(&format!("mode: {mode}, max_slots: {}", args.max_slots));
 
     let global_cfg = process::GlobalConfig {
@@ -146,10 +155,14 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         Err(e) => log.warn(&format!("could not write global config: {e}")),
     }
 
-    let ecluse_dir = cwd.join(".ecluse");
+    let ecluse_dir = root.join(".ecluse");
+    log.step(&format!(
+        "Creating .ecluse/ in main worktree at {}...",
+        ecluse_dir.display()
+    ));
     std::fs::create_dir_all(&ecluse_dir)?;
 
-    let gitignore_path = cwd.join(".gitignore");
+    let gitignore_path = root.join(".gitignore");
     let should_add = if gitignore_path.exists() {
         let content = std::fs::read_to_string(&gitignore_path)?;
         !content.lines().any(|l| l.trim() == ".ecluse/")
@@ -176,7 +189,7 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
     println!();
     log.success(&format!(
         "Initialized ecluse in {} (mode: {mode})",
-        cwd.display()
+        root.display()
     ));
     println!();
     println!("Next step:  ecluse up <slug>");
