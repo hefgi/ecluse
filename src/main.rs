@@ -48,6 +48,7 @@ fn run(cli: cli::Cli) -> Result<()> {
         cli::Command::Validate(args) => cmd_validate(args),
         cli::Command::Shutdown(args) => cmd_shutdown(args),
         cli::Command::Sync(args) => cmd_sync(args),
+        cli::Command::Flush(args) => cmd_flush(args),
     }
 }
 
@@ -1105,6 +1106,134 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
         );
         println!();
     }
+
+    Ok(())
+}
+
+// ── flush ─────────────────────────────────────────────────────────────────────
+
+fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
+    let log = log::StepLogger::new(args.quiet);
+
+    log.step("Loading config...");
+    let (config, root) = config::Config::find_and_load()?;
+
+    if !args.yes {
+        print!(
+            "This will destroy all ecluse sessions, worktrees, and running services.\n\
+             There is no undo. Continue? [y/N] "
+        );
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    // Step 1: graceful shutdown of known sessions (best-effort).
+    {
+        let mut guard = state::StateGuard::acquire(&root)?;
+        let sessions: Vec<state::Session> = guard.state.sessions.clone();
+        if !sessions.is_empty() {
+            log.step(&format!(
+                "Tearing down {} known session(s)...",
+                sessions.len()
+            ));
+            let handler = modes::get_handler(&config);
+            for session in sessions {
+                log.detail(&format!("  down '{}'", session.slug));
+                if let Err(e) = handler.bring_down(&session, &config, &root, false, false, &log) {
+                    log.warn(&format!(
+                        "  '{}' teardown failed: {e} (continuing)",
+                        session.slug
+                    ));
+                }
+                guard.state.remove_session(&session.slug);
+            }
+            guard.commit()?;
+        }
+    }
+
+    // Step 2: kill orphaned tmux sessions named ecluse-*.
+    if process::binary_available("tmux") {
+        log.step("Killing orphaned tmux sessions...");
+        let output = std::process::Command::new("tmux")
+            .args(["list-sessions", "-F", "#{session_name}"])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for name in stdout.lines() {
+                let name = name.trim();
+                if name.starts_with("ecluse-") {
+                    log.detail(&format!("  kill tmux session '{name}'"));
+                    if let Err(e) = std::process::Command::new("tmux")
+                        .args(["kill-session", "-t", name])
+                        .status()
+                    {
+                        log.warn(&format!("  could not kill tmux session '{name}': {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 3: stop orphaned docker compose projects matching <prefix>_*.
+    if docker::is_available() {
+        log.step("Stopping orphaned docker compose projects...");
+        let projects = docker::list_compose_projects(&config.prefix);
+        for project in projects {
+            log.detail(&format!("  compose down -p '{project}'"));
+            if let Err(e) = docker::compose_down_by_project(&project, false) {
+                log.warn(&format!("  could not stop project '{project}': {e}"));
+            }
+        }
+    }
+
+    // Step 4: remove all worktrees under worktree_dir.
+    let worktree_dir = root.join(&config.worktree_dir);
+    if worktree_dir.exists() {
+        log.step("Removing worktrees...");
+        if let Ok(entries) = std::fs::read_dir(&worktree_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    log.detail(&format!("  git worktree remove --force {}", path.display()));
+                    let _ = std::process::Command::new("git")
+                        .args(["worktree", "remove", "--force", &path.display().to_string()])
+                        .current_dir(&root)
+                        .status();
+                }
+            }
+        }
+        let _ = std::process::Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(&root)
+            .status();
+    }
+
+    // Step 5: wipe .ecluse subdirs.
+    let ecluse_dir = root.join(".ecluse");
+    for subdir in &["pids", "logs", "overlays"] {
+        let path = ecluse_dir.join(subdir);
+        if path.exists() {
+            log.detail(&format!("  remove {}", path.display()));
+            if let Err(e) = std::fs::remove_dir_all(&path) {
+                log.warn(&format!("  could not remove {}: {e}", path.display()));
+            }
+        }
+    }
+
+    // Step 6: reset state.json.
+    log.step("Resetting state.json...");
+    let mut guard = state::StateGuard::acquire(&root)?;
+    guard.state = state::State::default();
+    guard.commit().context("failed to reset state.json")?;
+
+    println!();
+    log.success("Flush complete — ecluse is in a clean state.");
+    println!();
 
     Ok(())
 }

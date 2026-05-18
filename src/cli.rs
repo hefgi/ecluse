@@ -35,6 +35,8 @@ pub enum Command {
     Shutdown(ShutdownArgs),
     /// Register a manually-started environment by discovering its running processes
     Sync(SyncArgs),
+    /// Hard-reset to clean state: kill all sessions, orphaned tmux sessions, and orphaned containers
+    Flush(FlushArgs),
 }
 
 #[derive(Args)]
@@ -175,6 +177,17 @@ pub struct SyncArgs {
     /// Output session info as JSON (useful for agents)
     #[arg(long)]
     pub json: bool,
+
+    /// Suppress step output
+    #[arg(long)]
+    pub quiet: bool,
+}
+
+#[derive(Args)]
+pub struct FlushArgs {
+    /// Skip confirmation prompt
+    #[arg(long, short)]
+    pub yes: bool,
 
     /// Suppress step output
     #[arg(long)]
