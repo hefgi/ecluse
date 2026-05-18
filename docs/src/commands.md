@@ -2,7 +2,7 @@
 
 ```
 ecluse init     [--mode container|host|hybrid] [--explain] [--yes] [--quiet]
-ecluse up       <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--quiet]
+ecluse up       <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--quiet]
 ecluse down     <slug> [--keep-volumes] [--keep-branch] [--keep-worktree] [--quiet]
 ecluse ls       [--json]
 ecluse shell    <slug>
@@ -33,6 +33,7 @@ Creates a git worktree, allocates a slot, starts services, and writes `.env.eclu
 | `--json` | Output worktree path + env vars as JSON |
 | `--reuse-worktree` | Reuse an existing worktree instead of creating one |
 | `--port <name>=<value>` | Pin a service to a specific port for this session |
+| `--services <name>,...` | Bring up only this subset of services; unknown names are rejected before any worktree is created |
 | `--quiet` | Suppress step output (implied by `--json`) |
 
 ## ecluse down

@@ -591,7 +591,7 @@ See [examples.md](examples.md) for 5 canonical config templates covering host, c
 
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
-ecluse up <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>]
+ecluse up <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...]
 ecluse env [<slug>]
 ecluse down <slug> [--keep-volumes] [--keep-branch] [--keep-worktree]
 ecluse ls [--json]
