@@ -16,6 +16,7 @@ pub fn compose_up(
     compose_file: &str,
     overlay_file: Option<&str>,
     watch: bool,
+    extra_env: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
     let mut args = vec!["compose", "-p", project, "-f", compose_file];
     if let Some(ov) = overlay_file {
@@ -29,6 +30,7 @@ pub fn compose_up(
 
     let status = Command::new("docker")
         .args(&args)
+        .envs(extra_env)
         .status()
         .context("failed to run docker compose up")?;
 
@@ -47,6 +49,7 @@ pub fn compose_up_services(
     overlay_file: Option<&str>,
     services: &[&str],
     watch: bool,
+    extra_env: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
     let mut args = vec!["compose", "-p", project, "-f", compose_file];
     if let Some(ov) = overlay_file {
@@ -61,6 +64,7 @@ pub fn compose_up_services(
 
     let status = Command::new("docker")
         .args(&args)
+        .envs(extra_env)
         .status()
         .context("failed to run docker compose up (services)")?;
 
