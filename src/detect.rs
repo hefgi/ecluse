@@ -716,6 +716,7 @@ mod tests {
 
     #[test]
     fn compose_app_build_boosts_container() {
+        let baseline = detect(empty_dir().path()).scores.container;
         let dir = empty_dir();
         write_compose(
             &dir,
@@ -724,29 +725,32 @@ mod tests {
         let result = detect(dir.path());
         // build: . → +3 container
         assert!(
-            result.scores.container > 0,
-            "container={}",
-            result.scores.container
+            result.scores.container > baseline,
+            "container={} baseline={}",
+            result.scores.container,
+            baseline
         );
     }
 
     #[test]
     fn compose_app_build_context_boosts_container() {
+        let baseline = detect(empty_dir().path()).scores.container;
         let dir = empty_dir();
         let yaml =
             "services:\n  app:\n    build:\n      context: .\n    ports:\n      - \"3000:3000\"\n";
         write_compose(&dir, yaml);
         let result = detect(dir.path());
-        assert!(result.scores.container > 0);
+        assert!(result.scores.container > baseline);
     }
 
     #[test]
     fn compose_app_build_context_subdir_boosts_container() {
+        let baseline = detect(empty_dir().path()).scores.container;
         let dir = empty_dir();
         let yaml = "services:\n  app:\n    build:\n      context: ./app\n";
         write_compose(&dir, yaml);
         let result = detect(dir.path());
-        assert!(result.scores.container > 0);
+        assert!(result.scores.container > baseline);
     }
 
     #[test]
@@ -763,48 +767,53 @@ mod tests {
 
     #[test]
     fn compose_ecluse_role_app_label_boosts_hybrid() {
+        let baseline = detect(empty_dir().path()).scores.hybrid;
         let dir = empty_dir();
         let yaml = "services:\n  web:\n    image: node:20\n    labels:\n      ecluse.role: app\n  db:\n    image: postgres:15\n";
         write_compose(&dir, yaml);
         let result = detect(dir.path());
-        // has_app_label: +10 hybrid
+        // has_app_label: +10 hybrid, compose present: +2 hybrid
         assert!(
-            result.scores.hybrid >= 10 + 2,
-            "hybrid={}",
-            result.scores.hybrid
+            result.scores.hybrid >= baseline + 10 + 2,
+            "hybrid={} baseline={}",
+            result.scores.hybrid,
+            baseline
         );
     }
 
     #[test]
     fn compose_bind_mounts_boost_container() {
+        let baseline = detect(empty_dir().path()).scores.container;
         let dir = empty_dir();
         let yaml = "services:\n  app:\n    build: .\n    volumes:\n      - ./src:/app/src\n";
         write_compose(&dir, yaml);
         let result = detect(dir.path());
         // bind mounts: +2 container
-        assert!(result.scores.container > 0);
+        assert!(result.scores.container > baseline);
     }
 
     #[test]
     fn compose_absolute_bind_mount_also_detected() {
+        let baseline = detect(empty_dir().path()).scores.container;
         let dir = empty_dir();
         let yaml = "services:\n  app:\n    image: nginx\n    volumes:\n      - /data:/data\n";
         write_compose(&dir, yaml);
         let result = detect(dir.path());
         // /data is an absolute bind mount — signal fires
-        assert!(result.scores.container > 0);
+        assert!(result.scores.container > baseline);
     }
 
     #[test]
     fn compose_watch_blocks_boost_container_and_hybrid() {
+        let baseline = detect(empty_dir().path()).scores;
         let dir = empty_dir();
         // Use 'develop' key (which is recognized as a watch block)
         let yaml = "services:\n  app:\n    build: .\n    develop:\n      watch: []\n";
         write_compose(&dir, yaml);
         let result = detect(dir.path());
         // has_watch: +2 container, +1 hybrid
-        assert!(result.scores.container > 0);
-        assert!(result.scores.hybrid > 0);
+        assert!(result.scores.container > baseline.container);
+        assert!(result.scores.hybrid > baseline.hybrid);
     }
 
     #[test]
