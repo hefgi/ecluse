@@ -186,11 +186,17 @@ pub fn generate_overlay(
 }
 
 /// Generate a compose overlay that sets explicit host ports from a map of
-/// service_name → host_port, and namespaces named volumes with `suffix`.
-/// This is used in the per-service base_port model.
+/// service_name → (host_port, container_port), and namespaces named volumes
+/// with `suffix`. The port mapping is emitted unconditionally — even when the
+/// base compose file has no `ports:` field — so the container is always
+/// published on the expected host port. When the base compose already declares
+/// `ports:`, the overlay uses the `!override` YAML merge tag to replace rather
+/// than append (avoiding duplicate / conflicting host-port bindings that would
+/// arise from Docker Compose's default additive merge).
 pub fn generate_overlay_with_ports(
     compose: &ComposeFile,
-    port_overrides: &HashMap<String, u16>,
+    // (host_port, container_port) — container_port is typically base_port
+    port_map: &HashMap<String, (u16, u16)>,
     suffix: &str,
     services_to_include: Option<&[String]>,
     prefix: &str,
@@ -198,6 +204,10 @@ pub fn generate_overlay_with_ports(
 ) -> Result<String> {
     let mut overlay_services: HashMap<String, serde_yaml::Value> = HashMap::new();
     let mut overlay_volumes: HashMap<String, serde_yaml::Value> = HashMap::new();
+    // Track which services had a ports field in the base compose so we can
+    // apply the !override tag to prevent additive merge.
+    let mut services_with_base_ports: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
 
     for (name, svc) in &compose.services {
         if let Some(inc) = services_to_include {
@@ -209,8 +219,7 @@ pub fn generate_overlay_with_ports(
         let mut svc_override: HashMap<String, serde_yaml::Value> = HashMap::new();
 
         // Override any hardcoded container_name with a slot-scoped name so it never
-        // conflicts with the main devenv or other sessions, even on Docker Compose
-        // versions where null in an overlay does not clear a field.
+        // conflicts with the main devenv or other sessions.
         if svc.other.contains_key("container_name") {
             svc_override.insert(
                 "container_name".into(),
@@ -218,23 +227,23 @@ pub fn generate_overlay_with_ports(
             );
         }
 
-        // Rewrite ports using explicit host port if provided, otherwise keep as-is
-        if !svc.ports.is_empty() {
-            let host_port = port_overrides.get(name).copied();
-            let new_ports: Vec<serde_yaml::Value> = svc
-                .ports
-                .iter()
-                .enumerate()
-                .map(|(i, p)| {
-                    if i == 0 {
-                        if let Some(hp) = host_port {
-                            return rewrite_port_to_host(p, hp);
-                        }
-                    }
-                    p.clone()
-                })
-                .collect();
-            svc_override.insert("ports".into(), serde_yaml::Value::Sequence(new_ports));
+        // Unconditionally emit the port mapping when we have an allocation for
+        // this service — regardless of whether the base compose declares ports:.
+        if let Some(&(host_port, container_port)) = port_map.get(name) {
+            let port_str = format!("{}:{}", host_port, container_port);
+            svc_override.insert(
+                "ports".into(),
+                serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(port_str)]),
+            );
+            if !svc.ports.is_empty() {
+                services_with_base_ports.insert(name.clone());
+            }
+        } else if !svc.ports.is_empty() {
+            // No allocation for this service — keep ports as-is
+            svc_override.insert(
+                "ports".into(),
+                serde_yaml::Value::Sequence(svc.ports.clone()),
+            );
         }
 
         // Namespace volumes
@@ -286,43 +295,63 @@ pub fn generate_overlay_with_ports(
         );
     }
 
-    serde_yaml::to_string(&serde_yaml::Value::Mapping(root))
-        .context("failed to serialize overlay YAML")
+    let yaml =
+        serde_yaml::to_string(&serde_yaml::Value::Mapping(root)).context("failed to serialize overlay YAML")?;
+
+    // Post-process: add !override tag on `ports:` lines for services that had
+    // a competing ports declaration in the base compose. This makes Docker
+    // Compose replace the base ports list rather than appending to it, which
+    // would otherwise cause duplicate host-port bindings (e.g. both 5432:5432
+    // from the base and 5433:5432 from the overlay would be published).
+    if services_with_base_ports.is_empty() {
+        return Ok(yaml);
+    }
+    Ok(inject_ports_override_tag(&yaml, &services_with_base_ports))
 }
 
-/// Rewrite the first port mapping to use an explicit host port,
-/// preserving the container port.
-fn rewrite_port_to_host(port: &serde_yaml::Value, host_port: u16) -> serde_yaml::Value {
-    match port {
-        serde_yaml::Value::String(s) => {
-            let parts: Vec<&str> = s.split(':').collect();
-            let container_port = match parts.len() {
-                1 => parts[0].to_string(),
-                2 => parts[1].to_string(),
-                3 => parts[2].to_string(),
-                _ => return port.clone(),
-            };
-            serde_yaml::Value::String(format!("{}:{}", host_port, container_port))
+/// Rewrite `ports:` lines in the serialized YAML to `ports: !override` for
+/// the given set of service names. Works on the indented block structure that
+/// serde_yaml produces: a service block starts at two-space indent and its
+/// `ports:` key is at four-space indent.
+fn inject_ports_override_tag(
+    yaml: &str,
+    services: &std::collections::HashSet<String>,
+) -> String {
+    let mut result = String::with_capacity(yaml.len() + services.len() * 12);
+    let mut current_service: Option<String> = None;
+
+    for line in yaml.lines() {
+        // Detect service name at 2-space indent: "  <name>:"
+        if let Some(rest) = line.strip_prefix("  ") {
+            if !rest.starts_with(' ') {
+                if let Some(svc_name) = rest.strip_suffix(':') {
+                    current_service = Some(svc_name.to_string());
+                }
+            }
         }
-        serde_yaml::Value::Number(n) => {
-            if let Some(p) = n.as_u64() {
-                serde_yaml::Value::String(format!("{}:{}", host_port, p))
+
+        // Rewrite `    ports:` → `    ports: !override` for matching services
+        let rewritten = if line.trim_start() == "ports:"
+            && line.starts_with("    ")
+            && !line.starts_with("     ")
+        {
+            if let Some(ref svc) = current_service {
+                if services.contains(svc) {
+                    "    ports: !override".to_string()
+                } else {
+                    line.to_string()
+                }
             } else {
-                port.clone()
+                line.to_string()
             }
-        }
-        serde_yaml::Value::Mapping(map) => {
-            let mut new_map = map.clone();
-            if map.contains_key("published") {
-                new_map.insert(
-                    serde_yaml::Value::String("published".into()),
-                    serde_yaml::Value::Number(host_port.into()),
-                );
-            }
-            serde_yaml::Value::Mapping(new_map)
-        }
-        _ => port.clone(),
+        } else {
+            line.to_string()
+        };
+
+        result.push_str(&rewritten);
+        result.push('\n');
     }
+    result
 }
 
 fn rewrite_port(port: &serde_yaml::Value, offset: u16) -> serde_yaml::Value {
@@ -940,7 +969,7 @@ mod tests {
             svc_with_container_name("onyx-redis", &["6379:6379"]),
         )]);
         let mut ports = HashMap::new();
-        ports.insert("redis".to_string(), 6380u16);
+        ports.insert("redis".to_string(), (6380u16, 6379u16));
         let yaml = generate_overlay_with_ports(&cf, &ports, "feat-foo", None, "ecluse", 3).unwrap();
         assert!(
             yaml.contains("container_name: ecluse-redis-3"),
@@ -956,6 +985,68 @@ mod tests {
         let cf = make_compose(vec![("db", null_svc(&["5432:5432"], &[]))]);
         let yaml = generate_overlay(&cf, 1, "feat-foo", None, "ecluse", 1).unwrap();
         assert!(!yaml.contains("container_name"), "got: {}", yaml);
+    }
+
+    // ── generate_overlay_with_ports: port injection fixes ────────────────────
+
+    #[test]
+    fn overlay_with_ports_emits_mapping_when_base_has_no_ports() {
+        // Core bug: service has no ports: in the base compose — overlay must
+        // still publish the container on the allocated host port.
+        let cf = make_compose(vec![("postgres", null_svc(&[], &[]))]);
+        let mut ports = HashMap::new();
+        ports.insert("postgres".to_string(), (5433u16, 5432u16));
+        let yaml = generate_overlay_with_ports(&cf, &ports, "slug", None, "ecluse", 1).unwrap();
+        assert!(yaml.contains("5433:5432"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_with_ports_no_override_tag_when_base_has_no_ports() {
+        // No !override needed when base has no ports — additive merge of a
+        // non-existent field is just an add.
+        let cf = make_compose(vec![("postgres", null_svc(&[], &[]))]);
+        let mut ports = HashMap::new();
+        ports.insert("postgres".to_string(), (5433u16, 5432u16));
+        let yaml = generate_overlay_with_ports(&cf, &ports, "slug", None, "ecluse", 1).unwrap();
+        assert!(!yaml.contains("!override"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_with_ports_override_tag_when_base_has_ports() {
+        // When base compose already declares ports:, overlay must use !override
+        // so Docker Compose replaces rather than appends — preventing duplicate
+        // host-port bindings (e.g. both 5432:5432 and 5433:5432 published).
+        let cf = make_compose(vec![("postgres", null_svc(&["5432:5432"], &[]))]);
+        let mut ports = HashMap::new();
+        ports.insert("postgres".to_string(), (5433u16, 5432u16));
+        let yaml = generate_overlay_with_ports(&cf, &ports, "slug", None, "ecluse", 1).unwrap();
+        assert!(yaml.contains("ports: !override"), "got: {}", yaml);
+        assert!(yaml.contains("5433:5432"), "got: {}", yaml);
+        assert!(!yaml.contains("5432:5432"), "got: {}", yaml);
+    }
+
+    #[test]
+    fn overlay_with_ports_no_override_tag_on_unrelated_service() {
+        // !override must only apply to services that had ports in the base,
+        // not to all services in the file.
+        let cf = make_compose(vec![
+            ("postgres", null_svc(&["5432:5432"], &[])),
+            ("redis", null_svc(&[], &[])),
+        ]);
+        let mut ports = HashMap::new();
+        ports.insert("postgres".to_string(), (5433u16, 5432u16));
+        ports.insert("redis".to_string(), (6380u16, 6379u16));
+        let yaml = generate_overlay_with_ports(&cf, &ports, "slug", None, "ecluse", 1).unwrap();
+        // postgres had base ports → gets !override
+        assert!(yaml.contains("ports: !override"), "got: {}", yaml);
+        // redis had no base ports → no !override anywhere near redis block
+        // (check by ensuring only one !override occurrence total)
+        assert_eq!(
+            yaml.matches("!override").count(),
+            1,
+            "expected exactly one !override, got: {}",
+            yaml
+        );
     }
 }
 
