@@ -113,10 +113,14 @@ pub fn generate_overlay(
 
         let mut svc_override: HashMap<String, serde_yaml::Value> = HashMap::new();
 
-        // Clear any hardcoded container_name so Docker derives a unique name from the
-        // compose project name + service name (avoids conflicts with the main dev env).
+        // Override any hardcoded container_name with a slug-scoped name so it never
+        // conflicts with the main devenv, even on Docker Compose versions where null
+        // in an overlay does not clear a field.
         if svc.other.contains_key("container_name") {
-            svc_override.insert("container_name".into(), serde_yaml::Value::Null);
+            svc_override.insert(
+                "container_name".into(),
+                serde_yaml::Value::String(format!("{}-{}", suffix, name)),
+            );
         }
 
         // Rewrite ports
@@ -200,10 +204,14 @@ pub fn generate_overlay_with_ports(
 
         let mut svc_override: HashMap<String, serde_yaml::Value> = HashMap::new();
 
-        // Clear any hardcoded container_name so Docker derives a unique name from the
-        // compose project name + service name (avoids conflicts with the main dev env).
+        // Override any hardcoded container_name with a slug-scoped name so it never
+        // conflicts with the main devenv, even on Docker Compose versions where null
+        // in an overlay does not clear a field.
         if svc.other.contains_key("container_name") {
-            svc_override.insert("container_name".into(), serde_yaml::Value::Null);
+            svc_override.insert(
+                "container_name".into(),
+                serde_yaml::Value::String(format!("{}-{}", suffix, name)),
+            );
         }
 
         // Rewrite ports using explicit host port if provided, otherwise keep as-is
@@ -912,9 +920,9 @@ mod tests {
             svc_with_container_name("onyx-postgres", &["5432:5432"]),
         )]);
         let yaml = generate_overlay(&cf, 1, "feat-foo", None).unwrap();
-        // null overrides the hardcoded name
+        // overrides the hardcoded name with a slug-scoped unique name
         assert!(
-            yaml.contains("container_name: ~") || yaml.contains("container_name: null"),
+            yaml.contains("container_name: feat-foo-postgres"),
             "got: {}",
             yaml
         );
@@ -931,7 +939,7 @@ mod tests {
         ports.insert("redis".to_string(), 6380u16);
         let yaml = generate_overlay_with_ports(&cf, &ports, "feat-foo", None).unwrap();
         assert!(
-            yaml.contains("container_name: ~") || yaml.contains("container_name: null"),
+            yaml.contains("container_name: feat-foo-redis"),
             "got: {}",
             yaml
         );
