@@ -5,10 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.2.5] — 2026-05-19
 
 ### Added
 - `ecluse flush` — hard reset to clean state, regardless of what `state.json` says. Tears down all known sessions (via the same path as `ecluse shutdown`), kills orphaned tmux sessions named `ecluse-*`, stops orphaned Docker Compose projects matching `<prefix>_*`, removes all worktrees under `worktree_dir` with `git worktree remove --force`, wipes `.ecluse/pids/`, `.ecluse/logs/`, and `.ecluse/overlays/`, then resets `state.json` to an empty sessions list. Docker volumes are not removed. Steps 1–5 are best-effort; only the state reset is required. `--yes` skips the confirmation prompt for agent/CI use.
+
+### Fixed
+- Hardcoded `container_name` fields in `docker-compose.yml` are now overridden in the compose overlay with `<prefix>-<service>-<slot>` (e.g. `ecluse-postgres-2`). The previous fix set the field to `null`, which some Docker Compose versions do not honour — the original value survived the merge and caused container name conflicts between sessions. Using an explicit slot-scoped name guarantees uniqueness across all concurrent sessions and the main devenv.
+- `detect` tests no longer fail in environments where Docker is not running. Seven tests asserted absolute scores (`> 0`) but the Docker-unavailable penalty (`-10`) in CI pushed scores negative. Tests now compare against an `empty_dir()` baseline so the delta assertions hold regardless of Docker availability.
 
 ---
 
