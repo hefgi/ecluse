@@ -66,22 +66,31 @@ impl super::ModeHandler for ContainerMode {
 
                 let compose_data = compose::parse(compose_path)?;
 
-                let port_map: std::collections::HashMap<String, u16> = svcs
+                // (host_port, container_port) — container_port defaults to base_port
+                let port_map: std::collections::HashMap<String, (u16, u16)> = svcs
                     .iter()
                     .map(|s| {
-                        let port = if let Some(&p) = port_overrides.get(&s.name) {
+                        let host_port = if let Some(&p) = port_overrides.get(&s.name) {
                             p
                         } else {
                             validate::find_free_port(config, s, slot)?
                         };
-                        allocated_ports.push((s.name.clone(), port));
-                        log.detail(&format!("{}: {}", s.name, port));
-                        Ok((s.name.clone(), port))
+                        allocated_ports.push((s.name.clone(), host_port));
+                        log.detail(&format!("{}: {}", s.name, host_port));
+                        Ok((s.name.clone(), (host_port, s.base_port)))
                     })
                     .collect::<Result<_>>()?;
 
                 let overlay_name = overlay_name_for_compose(slug, compose_path, root);
                 let overlay_path = overlay_dir.join(&overlay_name);
+
+                // Build env map for compose interpolation: ECLUSE_<NAME>_PORT vars
+                let compose_env: std::collections::HashMap<String, String> = port_map
+                    .iter()
+                    .map(|(n, (hp, _))| {
+                        (format!("ECLUSE_{}_PORT", n.to_uppercase()), hp.to_string())
+                    })
+                    .collect();
 
                 let yaml = compose::generate_overlay_with_ports(
                     &compose_data,
@@ -97,7 +106,7 @@ impl super::ModeHandler for ContainerMode {
                 let overlay_str = overlay_path.to_string_lossy().to_string();
 
                 if let Err(e) =
-                    docker::compose_up(&project, &compose_str, Some(&overlay_str), watch)
+                    docker::compose_up(&project, &compose_str, Some(&overlay_str), watch, &compose_env)
                 {
                     for ov in &written_overlays {
                         let _ = std::fs::remove_file(ov);
@@ -137,7 +146,13 @@ impl super::ModeHandler for ContainerMode {
             let compose_str = compose_path.to_string_lossy().to_string();
             let overlay_str = overlay_path.to_string_lossy().to_string();
 
-            if let Err(e) = docker::compose_up(&project, &compose_str, Some(&overlay_str), watch) {
+            if let Err(e) = docker::compose_up(
+                &project,
+                &compose_str,
+                Some(&overlay_str),
+                watch,
+                &std::collections::HashMap::new(),
+            ) {
                 let _ = std::fs::remove_file(&overlay_path);
                 if !reuse_worktree {
                     let _ = wt.remove(&worktree_path);

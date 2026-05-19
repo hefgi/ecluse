@@ -13,6 +13,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - Hardcoded `container_name` fields in `docker-compose.yml` are now overridden in the compose overlay with `<prefix>-<service>-<slot>` (e.g. `ecluse-postgres-2`). The previous fix set the field to `null`, which some Docker Compose versions do not honour — the original value survived the merge and caused container name conflicts between sessions. Using an explicit slot-scoped name guarantees uniqueness across all concurrent sessions and the main devenv.
 - `detect` tests no longer fail in environments where Docker is not running. Seven tests asserted absolute scores (`> 0`) but the Docker-unavailable penalty (`-10`) in CI pushed scores negative. Tests now compare against an `empty_dir()` baseline so the delta assertions hold regardless of Docker availability.
+- Compose overlay now unconditionally emits the port mapping for every `run = "docker"` service that has a `base_port`, even when the base compose file declares no `ports:` field. Previously, the overlay skipped the port entirely in this case — the container started with no host port published, `ECLUSE_*_PORT` was advertised but nothing was listening, and connections silently fell through to other services (e.g. the main-repo postgres).
+- Compose overlay now uses the `ports: !override` YAML merge tag when the base compose file already declares `ports:` for a service. Docker Compose's default additive merge would otherwise publish both the base port (e.g. `5432:5432`) and the slot port (e.g. `5433:5432`), causing a bind failure when the base port is already in use by the main devenv.
+- `ECLUSE_*_PORT` environment variables are now injected into the `docker compose up` child process. Compose files can reference `${ECLUSE_POSTGRES_PORT}` etc. directly for interpolation without needing the overlay to rewrite anything.
 
 ---
 
