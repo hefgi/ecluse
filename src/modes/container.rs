@@ -83,8 +83,14 @@ impl super::ModeHandler for ContainerMode {
                 let overlay_name = overlay_name_for_compose(slug, compose_path, root);
                 let overlay_path = overlay_dir.join(&overlay_name);
 
-                let yaml =
-                    compose::generate_overlay_with_ports(&compose_data, &port_map, &suffix, None)?;
+                let yaml = compose::generate_overlay_with_ports(
+                    &compose_data,
+                    &port_map,
+                    &suffix,
+                    None,
+                    &config.prefix,
+                    slot,
+                )?;
                 std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
 
                 let compose_str = compose_path.to_string_lossy().to_string();
@@ -118,7 +124,14 @@ impl super::ModeHandler for ContainerMode {
             ));
 
             let overlay_path = overlay_dir.join(format!("{}.yml", slug));
-            let yaml = compose::generate_overlay(&compose_data, slot as u16, &suffix, None)?;
+            let yaml = compose::generate_overlay(
+                &compose_data,
+                slot as u16,
+                &suffix,
+                None,
+                &config.prefix,
+                slot,
+            )?;
             std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
 
             let compose_str = compose_path.to_string_lossy().to_string();

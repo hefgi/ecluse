@@ -90,6 +90,8 @@ impl super::ModeHandler for HybridMode {
                     &port_map,
                     &suffix,
                     Some(&svc_names),
+                    &config.prefix,
+                    slot,
                 )?;
                 std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
 
@@ -140,8 +142,14 @@ impl super::ModeHandler for HybridMode {
             ));
 
             let overlay_path = overlay_dir.join(format!("{}.yml", slug));
-            let yaml =
-                compose::generate_overlay(&compose_data, slot as u16, &suffix, Some(&data_svcs))?;
+            let yaml = compose::generate_overlay(
+                &compose_data,
+                slot as u16,
+                &suffix,
+                Some(&data_svcs),
+                &config.prefix,
+                slot,
+            )?;
             std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
 
             let compose_str = compose_path.to_string_lossy().to_string();

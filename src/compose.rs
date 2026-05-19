@@ -100,6 +100,8 @@ pub fn generate_overlay(
     offset: u16,
     suffix: &str,
     services_to_include: Option<&[String]>,
+    prefix: &str,
+    slot: u8,
 ) -> Result<String> {
     let mut overlay_services: HashMap<String, serde_yaml::Value> = HashMap::new();
     let mut overlay_volumes: HashMap<String, serde_yaml::Value> = HashMap::new();
@@ -113,13 +115,13 @@ pub fn generate_overlay(
 
         let mut svc_override: HashMap<String, serde_yaml::Value> = HashMap::new();
 
-        // Override any hardcoded container_name with a slug-scoped name so it never
-        // conflicts with the main devenv, even on Docker Compose versions where null
-        // in an overlay does not clear a field.
+        // Override any hardcoded container_name with a slot-scoped name so it never
+        // conflicts with the main devenv or other sessions, even on Docker Compose
+        // versions where null in an overlay does not clear a field.
         if svc.other.contains_key("container_name") {
             svc_override.insert(
                 "container_name".into(),
-                serde_yaml::Value::String(format!("{}-{}", suffix, name)),
+                serde_yaml::Value::String(format!("{}-{}-{}", prefix, name, slot)),
             );
         }
 
@@ -191,6 +193,8 @@ pub fn generate_overlay_with_ports(
     port_overrides: &HashMap<String, u16>,
     suffix: &str,
     services_to_include: Option<&[String]>,
+    prefix: &str,
+    slot: u8,
 ) -> Result<String> {
     let mut overlay_services: HashMap<String, serde_yaml::Value> = HashMap::new();
     let mut overlay_volumes: HashMap<String, serde_yaml::Value> = HashMap::new();
@@ -204,13 +208,13 @@ pub fn generate_overlay_with_ports(
 
         let mut svc_override: HashMap<String, serde_yaml::Value> = HashMap::new();
 
-        // Override any hardcoded container_name with a slug-scoped name so it never
-        // conflicts with the main devenv, even on Docker Compose versions where null
-        // in an overlay does not clear a field.
+        // Override any hardcoded container_name with a slot-scoped name so it never
+        // conflicts with the main devenv or other sessions, even on Docker Compose
+        // versions where null in an overlay does not clear a field.
         if svc.other.contains_key("container_name") {
             svc_override.insert(
                 "container_name".into(),
-                serde_yaml::Value::String(format!("{}-{}", suffix, name)),
+                serde_yaml::Value::String(format!("{}-{}-{}", prefix, name, slot)),
             );
         }
 
@@ -716,21 +720,21 @@ mod tests {
     #[test]
     fn overlay_port_string_host_container_rewritten() {
         let cf = make_compose(vec![("app", null_svc(&["3000:3000"], &[]))]);
-        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        let yaml = generate_overlay(&cf, 100, "slug", None, "ecluse", 1).unwrap();
         assert!(yaml.contains("3100:3000"), "got: {}", yaml);
     }
 
     #[test]
     fn overlay_port_container_only_rewritten_with_host() {
         let cf = make_compose(vec![("app", null_svc(&["8080"], &[]))]);
-        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        let yaml = generate_overlay(&cf, 100, "slug", None, "ecluse", 1).unwrap();
         assert!(yaml.contains("8180:8080"), "got: {}", yaml);
     }
 
     #[test]
     fn overlay_port_ip_host_container_rewritten() {
         let cf = make_compose(vec![("app", null_svc(&["0.0.0.0:3000:3000"], &[]))]);
-        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        let yaml = generate_overlay(&cf, 100, "slug", None, "ecluse", 1).unwrap();
         assert!(yaml.contains("3100"), "got: {}", yaml);
     }
 
@@ -741,7 +745,7 @@ mod tests {
             ..null_svc(&[], &[])
         };
         let cf = make_compose(vec![("app", s)]);
-        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        let yaml = generate_overlay(&cf, 100, "slug", None, "ecluse", 1).unwrap();
         assert!(yaml.contains("3100"), "got: {}", yaml);
     }
 
@@ -761,7 +765,7 @@ mod tests {
             ..null_svc(&[], &[])
         };
         let cf = make_compose(vec![("app", s)]);
-        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        let yaml = generate_overlay(&cf, 100, "slug", None, "ecluse", 1).unwrap();
         assert!(yaml.contains("3100"), "got: {}", yaml);
     }
 
@@ -778,7 +782,7 @@ mod tests {
         };
         let cf = make_compose(vec![("app", s)]);
         // Should not crash even without "published" key
-        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        let yaml = generate_overlay(&cf, 100, "slug", None, "ecluse", 1).unwrap();
         assert!(!yaml.is_empty());
     }
 
@@ -786,7 +790,7 @@ mod tests {
     fn overlay_port_non_numeric_host_passthrough() {
         // "named-port:3000" — host is not a number, should pass through unchanged
         let cf = make_compose(vec![("app", null_svc(&["named-port:3000"], &[]))]);
-        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        let yaml = generate_overlay(&cf, 100, "slug", None, "ecluse", 1).unwrap();
         assert!(yaml.contains("named-port:3000"), "got: {}", yaml);
     }
 
@@ -798,14 +802,14 @@ mod tests {
             "db",
             null_svc(&[], &["db_data:/var/lib/postgresql/data"]),
         )]);
-        let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
+        let yaml = generate_overlay(&cf, 0, "myslug", None, "ecluse", 1).unwrap();
         assert!(yaml.contains("db_data_myslug"), "got: {}", yaml);
     }
 
     #[test]
     fn overlay_bind_mount_dot_not_namespaced() {
         let cf = make_compose(vec![("app", null_svc(&[], &["./src:/app/src"]))]);
-        let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
+        let yaml = generate_overlay(&cf, 0, "myslug", None, "ecluse", 1).unwrap();
         assert!(
             yaml.contains("./src:/app/src") || yaml.contains("'./src:/app/src'"),
             "got: {}",
@@ -817,7 +821,7 @@ mod tests {
     #[test]
     fn overlay_bind_mount_absolute_not_namespaced() {
         let cf = make_compose(vec![("app", null_svc(&[], &["/data:/data"]))]);
-        let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
+        let yaml = generate_overlay(&cf, 0, "myslug", None, "ecluse", 1).unwrap();
         assert!(!yaml.contains("/data_myslug"), "got: {}", yaml);
     }
 
@@ -841,7 +845,7 @@ mod tests {
             ..null_svc(&[], &[])
         };
         let cf = make_compose(vec![("db", s)]);
-        let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
+        let yaml = generate_overlay(&cf, 0, "myslug", None, "ecluse", 1).unwrap();
         assert!(yaml.contains("db_data_myslug"), "got: {}", yaml);
     }
 
@@ -865,7 +869,7 @@ mod tests {
             ..null_svc(&[], &[])
         };
         let cf = make_compose(vec![("app", s)]);
-        let yaml = generate_overlay(&cf, 0, "myslug", None).unwrap();
+        let yaml = generate_overlay(&cf, 0, "myslug", None, "ecluse", 1).unwrap();
         assert!(!yaml.contains("./src_myslug"), "got: {}", yaml);
     }
 
@@ -874,7 +878,7 @@ mod tests {
         let s = null_svc(&[], &["db_data:/data"]);
         let mut cf = make_compose(vec![("db", s)]);
         cf.volumes.insert("db_data".into(), serde_yaml::Value::Null);
-        let yaml = generate_overlay(&cf, 0, "slug", None).unwrap();
+        let yaml = generate_overlay(&cf, 0, "slug", None, "ecluse", 1).unwrap();
         assert!(yaml.contains("db_data_slug"), "got: {}", yaml);
     }
 
@@ -884,7 +888,8 @@ mod tests {
             ("app", null_svc(&["3000:3000"], &[])),
             ("db", null_svc(&["5432:5432"], &[])),
         ]);
-        let yaml = generate_overlay(&cf, 100, "slug", Some(&["db".to_string()])).unwrap();
+        let yaml =
+            generate_overlay(&cf, 100, "slug", Some(&["db".to_string()]), "ecluse", 1).unwrap();
         assert!(yaml.contains("5532"), "got: {}", yaml);
         assert!(!yaml.contains("3100"), "got: {}", yaml);
     }
@@ -892,7 +897,7 @@ mod tests {
     #[test]
     fn overlay_empty_compose_no_crash() {
         let cf = make_compose(vec![]);
-        let yaml = generate_overlay(&cf, 100, "slug", None).unwrap();
+        let yaml = generate_overlay(&cf, 100, "slug", None, "ecluse", 1).unwrap();
         // no panic, valid yaml (may be empty or just "---\n")
         let _: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap_or(serde_yaml::Value::Null);
     }
@@ -900,7 +905,7 @@ mod tests {
     #[test]
     fn overlay_zero_offset_keeps_original_port() {
         let cf = make_compose(vec![("app", null_svc(&["3000:3000"], &[]))]);
-        let yaml = generate_overlay(&cf, 0, "slug", None).unwrap();
+        let yaml = generate_overlay(&cf, 0, "slug", None, "ecluse", 1).unwrap();
         assert!(yaml.contains("3000:3000"), "got: {}", yaml);
     }
 
@@ -919,10 +924,9 @@ mod tests {
             "postgres",
             svc_with_container_name("onyx-postgres", &["5432:5432"]),
         )]);
-        let yaml = generate_overlay(&cf, 1, "feat-foo", None).unwrap();
-        // overrides the hardcoded name with a slug-scoped unique name
+        let yaml = generate_overlay(&cf, 1, "feat-foo", None, "ecluse", 2).unwrap();
         assert!(
-            yaml.contains("container_name: feat-foo-postgres"),
+            yaml.contains("container_name: ecluse-postgres-2"),
             "got: {}",
             yaml
         );
@@ -937,9 +941,9 @@ mod tests {
         )]);
         let mut ports = HashMap::new();
         ports.insert("redis".to_string(), 6380u16);
-        let yaml = generate_overlay_with_ports(&cf, &ports, "feat-foo", None).unwrap();
+        let yaml = generate_overlay_with_ports(&cf, &ports, "feat-foo", None, "ecluse", 3).unwrap();
         assert!(
-            yaml.contains("container_name: feat-foo-redis"),
+            yaml.contains("container_name: ecluse-redis-3"),
             "got: {}",
             yaml
         );
@@ -950,7 +954,7 @@ mod tests {
     fn overlay_no_container_name_field_not_injected() {
         // Services without container_name should not get a null entry added
         let cf = make_compose(vec![("db", null_svc(&["5432:5432"], &[]))]);
-        let yaml = generate_overlay(&cf, 1, "feat-foo", None).unwrap();
+        let yaml = generate_overlay(&cf, 1, "feat-foo", None, "ecluse", 1).unwrap();
         assert!(!yaml.contains("container_name"), "got: {}", yaml);
     }
 }
