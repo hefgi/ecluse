@@ -644,8 +644,8 @@ struct SessionRow {
     mode: String,
     #[tabled(rename = "SLOT")]
     slot: u8,
-    #[tabled(rename = "PORT")]
-    port: String,
+    #[tabled(rename = "PORTS")]
+    ports: String,
     #[tabled(rename = "BRANCH")]
     branch: String,
     #[tabled(rename = "STARTED")]
@@ -671,16 +671,26 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
         .state
         .sessions
         .iter()
-        .map(|s| SessionRow {
-            slug: s.slug.clone(),
-            mode: s.mode.to_string(),
-            slot: s.slot,
-            port: s
-                .app_port
-                .map(|p| p.to_string())
-                .unwrap_or_else(|| "-".into()),
-            branch: s.branch.clone(),
-            started: s.started_at[..16].replace('T', " "),
+        .map(|s| {
+            let mut pairs: Vec<String> = s
+                .port_overrides
+                .iter()
+                .map(|(k, v)| format!("{}={}", k, v))
+                .collect();
+            pairs.sort();
+            let ports = if pairs.is_empty() {
+                "-".into()
+            } else {
+                pairs.join(" ")
+            };
+            SessionRow {
+                slug: s.slug.clone(),
+                mode: s.mode.to_string(),
+                slot: s.slot,
+                ports,
+                branch: s.branch.clone(),
+                started: s.started_at[..16].replace('T', " "),
+            }
         })
         .collect();
 
