@@ -120,6 +120,8 @@ Prints the session's environment variables as JSON. Includes `worktree_path` and
 
 Lists active sessions. Use `--json` for machine-readable output.
 
+The table shows all allocated ports in a `PORTS` column as `name=value` pairs (e.g. `api=4445 postgres=5433 redis=6380`). A `TMUX` column appears when at least one session uses tmux — the value is the session name you can pass to `tmux attach -t <name>` or `ecluse shell <slug>`.
+
 ## ecluse validate
 
 Validates port ranges in `.ecluse.toml` and checks for gaps or collisions. Use `--ports` to preview the full port allocation table across all slots. Also checks that the configured `process_manager` binary is installed (e.g. tmux or nohup).

@@ -124,6 +124,7 @@ ecluse down <slug>
 ### Query an existing session anytime
 
 ```bash
+ecluse ls           # all sessions: ports as name=value pairs; TMUX column when tmux is in use
 ecluse env <slug>   # same JSON as up --json: worktree_path + all env vars
 ecluse env          # auto-detects current session if run from inside a worktree
 ```

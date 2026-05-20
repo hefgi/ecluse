@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- `ecluse ls` now shows all allocated ports in a `PORTS` column (`name=value` pairs, alphabetically sorted) instead of a single `PORT` value. Sessions with many services no longer require `ecluse env` to see the full port map.
+- `ecluse ls` now shows a `TMUX` column with the tmux session name when at least one active session uses tmux as the process manager. The column is hidden entirely for repos where no session uses tmux (container mode, nohup, or no native services), keeping the table uncluttered.
+
+---
+
 ## [0.2.6] — 2026-05-19
 
 ### Added
