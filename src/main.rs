@@ -646,6 +646,8 @@ struct SessionRow {
     slot: u8,
     #[tabled(rename = "PORTS")]
     ports: String,
+    #[tabled(rename = "TMUX")]
+    tmux: String,
     #[tabled(rename = "BRANCH")]
     branch: String,
     #[tabled(rename = "STARTED")]
@@ -688,13 +690,22 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
                 mode: s.mode.to_string(),
                 slot: s.slot,
                 ports,
+                tmux: s.tmux_session.clone().unwrap_or_default(),
                 branch: s.branch.clone(),
                 started: s.started_at[..16].replace('T', " "),
             }
         })
         .collect();
 
-    println!("{}", Table::new(rows));
+    let any_tmux = guard.state.sessions.iter().any(|s| s.tmux_session.is_some());
+    let mut table = Table::new(rows);
+    if !any_tmux {
+        use tabled::settings::object::Columns;
+        use tabled::settings::Disable;
+        // TMUX is column index 4 (SLUG=0, MODE=1, SLOT=2, PORTS=3, TMUX=4)
+        table.with(Disable::column(Columns::single(4)));
+    }
+    println!("{}", table);
 
     let log = log::StepLogger::new(false);
     for s in &guard.state.sessions {
