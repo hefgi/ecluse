@@ -105,9 +105,13 @@ impl super::ModeHandler for ContainerMode {
                 let compose_str = compose_path.to_string_lossy().to_string();
                 let overlay_str = overlay_path.to_string_lossy().to_string();
 
-                if let Err(e) =
-                    docker::compose_up(&project, &compose_str, Some(&overlay_str), watch, &compose_env)
-                {
+                if let Err(e) = docker::compose_up(
+                    &project,
+                    &compose_str,
+                    Some(&overlay_str),
+                    watch,
+                    &compose_env,
+                ) {
                     for ov in &written_overlays {
                         let _ = std::fs::remove_file(ov);
                     }

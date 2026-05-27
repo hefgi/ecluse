@@ -49,6 +49,7 @@ fn run(cli: cli::Cli) -> Result<()> {
         cli::Command::Shutdown(args) => cmd_shutdown(args),
         cli::Command::Sync(args) => cmd_sync(args),
         cli::Command::Flush(args) => cmd_flush(args),
+        cli::Command::Status(args) => cmd_status(args),
     }
 }
 
@@ -697,7 +698,11 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
         })
         .collect();
 
-    let any_tmux = guard.state.sessions.iter().any(|s| s.tmux_session.is_some());
+    let any_tmux = guard
+        .state
+        .sessions
+        .iter()
+        .any(|s| s.tmux_session.is_some());
     let mut table = Table::new(rows);
     if !any_tmux {
         use tabled::settings::object::Columns;
@@ -1255,6 +1260,219 @@ fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
     println!();
     log.success("Flush complete — ecluse is in a clean state.");
     println!();
+
+    Ok(())
+}
+
+// ── status ────────────────────────────────────────────────────────────────────
+
+struct ServiceStatus {
+    name: String,
+    kind: &'static str,
+    port: Option<u16>,
+    healthy: bool,
+    pid: Option<u32>,
+}
+
+#[derive(Tabled)]
+struct StatusRow {
+    #[tabled(rename = "SERVICE")]
+    service: String,
+    #[tabled(rename = "TYPE")]
+    kind: String,
+    #[tabled(rename = "PORT")]
+    port: String,
+    #[tabled(rename = "STATUS")]
+    status: String,
+    #[tabled(rename = "PID")]
+    pid: String,
+}
+
+fn cmd_status(args: cli::StatusArgs) -> Result<()> {
+    let (config, root) = config::Config::find_and_load()?;
+    let guard = state::StateGuard::acquire(&root)?;
+
+    // Resolve slug: from arg or from cwd.
+    let session = match args.slug {
+        Some(ref slug) => guard
+            .state
+            .find_session(slug)
+            .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
+            .clone(),
+        None => {
+            let cwd = std::env::current_dir().context("could not determine current directory")?;
+            guard
+                .state
+                .sessions
+                .iter()
+                .find(|s| {
+                    let wt = std::path::Path::new(&s.worktree_path);
+                    cwd.starts_with(wt)
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "not inside an ecluse worktree; run from a worktree or pass a slug"
+                    )
+                })?
+                .clone()
+        }
+    };
+
+    let worktree = std::path::Path::new(&session.worktree_path);
+
+    // Build per-service health status.
+    let native_svcs: Vec<&config::ServiceConfig> = config
+        .services
+        .iter()
+        .filter(|s| s.run == config::ServiceRun::Native)
+        .collect();
+
+    let docker_svcs: Vec<&config::ServiceConfig> = config
+        .services
+        .iter()
+        .filter(|s| s.run == config::ServiceRun::Docker)
+        .collect();
+
+    // Discover processes once for all native services.
+    let discovered = if !native_svcs.is_empty() {
+        sync::find_processes_in_worktree(worktree)
+    } else {
+        vec![]
+    };
+
+    let native_matches = sync::match_services(&native_svcs, &discovered);
+
+    // Docker: find running containers.
+    let docker_matches = if !docker_svcs.is_empty() {
+        sync::find_docker_services(&docker_svcs, &session.slug)
+    } else {
+        vec![]
+    };
+
+    let mut statuses: Vec<ServiceStatus> = Vec::new();
+
+    for svc in &native_svcs {
+        let matched = native_matches.iter().find(|m| m.service_name == svc.name);
+        let (healthy, pid, port) = match matched {
+            Some(m) => {
+                let alive = process::pid_alive(m.pid);
+                let p = m
+                    .port
+                    .or_else(|| session.port_overrides.get(&svc.name).copied());
+                (alive, Some(m.pid), p)
+            }
+            None => {
+                // Fall back to PID file if sync was used.
+                let pid_file = root
+                    .join(".ecluse")
+                    .join("pids")
+                    .join(&session.slug)
+                    .join(format!("{}.pid", svc.name));
+                if pid_file.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&pid_file) {
+                        if let Ok(pid) = content.trim().parse::<u32>() {
+                            let alive = process::pid_alive(pid);
+                            let p = session.port_overrides.get(&svc.name).copied();
+                            (alive, Some(pid), p)
+                        } else {
+                            (false, None, session.port_overrides.get(&svc.name).copied())
+                        }
+                    } else {
+                        (false, None, session.port_overrides.get(&svc.name).copied())
+                    }
+                } else {
+                    (false, None, session.port_overrides.get(&svc.name).copied())
+                }
+            }
+        };
+        statuses.push(ServiceStatus {
+            name: svc.name.clone(),
+            kind: "native",
+            port,
+            healthy,
+            pid,
+        });
+    }
+
+    for svc in &docker_svcs {
+        let found_port = docker_matches
+            .iter()
+            .find(|(name, _)| name == &svc.name)
+            .map(|(_, p)| *p);
+        let healthy = found_port.is_some();
+        let port = found_port.or_else(|| session.port_overrides.get(&svc.name).copied());
+        statuses.push(ServiceStatus {
+            name: svc.name.clone(),
+            kind: "docker",
+            port,
+            healthy,
+            pid: None,
+        });
+    }
+
+    let all_healthy = statuses.iter().all(|s| s.healthy);
+
+    if args.json {
+        let services_json: Vec<serde_json::Value> = statuses
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "name": s.name,
+                    "type": s.kind,
+                    "port": s.port,
+                    "healthy": s.healthy,
+                    "pid": s.pid,
+                })
+            })
+            .collect();
+        let out = serde_json::json!({
+            "slug": session.slug,
+            "slot": session.slot,
+            "all_healthy": all_healthy,
+            "services": services_json,
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else if !args.quiet {
+        println!(
+            "Session: {}  slot={}  worktree={}",
+            session.slug, session.slot, session.worktree_path
+        );
+        println!();
+
+        if statuses.is_empty() {
+            println!("No services defined in .ecluse.toml.");
+        } else {
+            let rows: Vec<StatusRow> = statuses
+                .iter()
+                .map(|s| StatusRow {
+                    service: s.name.clone(),
+                    kind: s.kind.to_string(),
+                    port: s.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+                    status: if s.healthy {
+                        "\u{2713} up".into()
+                    } else {
+                        "\u{2717} down".into()
+                    },
+                    pid: s.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+                })
+                .collect();
+            println!("{}", Table::new(rows));
+            println!();
+
+            let down_count = statuses.iter().filter(|s| !s.healthy).count();
+            if down_count > 0 {
+                eprintln!(
+                    "{} service{} down",
+                    down_count,
+                    if down_count == 1 { "" } else { "s" }
+                );
+            }
+        }
+    }
+
+    if !all_healthy {
+        std::process::exit(1);
+    }
 
     Ok(())
 }

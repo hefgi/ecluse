@@ -150,7 +150,7 @@ pub fn check_processes_alive(
     warnings
 }
 
-fn pid_alive(pid: u32) -> bool {
+pub fn pid_alive(pid: u32) -> bool {
     // kill -0 sends no signal but checks if the process exists
     Command::new("kill")
         .args(["-0", &pid.to_string()])

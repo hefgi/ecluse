@@ -37,6 +37,8 @@ pub enum Command {
     Sync(SyncArgs),
     /// Hard-reset to clean state: kill all sessions, orphaned tmux sessions, and orphaned containers
     Flush(FlushArgs),
+    /// Show health status of services for a session
+    Status(StatusArgs),
 }
 
 #[derive(Args)]
@@ -190,6 +192,18 @@ pub struct FlushArgs {
     pub yes: bool,
 
     /// Suppress step output
+    #[arg(long)]
+    pub quiet: bool,
+}
+
+#[derive(Args)]
+pub struct StatusArgs {
+    /// Session slug (auto-detected from cwd if omitted)
+    pub slug: Option<String>,
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+    /// Suppress table output (only exit code matters)
     #[arg(long)]
     pub quiet: bool,
 }

@@ -295,8 +295,8 @@ pub fn generate_overlay_with_ports(
         );
     }
 
-    let yaml =
-        serde_yaml::to_string(&serde_yaml::Value::Mapping(root)).context("failed to serialize overlay YAML")?;
+    let yaml = serde_yaml::to_string(&serde_yaml::Value::Mapping(root))
+        .context("failed to serialize overlay YAML")?;
 
     // Post-process: add !override tag on `ports:` lines for services that had
     // a competing ports declaration in the base compose. This makes Docker
@@ -313,10 +313,7 @@ pub fn generate_overlay_with_ports(
 /// the given set of service names. Works on the indented block structure that
 /// serde_yaml produces: a service block starts at two-space indent and its
 /// `ports:` key is at four-space indent.
-fn inject_ports_override_tag(
-    yaml: &str,
-    services: &std::collections::HashSet<String>,
-) -> String {
+fn inject_ports_override_tag(yaml: &str, services: &std::collections::HashSet<String>) -> String {
     let mut result = String::with_capacity(yaml.len() + services.len() * 12);
     let mut current_service: Option<String> = None;
 
