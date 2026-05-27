@@ -124,9 +124,11 @@ ecluse down <slug>
 ### Query an existing session anytime
 
 ```bash
-ecluse ls           # all sessions: ports as name=value pairs; TMUX column when tmux is in use
-ecluse env <slug>   # same JSON as up --json: worktree_path + all env vars
-ecluse env          # auto-detects current session if run from inside a worktree
+ecluse ls                       # all sessions: ports as name=value pairs; TMUX column when tmux is in use
+ecluse env <slug>               # same JSON as up --json: worktree_path + all env vars
+ecluse env                      # auto-detects current session if run from inside a worktree
+ecluse status <slug>            # per-service health: ✓/✗ with port and PID; exit 1 if any down
+ecluse status <slug> --json     # machine-readable health check
 ```
 
 ### Sync a manually-started environment
@@ -647,11 +649,20 @@ ecluse env [<slug>]
 ecluse down <slug> [--keep-volumes] [--keep-branch] [--keep-worktree]
 ecluse ls [--json]
 ecluse validate [--ports]
+ecluse status [<slug>] [--json] [--quiet]
 ```
 
 `ecluse shell` exists but is human-only — it spawns an interactive subshell that blocks non-interactive execution. Agents must not use it.
 
 `ecluse validate` checks your `.ecluse.toml` for port range safety (ensures `port_search_range` doesn't create overlaps between services) and prints the current config. Pass `--ports` to see the full port allocation table across all slots.
+
+`ecluse status` checks whether each service is actually running. For native services it matches running processes by command line; for docker services it queries `docker ps`. Exits with code 1 if any service is down — useful in CI pre-flight or as a readiness gate after `ecluse up`. Use `--json` for machine-readable output:
+
+```bash
+ecluse status feat-foo           # human table: ✓/✗ per service with port and PID
+ecluse status feat-foo --json    # { "all_healthy": true/false, "services": [...] }
+ecluse status --quiet            # exit-code only (0 = all up, 1 = any down)
+```
 
 **Soft restart** — tear down services without losing the git worktree, then spin up fresh:
 

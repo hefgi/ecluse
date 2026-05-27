@@ -140,6 +140,7 @@ ecluse shutdown [--keep-volumes] [--keep-worktrees]
 ecluse flush [--yes]
 ecluse ls [--json]
 ecluse validate [--ports]
+ecluse status [<slug>] [--json] [--quiet]
 ```
 
 **Env** — get the worktree path and all env vars for a running session as JSON:

@@ -11,6 +11,7 @@ ecluse ls       [--json]
 ecluse shell    <slug>
 ecluse env      [<slug>]
 ecluse validate [--ports] [--quiet]
+ecluse status   [<slug>] [--json] [--quiet]
 ```
 
 ## ecluse init
@@ -130,3 +131,20 @@ Validates port ranges in `.ecluse.toml` and checks for gaps or collisions. Use `
 |---|---|
 | `--ports` | Print the full port allocation table for all slots |
 | `--quiet` | Suppress step output |
+
+## ecluse status
+
+Shows the health of each service for a session — whether the process is running (native) or the container is up (docker). Exits with code 1 if any service is down.
+
+```bash
+ecluse status feat-foo          # table output, exit 1 if any service down
+ecluse status feat-foo --json   # machine-readable, same exit code semantics
+ecluse status                   # auto-detect slug from cwd (must be inside a worktree)
+```
+
+For native services, ecluse matches running processes in the worktree by their command line. For docker services, it queries `docker ps` by container name.
+
+| Flag | Description |
+|---|---|
+| `--json` | Output as JSON (implies `--quiet`) |
+| `--quiet` | Suppress table output — only the exit code is set |
