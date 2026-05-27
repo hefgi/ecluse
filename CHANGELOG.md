@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.2.7] — 2026-05-28
+
 ### Added
 - `ecluse status [<slug>] [--json] [--quiet]` — per-service health check. Shows a ✓/✗ indicator, port, type (native/docker), and PID for each service. For native services, matches running processes in the worktree by command line; for docker services, queries `docker ps` by container name. Exits with code 1 if any service is down, making it useful in agent scripts and CI pre-flight checks. Slug is auto-detected from cwd when omitted.
 
