@@ -26,6 +26,8 @@ impl super::ModeHandler for HostMode {
         reuse_worktree: bool,
         port_overrides: &std::collections::HashMap<String, u16>,
         service_filter: Option<&std::collections::HashSet<String>>,
+        skip_services: &std::collections::HashSet<String>,
+        existing_port_overrides: &std::collections::HashMap<String, u16>,
         log: &StepLogger,
     ) -> Result<Session> {
         let wt = WorktreeManager::new(root.to_owned());
@@ -44,7 +46,13 @@ impl super::ModeHandler for HostMode {
         }
 
         log.step("Allocating ports...");
-        let native_ports = native_ports_for_slot(config, slot, port_overrides)?;
+        let native_ports = native_ports_for_slot(
+            config,
+            slot,
+            port_overrides,
+            skip_services,
+            existing_port_overrides,
+        )?;
         for (name, port) in &native_ports {
             log.detail(&format!("{name}: {port}"));
         }
@@ -70,12 +78,18 @@ impl super::ModeHandler for HostMode {
 
         let global = process::load_global_config()?;
 
-        let spawn = if native_svcs.iter().any(|s| s.command.is_some()) {
+        let svcs_to_spawn: Vec<_> = native_svcs
+            .iter()
+            .filter(|s| !skip_services.contains(&s.name))
+            .copied()
+            .collect();
+
+        let spawn = if svcs_to_spawn.iter().any(|s| s.command.is_some()) {
             log.step(&format!(
                 "Spawning native services ({})...",
                 global.process_manager
             ));
-            for svc in &native_svcs {
+            for svc in &svcs_to_spawn {
                 if let Some(cmd) = &svc.command {
                     let port = native_ports.get(&svc.name).copied().unwrap_or(0);
                     log.detail(&format!("{} on port {} — {}", svc.name, port, cmd));
@@ -84,7 +98,7 @@ impl super::ModeHandler for HostMode {
             process::spawn_services(
                 &global.process_manager,
                 slug,
-                &native_svcs,
+                &svcs_to_spawn,
                 &worktree_path,
                 &env_map,
             )?
@@ -92,7 +106,7 @@ impl super::ModeHandler for HostMode {
             process::spawn_services(
                 &global.process_manager,
                 slug,
-                &native_svcs,
+                &svcs_to_spawn,
                 &worktree_path,
                 &env_map,
             )?
@@ -161,7 +175,13 @@ impl super::ModeHandler for HostMode {
         keep_worktree: bool,
         log: &StepLogger,
     ) -> Result<()> {
-        let native_ports = native_ports_for_slot(config, session.slot, &session.port_overrides)?;
+        let native_ports = native_ports_for_slot(
+            config,
+            session.slot,
+            &session.port_overrides,
+            &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
+        )?;
         let native_svcs = config.native_services();
         let env_map = env::build_env(
             session.slot,
@@ -204,16 +224,18 @@ impl super::ModeHandler for HostMode {
 }
 
 /// Build the native port map for a slot, falling back to "app" on 3000+slot
-/// when no [[services]] are defined. Finds a free port for each service,
-/// unless a port is explicitly overridden via `overrides`.
+/// when no [[services]] are defined. Skipped services copy their port from
+/// `existing` instead of calling find_free_port.
 fn native_ports_for_slot(
     config: &Config,
     slot: u8,
     overrides: &std::collections::HashMap<String, u16>,
+    skip: &std::collections::HashSet<String>,
+    existing: &std::collections::HashMap<String, u16>,
 ) -> Result<IndexMap<String, u16>> {
     let native = config.native_services();
     if native.is_empty() {
-        let port = if let Some(&p) = overrides.get("app") {
+        let port = if let Some(&p) = overrides.get("app").or_else(|| existing.get("app")) {
             p
         } else {
             let fallback = crate::config::ServiceConfig {
@@ -235,6 +257,13 @@ fn native_ports_for_slot(
             .map(|s| {
                 let port = if let Some(&p) = overrides.get(&s.name) {
                     p
+                } else if skip.contains(&s.name) {
+                    existing.get(&s.name).copied().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "service '{}' is skipped but has no recorded port; run ecluse up without --skip or provide --port {}=<value>",
+                            s.name, s.name
+                        )
+                    })?
                 } else {
                     validate::find_free_port(config, s, slot)?
                 };

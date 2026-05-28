@@ -28,6 +28,8 @@ impl super::ModeHandler for ContainerMode {
         reuse_worktree: bool,
         port_overrides: &std::collections::HashMap<String, u16>,
         service_filter: Option<&std::collections::HashSet<String>>,
+        skip_services: &std::collections::HashSet<String>,
+        existing_port_overrides: &std::collections::HashMap<String, u16>,
         log: &StepLogger,
     ) -> Result<Session> {
         let wt = WorktreeManager::new(root.to_owned());
@@ -54,76 +56,94 @@ impl super::ModeHandler for ContainerMode {
         let mut allocated_ports: Vec<(String, u16)> = vec![];
         let mut written_overlays: Vec<String> = vec![];
 
-        if !docker_svcs_config.is_empty() {
-            let groups = group_by_compose(root, &docker_svcs_config)?;
-
-            for (compose_path, svcs) in &groups {
-                let svc_names: Vec<String> = svcs.iter().map(|s| s.name.clone()).collect();
-                log.step(&format!(
-                    "Starting docker services: {}...",
-                    svc_names.join(", ")
-                ));
-
-                let compose_data = compose::parse(compose_path)?;
-
-                // (host_port, container_port) — container_port defaults to base_port
-                let port_map: std::collections::HashMap<String, (u16, u16)> = svcs
-                    .iter()
-                    .map(|s| {
-                        let host_port = if let Some(&p) = port_overrides.get(&s.name) {
-                            p
-                        } else {
-                            validate::find_free_port(config, s, slot)?
-                        };
-                        allocated_ports.push((s.name.clone(), host_port));
-                        log.detail(&format!("{}: {}", s.name, host_port));
-                        Ok((s.name.clone(), (host_port, s.base_port)))
-                    })
-                    .collect::<Result<_>>()?;
-
-                let overlay_name = overlay_name_for_compose(slug, compose_path, root);
-                let overlay_path = overlay_dir.join(&overlay_name);
-
-                // Build env map for compose interpolation: ECLUSE_<NAME>_PORT vars
-                let compose_env: std::collections::HashMap<String, String> = port_map
-                    .iter()
-                    .map(|(n, (hp, _))| {
-                        (format!("ECLUSE_{}_PORT", n.to_uppercase()), hp.to_string())
-                    })
-                    .collect();
-
-                let yaml = compose::generate_overlay_with_ports(
-                    &compose_data,
-                    &port_map,
-                    &suffix,
-                    None,
-                    &config.prefix,
-                    slot,
-                )?;
-                std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
-
-                let compose_str = compose_path.to_string_lossy().to_string();
-                let overlay_str = overlay_path.to_string_lossy().to_string();
-
-                if let Err(e) = docker::compose_up(
-                    &project,
-                    &compose_str,
-                    Some(&overlay_str),
-                    watch,
-                    &compose_env,
-                ) {
-                    for ov in &written_overlays {
-                        let _ = std::fs::remove_file(ov);
-                    }
-                    let _ = std::fs::remove_file(&overlay_path);
-                    if !reuse_worktree {
-                        let _ = wt.remove(&worktree_path);
-                    }
-                    return Err(e);
+        // Copy ports for skipped docker services from existing session.
+        for svc in &docker_svcs_config {
+            if skip_services.contains(&svc.name) {
+                if let Some(&p) = existing_port_overrides.get(&svc.name) {
+                    log.detail(&format!("{}: already running — skipped", svc.name));
+                    allocated_ports.push((svc.name.clone(), p));
                 }
-
-                written_overlays.push(overlay_str);
             }
+        }
+
+        let docker_svcs_to_start: Vec<_> = docker_svcs_config
+            .iter()
+            .filter(|s| !skip_services.contains(&s.name))
+            .copied()
+            .collect();
+
+        if !docker_svcs_config.is_empty() {
+            if !docker_svcs_to_start.is_empty() {
+                let groups = group_by_compose(root, &docker_svcs_to_start)?;
+
+                for (compose_path, svcs) in &groups {
+                    let svc_names: Vec<String> = svcs.iter().map(|s| s.name.clone()).collect();
+                    log.step(&format!(
+                        "Starting docker services: {}...",
+                        svc_names.join(", ")
+                    ));
+
+                    let compose_data = compose::parse(compose_path)?;
+
+                    // (host_port, container_port) — container_port defaults to base_port
+                    let port_map: std::collections::HashMap<String, (u16, u16)> = svcs
+                        .iter()
+                        .map(|s| {
+                            let host_port = if let Some(&p) = port_overrides.get(&s.name) {
+                                p
+                            } else {
+                                validate::find_free_port(config, s, slot)?
+                            };
+                            allocated_ports.push((s.name.clone(), host_port));
+                            log.detail(&format!("{}: {}", s.name, host_port));
+                            Ok((s.name.clone(), (host_port, s.base_port)))
+                        })
+                        .collect::<Result<_>>()?;
+
+                    let overlay_name = overlay_name_for_compose(slug, compose_path, root);
+                    let overlay_path = overlay_dir.join(&overlay_name);
+
+                    // Build env map for compose interpolation: ECLUSE_<NAME>_PORT vars
+                    let compose_env: std::collections::HashMap<String, String> = port_map
+                        .iter()
+                        .map(|(n, (hp, _))| {
+                            (format!("ECLUSE_{}_PORT", n.to_uppercase()), hp.to_string())
+                        })
+                        .collect();
+
+                    let yaml = compose::generate_overlay_with_ports(
+                        &compose_data,
+                        &port_map,
+                        &suffix,
+                        None,
+                        &config.prefix,
+                        slot,
+                    )?;
+                    std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
+
+                    let compose_str = compose_path.to_string_lossy().to_string();
+                    let overlay_str = overlay_path.to_string_lossy().to_string();
+
+                    if let Err(e) = docker::compose_up(
+                        &project,
+                        &compose_str,
+                        Some(&overlay_str),
+                        watch,
+                        &compose_env,
+                    ) {
+                        for ov in &written_overlays {
+                            let _ = std::fs::remove_file(ov);
+                        }
+                        let _ = std::fs::remove_file(&overlay_path);
+                        if !reuse_worktree {
+                            let _ = wt.remove(&worktree_path);
+                        }
+                        return Err(e);
+                    }
+
+                    written_overlays.push(overlay_str);
+                }
+            } // end if !docker_svcs_to_start.is_empty()
         } else {
             let compose_path = compose::find_compose_file(root).ok_or_else(|| {
                 crate::error::EcluseError::ComposeFileNotFound(root.display().to_string())

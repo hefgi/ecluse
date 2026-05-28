@@ -70,8 +70,8 @@ pub struct InitArgs {
 
 #[derive(Args)]
 pub struct UpArgs {
-    /// Slug for this session (lowercase letters, numbers, hyphens)
-    pub slug: String,
+    /// Slug for this session (lowercase letters, numbers, hyphens); auto-detected from cwd when omitted
+    pub slug: Option<String>,
 
     /// Branch to use (creates ecluse/<slug> from HEAD if not specified)
     #[arg(long)]
@@ -96,6 +96,14 @@ pub struct UpArgs {
     /// Only bring up these services (comma-separated). Omit to start all.
     #[arg(long, value_delimiter = ',', value_name = "NAME")]
     pub services: Option<Vec<String>>,
+
+    /// Skip these services entirely (comma-separated); combinable with --force
+    #[arg(long, value_delimiter = ',', value_name = "NAME")]
+    pub skip: Option<Vec<String>>,
+
+    /// Kill all running services before starting — full restart
+    #[arg(long)]
+    pub force: bool,
 
     /// Suppress step output (implied by --json)
     #[arg(long)]

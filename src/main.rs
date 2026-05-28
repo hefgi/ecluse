@@ -369,8 +369,6 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
     // --json implies --quiet for step output
     let log = log::StepLogger::new(args.quiet || args.json);
 
-    validate_slug(&args.slug)?;
-
     log.step("Loading config...");
     let (config, root) = config::Config::find_and_load()?;
     log.detail(&format!("mode: {}", config.mode));
@@ -385,10 +383,40 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
 
     let mut guard = state::StateGuard::acquire(&root)?;
 
-    if guard.state.find_session(&args.slug).is_some() {
-        return Err(error::EcluseError::SessionExists(args.slug.clone()).into());
+    // Resolve slug: from arg or auto-detect from cwd.
+    let slug: String = match &args.slug {
+        Some(s) => {
+            validate_slug(s)?;
+            s.clone()
+        }
+        None => {
+            log.step("Looking for existing session...");
+            let cwd = std::env::current_dir().context("could not determine current directory")?;
+            guard
+                .state
+                .sessions
+                .iter()
+                .find(|s| cwd.starts_with(std::path::Path::new(&s.worktree_path)))
+                .map(|s| s.slug.clone())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "not inside an ecluse worktree; pass a slug or cd into a worktree"
+                    )
+                })?
+        }
+    };
+
+    // Resume path: session already exists — restart/skip services idempotently.
+    if let Some(existing) = guard.state.find_session(&slug).cloned() {
+        log.step("Looking for existing session...");
+        log.detail(&format!(
+            "found session '{}' (slot {}) — reusing worktree",
+            slug, existing.slot
+        ));
+        return cmd_up_resume(existing, args, config, root, guard, log);
     }
 
+    // New session path (unchanged).
     log.step("Allocating slot...");
     let allocator = slot::SlotAllocator::new(&config, &guard.state);
     let slot = allocator.allocate_next()?;
@@ -397,7 +425,7 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
     let branch = args
         .branch
         .clone()
-        .unwrap_or_else(|| format!("{}/{}", config.prefix, args.slug));
+        .unwrap_or_else(|| format!("{}/{}", config.prefix, slug));
     validate_branch(&branch)?;
 
     let handler = modes::get_handler(&config);
@@ -405,8 +433,43 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
     let port_overrides: std::collections::HashMap<String, u16> =
         args.port_overrides.iter().cloned().collect();
 
-    let service_filter: Option<std::collections::HashSet<String>> = match args.services.as_deref() {
-        None | Some([]) => None,
+    let service_filter: Option<std::collections::HashSet<String>> =
+        parse_service_filter(&args.services, &config)?;
+
+    let session = handler.bring_up(
+        &slug,
+        slot,
+        &branch,
+        &config,
+        &root,
+        args.watch,
+        args.reuse_worktree,
+        &port_overrides,
+        service_filter.as_ref(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashMap::new(),
+        &log,
+    )?;
+
+    if args.json {
+        print_up_json(&session, &root)?;
+    } else {
+        print_up_summary(&session, &config, &log);
+    }
+
+    guard.state.add_session(session);
+    guard.commit()?;
+
+    Ok(())
+}
+
+/// Validate --services names and build the filter set.
+fn parse_service_filter(
+    services: &Option<Vec<String>>,
+    config: &config::Config,
+) -> Result<Option<std::collections::HashSet<String>>> {
+    match services.as_deref() {
+        None | Some([]) => Ok(None),
         Some(names) => {
             let set: std::collections::HashSet<String> = names.iter().cloned().collect();
             for name in &set {
@@ -425,33 +488,238 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
                     return Err(anyhow::anyhow!("unknown service '{}'; {hint}", name));
                 }
             }
-            Some(set)
+            Ok(Some(set))
         }
-    };
+    }
+}
 
-    let session = handler.bring_up(
-        &args.slug,
-        slot,
-        &branch,
+/// Resume an existing session: restart downed services, skip healthy ones.
+/// With --force: kill everything first, then start all (minus --skip).
+fn cmd_up_resume(
+    existing: state::Session,
+    args: cli::UpArgs,
+    config: config::Config,
+    root: std::path::PathBuf,
+    mut guard: state::StateGuard,
+    log: log::StepLogger,
+) -> Result<()> {
+    let worktree = std::path::Path::new(&existing.worktree_path);
+    let handler = modes::get_handler(&config);
+
+    // Build explicit --skip set.
+    let explicit_skip: std::collections::HashSet<String> = args
+        .skip
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .cloned()
+        .collect();
+
+    // Validate --skip names.
+    for name in &explicit_skip {
+        if !config.services.iter().any(|s| &s.name == name) {
+            let list = config
+                .services
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let hint = if list.is_empty() {
+                "no services are defined in .ecluse.toml".to_string()
+            } else {
+                format!("defined services are: {list}")
+            };
+            return Err(anyhow::anyhow!("unknown service '{}'; {hint}", name));
+        }
+    }
+
+    let mut skip_services: std::collections::HashSet<String> = explicit_skip.clone();
+
+    if args.force {
+        // Kill all non-skipped services.
+        log.step("--force: killing services on allocated ports...");
+        force_kill_session_services(&existing, &config, &explicit_skip, &log);
+    } else {
+        // Auto-detect already-running services and add them to skip set.
+        log.step("Checking service health...");
+        let native_svcs: Vec<_> = config
+            .services
+            .iter()
+            .filter(|s| s.run == config::ServiceRun::Native)
+            .collect();
+        let docker_svcs: Vec<_> = config
+            .services
+            .iter()
+            .filter(|s| s.run == config::ServiceRun::Docker)
+            .collect();
+
+        let discovered = if !native_svcs.is_empty() {
+            sync::find_processes_in_worktree(worktree)
+        } else {
+            vec![]
+        };
+        let native_matches = sync::match_services(&native_svcs, &discovered);
+        let docker_matches = if !docker_svcs.is_empty() {
+            sync::find_docker_services(&docker_svcs, &existing.slug)
+        } else {
+            vec![]
+        };
+
+        for svc in &native_svcs {
+            if explicit_skip.contains(&svc.name) {
+                log.detail(&format!("{}: skipped (--skip)", svc.name));
+                continue;
+            }
+            let alive = native_matches
+                .iter()
+                .find(|m| m.service_name == svc.name)
+                .map(|m| process::pid_alive(m.pid))
+                .unwrap_or(false);
+            if alive {
+                log.detail(&format!("{}: \u{2713} already running — skipped", svc.name));
+                skip_services.insert(svc.name.clone());
+            } else {
+                log.detail(&format!("{}: \u{2717} down — will start", svc.name));
+            }
+        }
+        for svc in &docker_svcs {
+            if explicit_skip.contains(&svc.name) {
+                log.detail(&format!("{}: skipped (--skip)", svc.name));
+                continue;
+            }
+            let running = docker_matches.iter().any(|(name, _)| name == &svc.name);
+            if running {
+                log.detail(&format!("{}: \u{2713} already running — skipped", svc.name));
+                skip_services.insert(svc.name.clone());
+            } else {
+                log.detail(&format!("{}: \u{2717} down — will start", svc.name));
+            }
+        }
+    }
+
+    let skipped_count = skip_services.len();
+    let total = config.services.len();
+    let to_start = total.saturating_sub(skipped_count);
+
+    if to_start == 0 && !args.force {
+        log.step("All services already running — nothing to do.");
+        if args.json {
+            print_up_json(&existing, &root)?;
+        } else {
+            print_up_summary(&existing, &config, &log);
+        }
+        return Ok(());
+    }
+
+    let port_overrides: std::collections::HashMap<String, u16> =
+        args.port_overrides.iter().cloned().collect();
+    let service_filter = parse_service_filter(&args.services, &config)?;
+
+    let updated_session = handler.bring_up(
+        &existing.slug,
+        existing.slot,
+        &existing.branch,
         &config,
         &root,
         args.watch,
-        args.reuse_worktree,
+        true, // always reuse-worktree on resume
         &port_overrides,
         service_filter.as_ref(),
+        &skip_services,
+        &existing.port_overrides,
         &log,
     )?;
 
-    if args.json {
-        print_up_json(&session, &root)?;
-    } else {
-        print_up_summary(&session, &config, &log);
+    if !args.quiet && !args.json {
+        let started = to_start;
+        println!();
+        log.success(&format!(
+            "{} service{} started, {} skipped",
+            started,
+            if started == 1 { "" } else { "s" },
+            skipped_count
+        ));
     }
 
-    guard.state.add_session(session);
+    if args.json {
+        print_up_json(&updated_session, &root)?;
+    }
+
+    // Replace session in state with refreshed version.
+    guard.state.remove_session(&existing.slug);
+    guard.state.add_session(updated_session);
     guard.commit()?;
 
     Ok(())
+}
+
+/// Kill all non-skipped services for a session.
+/// Native: kill by PID files, then by port (lsof). Docker: docker stop by container name.
+fn force_kill_session_services(
+    session: &state::Session,
+    config: &config::Config,
+    skip: &std::collections::HashSet<String>,
+    log: &log::StepLogger,
+) {
+    // Kill native via existing PID files.
+    if let Some(pm) = &session.process_manager {
+        let result = session.spawn_result();
+        let pid_files_to_kill: Vec<_> = result
+            .pid_files
+            .iter()
+            .filter(|pf| {
+                let svc_name = pf.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                !skip.contains(svc_name)
+            })
+            .cloned()
+            .collect();
+        let filtered_result = process::SpawnResult {
+            tmux_session: result.tmux_session.clone(),
+            pid_files: pid_files_to_kill,
+            log_dir: result.log_dir.clone(),
+        };
+        process::kill_services(pm, &filtered_result);
+    }
+
+    // Kill by port for any residual processes.
+    for (svc_name, port) in &session.port_overrides {
+        if skip.contains(svc_name) {
+            log.detail(&format!("{}: skipped (--skip)", svc_name));
+            continue;
+        }
+        // lsof -ti TCP:<port> returns PIDs; kill -9 each
+        let output = std::process::Command::new("lsof")
+            .args(["-ti", &format!("TCP:{}", port), "-sTCP:LISTEN"])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for pid_str in stdout.split_whitespace() {
+                if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                    log.detail(&format!(
+                        "killed process {} on port {} ({})",
+                        pid, port, svc_name
+                    ));
+                    let _ = std::process::Command::new("kill")
+                        .args(["-9", pid_str.trim()])
+                        .status();
+                }
+            }
+        }
+    }
+
+    // Stop docker containers for non-skipped docker services.
+    let docker_svcs: Vec<_> = config
+        .services
+        .iter()
+        .filter(|s| s.run == config::ServiceRun::Docker && !skip.contains(&s.name))
+        .collect();
+    for svc in &docker_svcs {
+        let container_name = format!("{}-{}-{}", config.prefix, svc.name, session.slot);
+        log.detail(&format!("stopping container {}", container_name));
+        let _ = std::process::Command::new("docker")
+            .args(["stop", &container_name])
+            .status();
+    }
 }
 
 fn print_up_summary(session: &state::Session, _config: &config::Config, log: &log::StepLogger) {

@@ -24,6 +24,8 @@ pub trait ModeHandler {
         reuse_worktree: bool,
         port_overrides: &std::collections::HashMap<String, u16>,
         service_filter: Option<&std::collections::HashSet<String>>,
+        skip_services: &std::collections::HashSet<String>,
+        existing_port_overrides: &std::collections::HashMap<String, u16>,
         log: &crate::log::StepLogger,
     ) -> Result<Session>;
 

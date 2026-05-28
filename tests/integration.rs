@@ -139,17 +139,16 @@ fn parallel_sessions_get_different_slots_and_ports() {
 }
 
 #[test]
-fn duplicate_slug_is_rejected() {
+fn duplicate_slug_resumes_idempotently() {
     let repo = tmp_repo();
     ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
     ecluse(repo.path(), &["up", "feat-foo"]);
+    // Second up on same slug should succeed (resume path, not an error).
     let out = ecluse(repo.path(), &["up", "feat-foo"]);
-    assert!(!out.status.success());
-    assert!(
-        stderr(&out).contains("already exists"),
-        "got: {}",
-        stderr(&out)
-    );
+    assert!(out.status.success(), "got: {}", stderr(&out));
+    // State should still have exactly one session for feat-foo.
+    let ls = ecluse(repo.path(), &["ls"]);
+    assert!(stdout(&ls).contains("feat-foo"), "got: {}", stdout(&ls));
 }
 
 #[test]
