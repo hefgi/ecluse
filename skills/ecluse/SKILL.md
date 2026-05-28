@@ -68,10 +68,25 @@ Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Us
 
 ### What `ecluse up` does
 
+**New session:**
 1. Allocates a slot (integer 1–N)
 2. Creates a git worktree at `.ecluse/worktrees/<slug>` on branch `ecluse/<slug>`
 3. Depending on mode: starts containers, writes `.env.ecluse`, runs `on_up` hook if configured
 4. `on_up` runs in the worktree with all env vars set — use it for migrations, seeding, etc.
+
+**Existing session (idempotent):**
+- Reuses the existing worktree and slot — no worktree creation, no slot allocation
+- Checks which services are already running; starts only the ones that are down
+- Each service decision is logged: "already running — skipped" / "down — will start"
+- Slug is auto-detected from cwd when inside a worktree
+
+```bash
+ecluse up feat-foo          # new or existing: always does the right thing
+ecluse up                   # slug auto-detected from cwd
+ecluse up --force           # kill all services on allocated ports, restart all
+ecluse up --skip api        # skip the api service; start everything else
+ecluse up --force --skip db # kill + restart all except db
+```
 
 ### Common first-time failures
 
@@ -129,6 +144,7 @@ ecluse env <slug>               # same JSON as up --json: worktree_path + all en
 ecluse env                      # auto-detects current session if run from inside a worktree
 ecluse status <slug>            # per-service health: ✓/✗ with port and PID; exit 1 if any down
 ecluse status <slug> --json     # machine-readable health check
+ecluse status                   # auto-detect slug from cwd
 ```
 
 ### Sync a manually-started environment
@@ -207,9 +223,8 @@ Each session is a separate git branch and worktree. They don't interfere.
 
 ### Common failures
 
-- **"session already exists"** — use a different slug or `ecluse down <slug>` first
 - **"all slots in use"** — `ecluse ls` to find stale sessions, `ecluse down` the oldest
-- **Port in use** — `lsof -iTCP:<port> -sTCP:LISTEN` to find the blocker
+- **Port in use** — `lsof -iTCP:<port> -sTCP:LISTEN` to find the blocker; or `ecluse up --force` to let ecluse kill it
 
 ### Port wiring — exhaust .ecluse.toml options before touching app code
 
@@ -543,7 +558,6 @@ RUST_LOG=debug ecluse up feat-foo
 |---|---|---|
 | `SlugInvalid` | Slug doesn't match `^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$` | Lowercase letters, numbers, hyphens; 2–32 chars |
 | `SlotsExhausted` | All slots in use | `ecluse ls` then `ecluse down <slug>` |
-| `SessionExists` | Slug already active | Different slug or `ecluse down` first |
 | `SessionNotFound` | Slug not in state | Check `ecluse ls` |
 | `LockTimeout` | Another process holds lock | Check processes; remove stale lock |
 | `ConfigMissing` | No `.ecluse.toml` found | `ecluse init` |
@@ -561,7 +575,7 @@ RUST_LOG=debug ecluse up feat-foo
 What ecluse intentionally does not do in v0. These are design decisions, not bugs.
 
 - **Ports are checked, not reserved** — ecluse finds a free port at `up` time and writes it to `.env.ecluse`. There is a small window between that check and when your process actually binds. If another process takes the port in between, the value in `.env.ecluse` will be wrong. Fix: `ecluse down feat-foo --keep-worktree` then `ecluse up feat-foo --reuse-worktree`, or pin a specific port with `--port name=value`.
-- **No process lifecycle management beyond spawn/kill** — ecluse can spawn native services on `up` (via `command` + `process_manager`) and kill them on `down`, but cannot restart a crashed process. If a service dies, check logs and do a `down`/`up` cycle. `ecluse ls` and `ecluse env` warn about dead nohup processes.
+- **No process lifecycle management beyond spawn/kill** — ecluse can spawn native services on `up` (via `command` + `process_manager`) and kill them on `down`, but cannot auto-restart a crashed process. If a service dies, `ecluse up` (idempotent — slug auto-detected from cwd) starts only the downed services. `ecluse up --force` kills everything on allocated ports and restarts fresh. `ecluse ls` and `ecluse env` warn about dead nohup processes.
 - **`command` requires the app to expose a port entry point** — ecluse injects the full `.env.ecluse` contents (`PORT`, `ECLUSE_SLOT`, `ECLUSE_SLUG`, `ECLUSE_MODE`, all `ECLUSE_<NAME>_PORT` vars, and any `port_env` aliases) directly into the spawned process environment — no separate sourcing step needed. If the port is hardcoded or set in a config file, resolve it via `.ecluse.toml` first: pass it as a CLI flag (`command = "vite --port $ECLUSE_WEB_PORT"`), or use `port_env` to inject it under the var name the app already reads. Modifying app source code is the last resort — see [Port wiring](#port-wiring--exhaust-eclusetoml-options-before-touching-app-code) above.
 - **Mode is set at `init`, not re-detected on `up`** — to change: `ecluse init --mode <new>`
 - **Multiple compose files supported via `compose` field** — each `[[services]]` block with `run = "docker"` can point at its own compose file; services without it fall back to the root compose file. Run `ecluse init` per subdirectory only when you need fully independent slot pools.
@@ -644,7 +658,7 @@ See [examples.md](examples.md) for 5 canonical config templates covering host, c
 
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
-ecluse up <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...]
+ecluse up [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...]
 ecluse env [<slug>]
 ecluse down <slug> [--keep-volumes] [--keep-branch] [--keep-worktree]
 ecluse ls [--json]

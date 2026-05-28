@@ -7,6 +7,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `ecluse up` is now idempotent. Running `ecluse up <slug>` when a session already exists resumes it: worktree and slot are reused, only services that are not running are started. Each service decision is logged explicitly ("already running — skipped" / "down — will start").
+- `ecluse up` now auto-detects the slug from cwd. When run from inside a worktree (any subdirectory of `.ecluse/worktrees/<slug>`), the slug is inferred from state — no need to type it again.
+- `--force` flag on `ecluse up`: kills all running services on the session's allocated ports before starting them fresh. Useful when processes are in a bad state. Combinable with `--skip`.
+- `--skip <name>,<name>` flag on `ecluse up`: excludes named services from being started (or killed, with `--force`). Multiple values comma-separated. Combinable with `--force` and `--services`.
+
 ---
 
 ## [0.2.7] — 2026-05-28

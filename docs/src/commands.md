@@ -2,7 +2,7 @@
 
 ```
 ecluse init     [--mode container|host|hybrid] [--explain] [--yes] [--quiet]
-ecluse up       <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--quiet]
+ecluse up       [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...] [--quiet]
 ecluse sync     <slug> [--json] [--quiet]
 ecluse down     <slug> [--keep-volumes] [--keep-branch] [--keep-worktree] [--quiet]
 ecluse shutdown [--keep-volumes] [--keep-worktrees] [--quiet]
@@ -29,6 +29,20 @@ Detects the right mode for your repo and writes `.ecluse.toml`. Runs interactive
 
 Creates a git worktree, allocates a slot, starts services, and writes `.env.ecluse`. Returns the worktree path and all env vars.
 
+When run against a session that already exists, `ecluse up` is idempotent: it reuses the existing worktree and slot, checks which services are running, and starts only the ones that are down. Each service decision is logged explicitly.
+
+When run from inside a worktree (any subdirectory of `.ecluse/worktrees/<slug>`), the slug is auto-detected — omit it entirely.
+
+```bash
+ecluse up feat-foo              # new session: create worktree, allocate slot, start all
+ecluse up feat-foo              # existing session: skip worktree creation, start only downed services
+ecluse up                       # auto-detect slug from cwd (must be inside a worktree)
+ecluse up feat-foo --force      # kill all running services on allocated ports, then restart all
+ecluse up --force               # same but slug auto-detected from cwd
+ecluse up feat-foo --skip api   # skip the api service; start everything else
+ecluse up --force --skip postgres  # kill + restart all except postgres
+```
+
 | Flag | Description |
 |---|---|
 | `--branch <name>` | Use a specific branch name instead of the slug |
@@ -37,6 +51,8 @@ Creates a git worktree, allocates a slot, starts services, and writes `.env.eclu
 | `--reuse-worktree` | Reuse an existing worktree instead of creating one |
 | `--port <name>=<value>` | Pin a service to a specific port for this session |
 | `--services <name>,...` | Bring up only this subset of services; unknown names are rejected before any worktree is created |
+| `--force` | Kill all running services on allocated ports before starting them; full restart |
+| `--skip <name>,...` | Exclude these services entirely (comma-separated); combinable with `--force` |
 | `--quiet` | Suppress step output (implied by `--json`) |
 
 ## ecluse sync

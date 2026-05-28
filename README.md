@@ -131,7 +131,7 @@ Three thin mode implementations share this slot primitive. Mode is selected once
 
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
-ecluse up <slug> [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...]
+ecluse up [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...]
 ecluse sync <slug> [--json]
 ecluse shell <slug>
 ecluse env [<slug>]
@@ -148,6 +148,15 @@ ecluse status [<slug>] [--json] [--quiet]
 ```bash
 ecluse env feat-foo          # full JSON: worktree_path, slot, all ECLUSE_* vars
 ecluse env                   # auto-detects session if run from inside a worktree
+```
+
+**Idempotent up** — `ecluse up` is safe to run on an existing session. It reuses the worktree and slot, checks which services are running, and starts only the ones that are down. Slug is auto-detected from cwd:
+
+```bash
+ecluse up feat-foo    # existing session: starts only downed services, skips running ones
+ecluse up             # same, slug auto-detected from cwd
+ecluse up --force     # kill all running services on allocated ports, restart all
+ecluse up --skip api  # skip api; start everything else
 ```
 
 **Soft restart** — tear down services without losing your worktree, then spin them up fresh:
