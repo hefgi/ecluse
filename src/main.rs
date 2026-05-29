@@ -1184,28 +1184,49 @@ fn cmd_env(args: cli::EnvArgs) -> Result<()> {
 fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
     let log = log::StepLogger::new(args.quiet || args.json);
 
-    validate_slug(&args.slug)?;
-
     log.step("Loading config...");
     let (config, root) = config::Config::find_and_load()?;
     log.detail(&format!("mode: {}", config.mode));
 
-    // Determine worktree path: prefer the standard ecluse location, fall back to cwd.
     let wt_manager = worktree::WorktreeManager::new(root.clone());
-    let canonical_path = wt_manager.worktree_path(&config, &args.slug);
 
-    let worktree_path = if canonical_path.exists() {
-        canonical_path
-    } else {
-        let cwd = std::env::current_dir().context("could not determine current directory")?;
-        // Accept cwd if it looks like it's inside this repo's worktree area.
-        if cwd.starts_with(&root) || cwd.to_str().is_some_and(|s| s.contains(&args.slug)) {
-            cwd
-        } else {
-            return Err(error::EcluseError::WorktreeNotFound {
-                slug: args.slug.clone(),
-            }
-            .into());
+    // Resolve slug and worktree path together.
+    let (slug, worktree_path) = match args.slug {
+        Some(ref s) => {
+            validate_slug(s)?;
+            let canonical = wt_manager.worktree_path(&config, s);
+            let path = if canonical.exists() {
+                canonical
+            } else {
+                let cwd =
+                    std::env::current_dir().context("could not determine current directory")?;
+                if cwd.starts_with(&root) || cwd.to_str().is_some_and(|c| c.contains(s.as_str()))
+                {
+                    cwd
+                } else {
+                    return Err(error::EcluseError::WorktreeNotFound { slug: s.clone() }.into());
+                }
+            };
+            (s.clone(), path)
+        }
+        None => {
+            // Derive slug from cwd: must be inside <worktree_dir>/<slug>
+            let cwd = std::env::current_dir().context("could not determine current directory")?;
+            let wt_root = root.join(&config.worktree_dir);
+            let rel = cwd.strip_prefix(&wt_root).map_err(|_| {
+                anyhow::anyhow!(
+                    "not inside an ecluse worktree; pass a slug or cd into a worktree\n  hint: ecluse sync <slug>"
+                )
+            })?;
+            let slug = rel
+                .components()
+                .next()
+                .and_then(|c| c.as_os_str().to_str())
+                .ok_or_else(|| anyhow::anyhow!("could not determine slug from cwd"))?
+                .to_string();
+            validate_slug(&slug)?;
+            let worktree_path = wt_root.join(&slug);
+            (slug, worktree_path)
         }
     };
 
@@ -1213,7 +1234,7 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
 
     // Acquire state lock.
     let mut guard = state::StateGuard::acquire(&root)?;
-    let existing = guard.state.find_session(&args.slug).cloned();
+    let existing = guard.state.find_session(&slug).cloned();
     let update_mode = existing.is_some();
 
     // Allocate or reuse slot.
@@ -1262,7 +1283,7 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
     // Detect docker services.
     let docker_matches = if !docker_svcs.is_empty() {
         log.step("Detecting docker services...");
-        sync::find_docker_services(&docker_svcs, &args.slug)
+        sync::find_docker_services(&docker_svcs, &slug)
     } else {
         vec![]
     };
@@ -1296,7 +1317,7 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
             "service '{}': PID {} port {:?}",
             m.service_name, m.pid, m.port
         ));
-        let pid_path = sync::write_pid_file(&ecluse_dir, &args.slug, &m.service_name, m.pid)?;
+        let pid_path = sync::write_pid_file(&ecluse_dir, &slug, &m.service_name, m.pid)?;
         pid_files.push(pid_path);
         if let Some(port) = m.port {
             port_overrides.insert(m.service_name.clone(), port);
@@ -1317,7 +1338,7 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
     }
     let env_map = env::build_env(
         slot,
-        &args.slug,
+        &slug,
         &config.mode.to_string(),
         &native_ports,
         &docker_matches,
@@ -1331,7 +1352,7 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
         .or_else(|| docker_matches.first().map(|(_, p)| *p));
 
     let session = state::Session {
-        slug: args.slug.clone(),
+        slug: slug.clone(),
         mode: config.mode.clone(),
         slot,
         branch,
@@ -1350,7 +1371,7 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
     };
 
     if update_mode {
-        guard.state.remove_session(&args.slug);
+        guard.state.remove_session(&slug);
         log.step("Updating existing session...");
     } else {
         log.step("Registering new session...");

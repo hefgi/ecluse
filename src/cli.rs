@@ -181,8 +181,8 @@ pub struct ShutdownArgs {
 
 #[derive(Args)]
 pub struct SyncArgs {
-    /// Session slug — used to locate the worktree and name the session
-    pub slug: String,
+    /// Session slug — used to locate the worktree and name the session (auto-detected from cwd when omitted)
+    pub slug: Option<String>,
 
     /// Output session info as JSON (useful for agents)
     #[arg(long)]
