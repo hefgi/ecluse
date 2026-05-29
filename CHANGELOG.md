@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.2.8] — 2026-05-29
+
 ### Added
 - `ecluse up` is now idempotent. Running `ecluse up <slug>` when a session already exists resumes it: worktree and slot are reused, only services that are not running are started. Each service decision is logged explicitly ("already running — skipped" / "down — will start").
 - All slug-accepting commands now auto-detect the slug from cwd. When run from inside a worktree, the slug is inferred automatically. Applies to `up`, `down`, `shell`, `env`, `status`, and `sync`.
