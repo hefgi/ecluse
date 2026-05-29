@@ -135,7 +135,7 @@ ecluse up [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--po
 ecluse sync <slug> [--json]
 ecluse shell <slug>
 ecluse env [<slug>]
-ecluse down <slug> [--keep-volumes] [--keep-branch] [--keep-worktree]
+ecluse down [<slug>] [--keep-volumes] [--keep-branch] [--keep-worktree]
 ecluse shutdown [--keep-volumes] [--keep-worktrees]
 ecluse flush [--yes]
 ecluse ls [--json]

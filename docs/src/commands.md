@@ -4,11 +4,11 @@
 ecluse init     [--mode container|host|hybrid] [--explain] [--yes] [--quiet]
 ecluse up       [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...] [--quiet]
 ecluse sync     <slug> [--json] [--quiet]
-ecluse down     <slug> [--keep-volumes] [--keep-branch] [--keep-worktree] [--quiet]
+ecluse down     [<slug>] [--keep-volumes] [--keep-branch] [--keep-worktree] [--quiet]
 ecluse shutdown [--keep-volumes] [--keep-worktrees] [--quiet]
 ecluse flush    [--yes] [--quiet]
 ecluse ls       [--json]
-ecluse shell    <slug>
+ecluse shell    [<slug>]
 ecluse env      [<slug>]
 ecluse validate [--ports] [--quiet]
 ecluse status   [<slug>] [--json] [--quiet]
@@ -77,7 +77,7 @@ If a session for the slug already exists in `state.json`, sync refreshes its por
 
 ## ecluse down
 
-Tears down services, frees the slot, and removes the worktree.
+Tears down services, frees the slot, and removes the worktree. Slug is auto-detected from cwd when omitted.
 
 | Flag | Description |
 |---|---|

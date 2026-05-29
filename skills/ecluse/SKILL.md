@@ -642,7 +642,7 @@ Controls how native service processes are spawned. Written by `ecluse init`:
 process_manager = "tmux"   # "tmux" | "nohup" | "none"
 ```
 
-- `tmux` — creates a detached tmux session `ecluse-<slug>`; `ecluse shell <slug>` attaches to it
+- `tmux` — creates a detached tmux session `ecluse-<slug>`; `ecluse shell [<slug>]` attaches to it
 - `nohup` — background processes, logs at `.ecluse/logs/<slug>/`, PIDs at `.ecluse/pids/<slug>/`
 - `none` — spawns nothing (default pre-v0.3 behaviour)
 
@@ -660,7 +660,7 @@ See [examples.md](examples.md) for 5 canonical config templates covering host, c
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
 ecluse up [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...]
 ecluse env [<slug>]
-ecluse down <slug> [--keep-volumes] [--keep-branch] [--keep-worktree]
+ecluse down [<slug>] [--keep-volumes] [--keep-branch] [--keep-worktree]
 ecluse ls [--json]
 ecluse validate [--ports]
 ecluse status [<slug>] [--json] [--quiet]
