@@ -132,7 +132,7 @@ Three thin mode implementations share this slot primitive. Mode is selected once
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
 ecluse up [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...]
-ecluse sync <slug> [--json]
+ecluse sync [<slug>] [--json]
 ecluse shell <slug>
 ecluse env [<slug>]
 ecluse down [<slug>] [--keep-volumes] [--keep-branch] [--keep-worktree]

@@ -153,6 +153,7 @@ If services were started by hand (not via `ecluse up`), or state.json was lost, 
 
 ```bash
 ecluse sync <slug>          # discover processes + register session in state.json
+ecluse sync                 # same, slug auto-detected from cwd
 ecluse sync <slug> --json   # machine-readable output
 ```
 

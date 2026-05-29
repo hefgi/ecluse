@@ -3,7 +3,7 @@
 ```
 ecluse init     [--mode container|host|hybrid] [--explain] [--yes] [--quiet]
 ecluse up       [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...] [--quiet]
-ecluse sync     <slug> [--json] [--quiet]
+ecluse sync     [<slug>] [--json] [--quiet]
 ecluse down     [<slug>] [--keep-volumes] [--keep-branch] [--keep-worktree] [--quiet]
 ecluse shutdown [--keep-volumes] [--keep-worktrees] [--quiet]
 ecluse flush    [--yes] [--quiet]
@@ -57,10 +57,11 @@ ecluse up --force --skip postgres  # kill + restart all except postgres
 
 ## ecluse sync
 
-Registers a manually-started environment with ecluse. Use this when services were started by hand (not via `ecluse up`) or when `state.json` was lost.
+Registers a manually-started environment with ecluse. Use this when services were started by hand (not via `ecluse up`) or when `state.json` was lost. Slug is auto-detected from cwd when omitted (must be inside `.ecluse/worktrees/<slug>`).
 
 ```bash
 ecluse sync <slug>          # discover + register
+ecluse sync                 # same, slug auto-detected from cwd
 ecluse sync <slug> --json   # machine-readable output
 ```
 
