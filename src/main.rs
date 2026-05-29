@@ -334,6 +334,34 @@ mod tests {
     }
 }
 
+fn resolve_slug_from_args(
+    arg: Option<&str>,
+    guard: &state::StateGuard,
+    hint: &str,
+) -> Result<String> {
+    match arg {
+        Some(s) => {
+            validate_slug(s)?;
+            Ok(s.to_string())
+        }
+        None => {
+            let cwd = std::env::current_dir().context("could not determine current directory")?;
+            guard
+                .state
+                .sessions
+                .iter()
+                .find(|s| cwd.starts_with(std::path::Path::new(&s.worktree_path)))
+                .map(|s| s.slug.clone())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "not inside an ecluse worktree; pass a slug or cd into a worktree\n  hint: {}",
+                        hint
+                    )
+                })
+        }
+    }
+}
+
 fn validate_slug(slug: &str) -> Result<()> {
     let re = regex_lite::Regex::new(r"^[a-z0-9][a-z0-9\-]{0,30}[a-z0-9]$").unwrap();
     if !re.is_match(slug) {
@@ -384,27 +412,10 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
     let mut guard = state::StateGuard::acquire(&root)?;
 
     // Resolve slug: from arg or auto-detect from cwd.
-    let slug: String = match &args.slug {
-        Some(s) => {
-            validate_slug(s)?;
-            s.clone()
-        }
-        None => {
-            log.step("Looking for existing session...");
-            let cwd = std::env::current_dir().context("could not determine current directory")?;
-            guard
-                .state
-                .sessions
-                .iter()
-                .find(|s| cwd.starts_with(std::path::Path::new(&s.worktree_path)))
-                .map(|s| s.slug.clone())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "not inside an ecluse worktree; pass a slug or cd into a worktree"
-                    )
-                })?
-        }
-    };
+    if args.slug.is_none() {
+        log.step("Looking for existing session...");
+    }
+    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse up <slug>")?;
 
     // Resume path: session already exists — restart/skip services idempotently.
     if let Some(existing) = guard.state.find_session(&slug).cloned() {
@@ -787,11 +798,13 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
 
     let mut guard = state::StateGuard::acquire(&root)?;
 
-    log.step(&format!("Loading session '{}'...", args.slug));
+    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse down <slug>")?;
+
+    log.step(&format!("Loading session '{slug}'..."));
     let session = guard
         .state
-        .find_session(&args.slug)
-        .ok_or_else(|| error::EcluseError::SessionNotFound(args.slug.clone()))?
+        .find_session(&slug)
+        .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
         .clone();
     log.detail(&format!("slot {}, mode: {}", session.slot, session.mode));
 
@@ -805,7 +818,7 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         &log,
     )?;
 
-    guard.state.remove_session(&args.slug);
+    guard.state.remove_session(&slug);
     guard.commit()?;
 
     if args.keep_branch {
@@ -819,10 +832,10 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     if args.keep_worktree {
         log.success(&format!(
             "Session '{}' torn down (worktree kept at {}).",
-            args.slug, session.worktree_path
+            slug, session.worktree_path
         ));
     } else {
-        log.success(&format!("Session '{}' torn down.", args.slug));
+        log.success(&format!("Session '{}' torn down.", slug));
     }
     println!();
 
@@ -996,10 +1009,12 @@ fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
     let (_, root) = config::Config::find_and_load()?;
     let guard = state::StateGuard::acquire(&root)?;
 
+    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse shell <slug>")?;
+
     let session = guard
         .state
-        .find_session(&args.slug)
-        .ok_or_else(|| error::EcluseError::SessionNotFound(args.slug.clone()))?
+        .find_session(&slug)
+        .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
         .clone();
 
     let worktree = std::path::Path::new(&session.worktree_path);
@@ -1123,30 +1138,12 @@ fn cmd_env(args: cli::EnvArgs) -> Result<()> {
     let (_, root) = config::Config::find_and_load()?;
     let guard = state::StateGuard::acquire(&root)?;
 
-    let session = match args.slug {
-        Some(ref slug) => guard
-            .state
-            .find_session(slug)
-            .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
-            .clone(),
-        None => {
-            let cwd = std::env::current_dir().context("could not determine current directory")?;
-            guard
-                .state
-                .sessions
-                .iter()
-                .find(|s| {
-                    let wt = std::path::Path::new(&s.worktree_path);
-                    cwd.starts_with(wt)
-                })
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "not inside an ecluse worktree; run from a worktree or pass a slug"
-                    )
-                })?
-                .clone()
-        }
-    };
+    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse env <slug>")?;
+    let session = guard
+        .state
+        .find_session(&slug)
+        .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
+        .clone();
 
     let env_file = std::path::Path::new(&session.worktree_path).join(".env.ecluse");
 
@@ -1560,31 +1557,12 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
     let (config, root) = config::Config::find_and_load()?;
     let guard = state::StateGuard::acquire(&root)?;
 
-    // Resolve slug: from arg or from cwd.
-    let session = match args.slug {
-        Some(ref slug) => guard
-            .state
-            .find_session(slug)
-            .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
-            .clone(),
-        None => {
-            let cwd = std::env::current_dir().context("could not determine current directory")?;
-            guard
-                .state
-                .sessions
-                .iter()
-                .find(|s| {
-                    let wt = std::path::Path::new(&s.worktree_path);
-                    cwd.starts_with(wt)
-                })
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "not inside an ecluse worktree; run from a worktree or pass a slug"
-                    )
-                })?
-                .clone()
-        }
-    };
+    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse status <slug>")?;
+    let session = guard
+        .state
+        .find_session(&slug)
+        .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
+        .clone();
 
     let worktree = std::path::Path::new(&session.worktree_path);
 

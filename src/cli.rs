@@ -112,8 +112,8 @@ pub struct UpArgs {
 
 #[derive(Args)]
 pub struct DownArgs {
-    /// Session slug to tear down
-    pub slug: String,
+    /// Session slug to tear down (auto-detected from cwd when omitted)
+    pub slug: Option<String>,
 
     /// Keep named volumes (do not pass -v to docker compose down)
     #[arg(long)]
@@ -154,8 +154,8 @@ pub struct LsArgs {
 
 #[derive(Args)]
 pub struct ShellArgs {
-    /// Session slug to enter
-    pub slug: String,
+    /// Session slug to enter (auto-detected from cwd when omitted)
+    pub slug: Option<String>,
 }
 
 #[derive(Args)]
