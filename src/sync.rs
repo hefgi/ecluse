@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::ServiceConfig;
+use crate::docker;
 
 /// A process discovered running with its cwd inside the worktree.
 #[derive(Debug, Clone)]
@@ -95,7 +96,7 @@ pub fn match_services(
 /// `base_port` (or any port the container exposes if base_port doesn't match).
 /// Best-effort: returns empty if docker is unavailable or nothing matches.
 pub fn find_docker_services(services: &[&ServiceConfig], slug: &str) -> Vec<(String, u16)> {
-    let output = match Command::new("docker")
+    let output = match docker::docker_cmd()
         .args(["ps", "--format", "{{.Names}}\t{{.Ports}}"])
         .output()
     {

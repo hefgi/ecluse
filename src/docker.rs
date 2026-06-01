@@ -1,8 +1,37 @@
 use anyhow::{Context, Result};
 use std::process::Command;
 
-pub fn is_available() -> bool {
+/// Returns the Docker socket URL for the active context so child processes
+/// (tmux windows, hooks, etc.) connect to the same daemon as the parent shell.
+/// Falls back to empty string if docker is unavailable, letting Docker use its
+/// own default resolution.
+fn docker_host() -> String {
     Command::new("docker")
+        .args(["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default()
+}
+
+/// Returns a `Command` for docker with DOCKER_HOST pre-set to the active context's socket.
+pub fn docker_cmd() -> Command {
+    let mut cmd = Command::new("docker");
+    let host = docker_host();
+    if !host.is_empty() {
+        cmd.env("DOCKER_HOST", host);
+    }
+    cmd
+}
+
+pub fn is_available() -> bool {
+    docker_cmd()
         .arg("info")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -28,7 +57,7 @@ pub fn compose_up(
         args.push("--watch");
     }
 
-    let status = Command::new("docker")
+    let status = docker_cmd()
         .args(&args)
         .envs(extra_env)
         .status()
@@ -62,7 +91,7 @@ pub fn compose_up_services(
     }
     args.extend_from_slice(services);
 
-    let status = Command::new("docker")
+    let status = docker_cmd()
         .args(&args)
         .envs(extra_env)
         .status()
@@ -92,7 +121,7 @@ pub fn compose_down(
         args.push("-v");
     }
 
-    let status = Command::new("docker")
+    let status = docker_cmd()
         .args(&args)
         .status()
         .context("failed to run docker compose down")?;
@@ -105,7 +134,7 @@ pub fn compose_down(
 
 /// Returns deduplicated compose project names that contain `prefix`.
 pub fn list_compose_projects(prefix: &str) -> Vec<String> {
-    let output = Command::new("docker")
+    let output = docker_cmd()
         .args([
             "ps",
             "--format",
@@ -136,7 +165,7 @@ pub fn compose_down_by_project(project: &str, remove_volumes: bool) -> Result<()
         args.push("-v");
     }
 
-    let status = Command::new("docker")
+    let status = docker_cmd()
         .args(&args)
         .status()
         .context("failed to run docker compose down by project")?;

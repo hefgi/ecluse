@@ -727,7 +727,7 @@ fn force_kill_session_services(
     for svc in &docker_svcs {
         let container_name = format!("{}-{}-{}", config.prefix, svc.name, session.slot);
         log.detail(&format!("stopping container {}", container_name));
-        let _ = std::process::Command::new("docker")
+        let _ = docker::docker_cmd()
             .args(["stop", &container_name])
             .status();
     }
