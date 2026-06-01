@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `inspect_port` field on `[[services]]` blocks: sets a per-service Node.js debugger base port. ecluse computes `inspect_port + slot` and exposes it as `ECLUSE_<NAME>_INSPECT_PORT`. Use with `NODE_OPTIONS='--inspect=0.0.0.0:$ECLUSE_<NAME>_INSPECT_PORT'` in `command` to prevent `EADDRINUSE :9229` when multiple Node.js services start concurrently.
+
+### Fixed
+- `docker stop` calls in `--force` now use `DOCKER_HOST` from the active Docker context, so OrbStack containers are correctly targeted.
+- tmux session spawning no longer fails with "duplicate session" when the previous session's shell is still alive after services crash. The stale session is killed before a new one is created.
+
 ---
 
 ## [0.2.9] — 2026-06-01

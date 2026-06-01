@@ -206,6 +206,7 @@ All vars are in the JSON from `ecluse up --json` or `ecluse env <slug>`.
 |---|---|---|
 | `PORT` | `3001` | Alias for the first native `[[services]]` entry — never hardcode 3000 |
 | `ECLUSE_<NAME>_PORT` | `ECLUSE_API_PORT=3001` | Per-service port: `base_port + slot` |
+| `ECLUSE_<NAME>_INSPECT_PORT` | `ECLUSE_API_INSPECT_PORT=9230` | Node.js debugger port: `inspect_port + slot` (only emitted when `inspect_port` is set in `.ecluse.toml`) |
 | `ECLUSE_SLOT` | `1` | Slot number |
 | `ECLUSE_SLUG` | `feat-auth` | Session slug |
 | `ECLUSE_MODE` | `hybrid` | `container`, `host`, or `hybrid` |
@@ -366,6 +367,7 @@ ecluse down feat-foo --keep-volumes   # keeps volumes
 - **Hardcoded port in app code or config file** — use a CLI flag in `command` or `port_env` in `.ecluse.toml` before modifying app source; see Port wiring section in Agent Workflow
 - **`--watch` requires Compose v2.22+** — pass `ecluse up --watch`
 - **Invoking `docker compose` directly** — the overlay won't be included; use `ecluse up` or add `-f .ecluse/overlays/<slug>.yml`
+- **Multiple Node.js services collide on `--inspect` port 9229** — if concurrent services use `--inspect` they race for port 9229; add `inspect_port` to each `[[services]]` block and pass `NODE_OPTIONS='--inspect=0.0.0.0:$ECLUSE_<NAME>_INSPECT_PORT'` in `command`
 
 ---
 
@@ -622,6 +624,9 @@ base_port = 3000        # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 300
 command = "npm run dev" # optional — ecluse spawns this on ecluse up
 # port_env = "DJANGO_PORT"              # also set DJANGO_PORT = allocated port
 # port_env = ["DJANGO_PORT", "APP_PORT"] # or multiple aliases
+# inspect_port = 9229   # optional — ECLUSE_API_INSPECT_PORT = 9229 + slot
+#   use when multiple Node services race to bind 9229 on --inspect:
+#   command = "NODE_OPTIONS='--inspect=0.0.0.0:$ECLUSE_API_INSPECT_PORT' npm run dev"
 
 [[services]]
 name = "postgres"
