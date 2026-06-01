@@ -60,7 +60,7 @@ Each `[[services]]` block defines one service. Each gets a stable, collision-fre
 | `run` | string | `"docker"` to run in a container; omit for native |
 | `command` | string | **Required for native services.** Shell command ecluse spawns on `ecluse up` and uses to identify the process during `ecluse sync`. Managed by your global `process_manager` setting. |
 | `port_env` | string or array | Extra env var names to set to this service's allocated port — accepts a single string or an array |
-| `inspect_port` | integer | Base port for the Node.js `--inspect` debugger: `inspect_port + slot` → `ECLUSE_<NAME>_INSPECT_PORT`. Use when multiple Node services each need a unique inspector port (avoids `EADDRINUSE :9229` on `--inspect`). |
+| `debug_port` | integer | Secondary port for debuggers or auxiliary servers: `debug_port + slot` → `ECLUSE_<NAME>_DEBUG_PORT`. Use when a service exposes a second listener (Node.js `--inspect`, Delve, debugpy, pprof, etc.) and multiple parallel sessions would collide on a hardcoded default port. |
 
 The first native (non-docker) service entry also sets `PORT` for framework compatibility.
 

@@ -8,7 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- `inspect_port` field on `[[services]]` blocks: sets a per-service Node.js debugger base port. ecluse computes `inspect_port + slot` and exposes it as `ECLUSE_<NAME>_INSPECT_PORT`. Use with `NODE_OPTIONS='--inspect=0.0.0.0:$ECLUSE_<NAME>_INSPECT_PORT'` in `command` to prevent `EADDRINUSE :9229` when multiple Node.js services start concurrently.
+- `debug_port` field on `[[services]]` blocks: secondary port for debuggers or auxiliary servers. ecluse computes `debug_port + slot` and exposes it as `ECLUSE_<NAME>_DEBUG_PORT`. Use when a service exposes a second listener (Node.js `--inspect`, Delve, debugpy, pprof, etc.) that defaults to a hardcoded port and would collide across parallel sessions.
 
 ### Fixed
 - `docker stop` calls in `--force` now use `DOCKER_HOST` from the active Docker context, so OrbStack containers are correctly targeted.
