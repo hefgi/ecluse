@@ -127,6 +127,10 @@ pub struct DownArgs {
     #[arg(long)]
     pub keep_worktree: bool,
 
+    /// Skip the worktree deletion prompt and proceed with deletion (for CI/agents)
+    #[arg(long, short)]
+    pub yes: bool,
+
     /// Suppress step output
     #[arg(long)]
     pub quiet: bool,
@@ -173,6 +177,10 @@ pub struct ShutdownArgs {
     /// Tear down services but keep git worktrees on disk
     #[arg(long)]
     pub keep_worktrees: bool,
+
+    /// Skip the per-worktree deletion prompt and proceed with deletion (for CI/agents)
+    #[arg(long, short)]
+    pub yes: bool,
 
     /// Suppress step output
     #[arg(long)]

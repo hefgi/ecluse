@@ -1,9 +1,17 @@
 use anyhow::{Context, Result};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub struct WorktreeManager {
     pub project_root: PathBuf,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum WorktreeRemovalChoice {
+    Stop,
+    KeepWorktree,
+    DeleteWorktree,
 }
 
 impl WorktreeManager {
@@ -117,6 +125,55 @@ impl WorktreeManager {
             "could not determine main worktree path; git worktree list produced no output"
         ))
     }
+}
+
+/// Returns true if the worktree at `path` has any uncommitted changes
+/// (staged, unstaged, or untracked files).
+pub fn has_uncommitted_changes(path: &Path) -> bool {
+    Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(path)
+        .output()
+        .map(|o| o.status.success() && !o.stdout.is_empty())
+        .unwrap_or(false)
+}
+
+/// Prompt the user before removing a worktree. Always asks; adds an
+/// uncommitted-changes warning when dirty. Reads directly from /dev/tty
+/// so it works even when stdout/stderr are piped.
+///
+/// Returns the user's choice. On any I/O error or EOF, returns Stop (safe default).
+pub fn prompt_worktree_removal(path: &Path) -> WorktreeRemovalChoice {
+    let dirty = has_uncommitted_changes(path);
+
+    // Write prompt to stderr so it is visible even when stdout is redirected.
+    if dirty {
+        eprintln!("\n  ⚠  UNCOMMITTED CHANGES in worktree: {}", path.display());
+    } else {
+        eprintln!("\n  Worktree: {}", path.display());
+    }
+    eprintln!("    [1] stop  (abort — leave everything as-is)");
+    eprintln!("    [2] keep  (continue, but keep the worktree on disk)");
+    eprintln!("    [3] delete (continue and delete the worktree)");
+    eprint!("  Choice [1/2/3]: ");
+    let _ = std::io::stderr().flush();
+
+    // Read from /dev/tty so the prompt works even when stdin is piped.
+    let input = read_tty_line().unwrap_or_default();
+    match input.trim() {
+        "2" => WorktreeRemovalChoice::KeepWorktree,
+        "3" => WorktreeRemovalChoice::DeleteWorktree,
+        _ => WorktreeRemovalChoice::Stop,
+    }
+}
+
+fn read_tty_line() -> std::io::Result<String> {
+    use std::io::BufRead;
+    let tty = std::fs::File::open("/dev/tty")?;
+    let mut reader = std::io::BufReader::new(tty);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    Ok(line)
 }
 
 #[cfg(test)]

@@ -362,6 +362,33 @@ fn resolve_slug_from_args(
     }
 }
 
+/// Resolve whether to keep or delete a worktree before tearing down a session.
+///
+/// - `keep_worktree` set: skip the prompt, keep the worktree.
+/// - `yes` set: skip the prompt, delete the worktree (non-interactive confirmation).
+/// - Neither: prompt the user interactively.
+///
+/// Returns `Ok(true)` to keep the worktree, `Ok(false)` to delete it,
+/// or `Err` to abort the whole `down` operation.
+fn resolve_worktree_keep(
+    worktree_path: &std::path::Path,
+    keep_worktree: bool,
+    yes: bool,
+) -> Result<bool> {
+    if keep_worktree {
+        return Ok(true);
+    }
+    if yes {
+        return Ok(false);
+    }
+    use worktree::WorktreeRemovalChoice;
+    match worktree::prompt_worktree_removal(worktree_path) {
+        WorktreeRemovalChoice::Stop => Err(anyhow::anyhow!("aborted")),
+        WorktreeRemovalChoice::KeepWorktree => Ok(true),
+        WorktreeRemovalChoice::DeleteWorktree => Ok(false),
+    }
+}
+
 fn validate_slug(slug: &str) -> Result<()> {
     let re = regex_lite::Regex::new(r"^[a-z0-9][a-z0-9\-]{0,30}[a-z0-9]$").unwrap();
     if !re.is_match(slug) {
@@ -820,13 +847,19 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         .clone();
     log.detail(&format!("slot {}, mode: {}", session.slot, session.mode));
 
+    let keep_worktree = resolve_worktree_keep(
+        std::path::Path::new(&session.worktree_path),
+        args.keep_worktree,
+        args.yes,
+    )?;
+
     let handler = modes::get_handler(&config);
     handler.bring_down(
         &session,
         &config,
         &root,
         args.keep_volumes,
-        args.keep_worktree,
+        keep_worktree,
         &log,
     )?;
 
@@ -841,7 +874,7 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     }
 
     println!();
-    if args.keep_worktree {
+    if keep_worktree {
         log.success(&format!(
             "Session '{}' torn down (worktree kept at {}).",
             slug, session.worktree_path
@@ -878,14 +911,20 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
         log.step(&format!("Tearing down '{}'...", session.slug));
         log.detail(&format!("slot {}, mode: {}", session.slot, session.mode));
 
-        match handler.bring_down(
-            &session,
-            &config,
-            &root,
-            args.keep_volumes,
+        let keep_wt = match resolve_worktree_keep(
+            std::path::Path::new(&session.worktree_path),
             args.keep_worktrees,
-            &log,
+            args.yes,
         ) {
+            Ok(k) => k,
+            Err(_) => {
+                log.warn(&format!("'{}' skipped (aborted by user)", session.slug));
+                failed.push(session.slug.clone());
+                continue;
+            }
+        };
+
+        match handler.bring_down(&session, &config, &root, args.keep_volumes, keep_wt, &log) {
             Ok(()) => {
                 guard.state.remove_session(&session.slug);
                 guard.commit()?;
