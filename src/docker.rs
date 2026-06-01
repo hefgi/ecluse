@@ -7,7 +7,12 @@ use std::process::Command;
 /// own default resolution.
 fn docker_host() -> String {
     Command::new("docker")
-        .args(["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"])
+        .args([
+            "context",
+            "inspect",
+            "--format",
+            "{{.Endpoints.docker.Host}}",
+        ])
         .output()
         .ok()
         .and_then(|o| {

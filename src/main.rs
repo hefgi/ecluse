@@ -1218,8 +1218,7 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
             } else {
                 let cwd =
                     std::env::current_dir().context("could not determine current directory")?;
-                if cwd.starts_with(&root) || cwd.to_str().is_some_and(|c| c.contains(s.as_str()))
-                {
+                if cwd.starts_with(&root) || cwd.to_str().is_some_and(|c| c.contains(s.as_str())) {
                     cwd
                 } else {
                     return Err(error::EcluseError::WorktreeNotFound { slug: s.clone() }.into());

@@ -76,6 +76,12 @@ pub struct ServiceConfig {
         deserialize_with = "deserialize_string_or_vec"
     )]
     pub port_env: Vec<String>,
+    /// Base port for the Node.js inspector (--inspect). ecluse computes
+    /// ECLUSE_<NAME>_INSPECT_PORT = inspect_port + slot, same arithmetic as base_port.
+    /// Use in command via NODE_OPTIONS='--inspect=0.0.0.0:$ECLUSE_<NAME>_INSPECT_PORT'
+    /// to give each service a unique debugger port across services and parallel sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspect_port: Option<u16>,
 }
 
 fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -113,6 +119,11 @@ where
 impl ServiceConfig {
     pub fn port(&self, slot: u8) -> u16 {
         self.base_port.saturating_add(slot as u16)
+    }
+
+    pub fn inspect_port_for_slot(&self, slot: u8) -> Option<u16> {
+        self.inspect_port
+            .map(|base| base.saturating_add(slot as u16))
     }
 }
 
@@ -512,10 +523,63 @@ base_port = 5432
             compose: None,
             command: None,
             port_env: vec![],
+            inspect_port: None,
         };
         assert_eq!(svc.port(1), 8001);
         assert_eq!(svc.port(2), 8002);
         assert_eq!(svc.port(8), 8008);
+    }
+
+    #[test]
+    fn inspect_port_for_slot_none_when_unset() {
+        let svc = ServiceConfig {
+            name: "api".into(),
+            base_port: 8000,
+            run: ServiceRun::Native,
+            compose: None,
+            command: None,
+            port_env: vec![],
+            inspect_port: None,
+        };
+        assert_eq!(svc.inspect_port_for_slot(1), None);
+    }
+
+    #[test]
+    fn inspect_port_for_slot_computes_correctly() {
+        let svc = ServiceConfig {
+            name: "app".into(),
+            base_port: 7100,
+            run: ServiceRun::Native,
+            compose: None,
+            command: None,
+            port_env: vec![],
+            inspect_port: Some(9229),
+        };
+        assert_eq!(svc.inspect_port_for_slot(1), Some(9230));
+        assert_eq!(svc.inspect_port_for_slot(2), Some(9231));
+        assert_eq!(svc.inspect_port_for_slot(0), Some(9229));
+    }
+
+    #[test]
+    fn inspect_port_loads_from_toml() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"host\"\n[[services]]\nname = \"app\"\nbase_port = 7100\ncommand = \"vite\"\ninspect_port = 9229\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.services[0].inspect_port, Some(9229));
+    }
+
+    #[test]
+    fn inspect_port_defaults_to_none() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"host\"\n[[services]]\nname = \"app\"\nbase_port = 7100\ncommand = \"vite\"\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.services[0].inspect_port, None);
     }
 
     #[test]
@@ -537,6 +601,7 @@ base_port = 5432
                     compose: None,
                     command: None,
                     port_env: vec![],
+                    inspect_port: None,
                 },
                 ServiceConfig {
                     name: "postgres".into(),
@@ -545,6 +610,7 @@ base_port = 5432
                     compose: None,
                     command: None,
                     port_env: vec![],
+                    inspect_port: None,
                 },
             ],
             hooks: HookConfig::default(),

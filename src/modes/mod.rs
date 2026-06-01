@@ -154,6 +154,7 @@ mod tests {
             compose: compose.map(|s| s.to_string()),
             command: None,
             port_env: vec![],
+            inspect_port: None,
         }
     }
 

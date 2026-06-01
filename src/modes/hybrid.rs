@@ -254,6 +254,7 @@ impl super::ModeHandler for HybridMode {
                     compose: None,
                     command: None,
                     port_env: vec![],
+                    inspect_port: None,
                 };
                 validate::find_free_port(config, &fallback, slot)?
             };
