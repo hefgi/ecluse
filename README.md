@@ -154,9 +154,11 @@ ecluse env                   # auto-detects session if run from inside a worktre
 
 ```bash
 ecluse up feat/add-auth   # slug=feat-add-auth, branch=feat/add-auth
-ecluse up                     # reads current git branch, same result
-ecluse up                     # on main/master → prompts for branch name
+ecluse up                 # inside a git worktree → auto-detects branch from cwd
+ecluse up                 # in repo root / main worktree → prompts for branch name
 ```
+
+**Auto-register existing worktrees** — running `ecluse up` from inside any git worktree (even one not created by ecluse) auto-detects the branch, registers the session, and starts services. No `--reuse-worktree` flag needed.
 
 **Idempotent up** — `ecluse up` is safe to run on an existing session. It reuses the worktree and slot, checks which services are running, and starts only the ones that are down. Slug is auto-detected from cwd:
 

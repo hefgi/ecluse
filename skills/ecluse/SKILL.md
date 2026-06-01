@@ -80,16 +80,23 @@ Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Us
 - Each service decision is logged: "already running — skipped" / "down — will start"
 - Slug is auto-detected from cwd when inside a worktree
 
-Pass your git branch name directly — slashes are sanitized to hyphens:
+Pass your git branch name directly — slashes are sanitized to hyphens. When no argument is given, resolution is based on worktree location:
+
+| Location | Behaviour |
+|---|---|
+| Inside an ecluse-registered worktree | Reuse stored slug/branch |
+| Inside any other git worktree | Read branch from cwd, auto-register (`--reuse-worktree` implied) |
+| Repo root / main worktree | Prompt for a branch name |
 
 ```bash
 ecluse up feat/add-auth   # branch=feat/add-auth, slug=feat-add-auth
 ecluse up feat-add-auth   # same result — already a valid slug
-ecluse up feat-foo            # new or existing: always does the right thing
-ecluse up                     # slug auto-detected from cwd (or reads current git branch)
-ecluse up --force             # kill all services on allocated ports, restart all
-ecluse up --skip api          # skip the api service; start everything else
-ecluse up --force --skip db   # kill + restart all except db
+ecluse up feat-foo        # new or existing: always does the right thing
+ecluse up                 # inside any worktree → branch auto-detected from cwd
+ecluse up                 # in repo root → prompts for branch name
+ecluse up --force         # kill all services on allocated ports, restart all
+ecluse up --skip api      # skip the api service; start everything else
+ecluse up --force --skip db  # kill + restart all except db
 ```
 
 ### Common first-time failures

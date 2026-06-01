@@ -31,15 +31,18 @@ Creates a git worktree, allocates a slot, starts services, and writes `.env.eclu
 
 When run against a session that already exists, `ecluse up` is idempotent: it reuses the existing worktree and slot, checks which services are running, and starts only the ones that are down. Each service decision is logged explicitly.
 
-When run from inside an ecluse worktree, the slug is auto-detected — omit it entirely. When run from repo root (or any non-ecluse directory), the slug is read from the current git branch. Trunk branches (`main`, `master`, `develop`, `dev`) prompt for a branch name.
-
 The positional argument accepts branch names with slashes — `feat/add-auth` becomes slug `feat-add-auth` while the original branch name is preserved for `git worktree add`.
+
+When called with no argument, slug resolution uses worktree location:
+1. **Inside an ecluse-registered worktree** → reuse stored slug/branch
+2. **Inside any other git worktree** → read branch from cwd, auto-register (`--reuse-worktree` implied)
+3. **In repo root / main worktree** → prompt for branch name
 
 ```bash
 ecluse up feat/add-auth     # branch=feat/add-auth, slug=feat-add-auth
 ecluse up feat-add-auth     # already a valid slug — same result
-ecluse up                       # reads current git branch, sanitizes to slug
-ecluse up                       # on main/master/develop/dev → prompts for branch name
+ecluse up                   # inside any git worktree → auto-detects branch from cwd
+ecluse up                   # in repo root → prompts for branch name
 ecluse up feat-foo --force      # kill all running services on allocated ports, then restart all
 ecluse up --force               # same but slug auto-detected
 ecluse up feat-foo --skip api   # skip the api service; start everything else
