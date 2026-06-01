@@ -292,9 +292,19 @@ mod tests {
 
     #[test]
     fn invalid_slug_too_long() {
-        // 33 chars — one over max
-        let slug = "a".repeat(33);
+        // 63 chars — one over max
+        let slug = "a".repeat(63);
         assert!(validate_slug(&slug).is_err());
+    }
+
+    #[test]
+    fn sanitize_to_slug_truncates_long_input() {
+        // 90-char branch name must be truncated to ≤62 chars
+        let input = "feat/".to_string() + &"a".repeat(85);
+        let (slug, branch) = sanitize_to_slug(&input).unwrap();
+        assert_eq!(branch, input);
+        assert!(slug.len() <= 62);
+        assert!(!slug.ends_with('-'));
     }
 
     #[test]
@@ -377,13 +387,19 @@ mod tests {
 }
 
 /// Sanitize a branch name or slug into a valid ecluse slug + original branch pair.
-/// Replaces '/' with '-', lowercases, trims leading/trailing hyphens.
+/// Replaces '/' with '-', lowercases, trims leading/trailing hyphens, and
+/// truncates to 62 chars (trimming any trailing hyphen after truncation).
 /// The branch is the original input (used for `git worktree add`).
 /// The slug is the sanitized form (used for paths, Docker, tmux).
 fn sanitize_to_slug(input: &str) -> Result<(String, String)> {
     let branch = input.to_string();
     let slug = input.to_lowercase().replace('/', "-");
     let slug = slug.trim_matches('-').to_string();
+    let slug = if slug.len() > 62 {
+        slug[..62].trim_end_matches('-').to_string()
+    } else {
+        slug
+    };
     validate_slug(&slug)?;
     Ok((slug, branch))
 }
@@ -513,7 +529,7 @@ fn resolve_worktree_keep(
 }
 
 fn validate_slug(slug: &str) -> Result<()> {
-    let re = regex_lite::Regex::new(r"^[a-z0-9][a-z0-9\-]{0,30}[a-z0-9]$").unwrap();
+    let re = regex_lite::Regex::new(r"^[a-z0-9][a-z0-9\-]{0,60}[a-z0-9]$").unwrap();
     if !re.is_match(slug) {
         return Err(error::EcluseError::SlugInvalid(slug.to_string()).into());
     }
