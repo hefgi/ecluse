@@ -157,7 +157,7 @@ fn down_removes_worktree_and_clears_state() {
     ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
     ecluse(repo.path(), &["up", "feat-foo"]);
 
-    let out = ecluse(repo.path(), &["down", "--yes", "feat-foo"]);
+    let out = ecluse(repo.path(), &["down", "--delete-worktree", "feat-foo"]);
     assert!(out.status.success(), "{}", stderr(&out));
 
     let worktree = repo.path().join(".ecluse/worktrees/feat-foo");
@@ -171,7 +171,10 @@ fn down_removes_worktree_and_clears_state() {
 fn down_nonexistent_slug_errors() {
     let repo = tmp_repo();
     ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
-    let out = ecluse(repo.path(), &["down", "--yes", "does-not-exist"]);
+    let out = ecluse(
+        repo.path(),
+        &["down", "--delete-worktree", "does-not-exist"],
+    );
     assert!(!out.status.success());
     assert!(
         stderr(&out).contains("does-not-exist"),
@@ -211,7 +214,7 @@ fn slot_reuse_after_down() {
     let repo = tmp_repo();
     ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
     ecluse(repo.path(), &["up", "feat-foo"]);
-    ecluse(repo.path(), &["down", "--yes", "feat-foo"]);
+    ecluse(repo.path(), &["down", "--delete-worktree", "feat-foo"]);
 
     // New session should reuse slot 1
     let out = ecluse(repo.path(), &["up", "feat-bar"]);
@@ -263,7 +266,7 @@ command = "echo frontend"
     // PORT alias = first native service (api)
     assert!(env.contains("PORT=8001"), "got env: {}", env);
 
-    ecluse(repo.path(), &["down", "--yes", "svc-ports"]);
+    ecluse(repo.path(), &["down", "--delete-worktree", "svc-ports"]);
 }
 
 #[test]
@@ -294,8 +297,8 @@ command = "echo api"
     assert!(env2.contains("ECLUSE_API_PORT=8002"), "got env: {}", env2);
     assert!(env2.contains("PORT=8002"), "got env: {}", env2);
 
-    ecluse(repo.path(), &["down", "--yes", "svc-slot1"]);
-    ecluse(repo.path(), &["down", "--yes", "svc-slot2"]);
+    ecluse(repo.path(), &["down", "--delete-worktree", "svc-slot1"]);
+    ecluse(repo.path(), &["down", "--delete-worktree", "svc-slot2"]);
 }
 
 #[test]

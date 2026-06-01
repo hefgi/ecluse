@@ -850,7 +850,7 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     let keep_worktree = resolve_worktree_keep(
         std::path::Path::new(&session.worktree_path),
         args.keep_worktree,
-        args.yes,
+        args.delete_worktree,
     )?;
 
     let handler = modes::get_handler(&config);
@@ -914,7 +914,7 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
         let keep_wt = match resolve_worktree_keep(
             std::path::Path::new(&session.worktree_path),
             args.keep_worktrees,
-            args.yes,
+            args.delete_worktrees,
         ) {
             Ok(k) => k,
             Err(_) => {

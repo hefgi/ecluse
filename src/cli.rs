@@ -127,9 +127,9 @@ pub struct DownArgs {
     #[arg(long)]
     pub keep_worktree: bool,
 
-    /// Skip the worktree deletion prompt and proceed with deletion (for CI/agents)
-    #[arg(long, short)]
-    pub yes: bool,
+    /// Skip the worktree deletion prompt and delete the worktree (for CI/agents)
+    #[arg(long)]
+    pub delete_worktree: bool,
 
     /// Suppress step output
     #[arg(long)]
@@ -178,9 +178,9 @@ pub struct ShutdownArgs {
     #[arg(long)]
     pub keep_worktrees: bool,
 
-    /// Skip the per-worktree deletion prompt and proceed with deletion (for CI/agents)
-    #[arg(long, short)]
-    pub yes: bool,
+    /// Skip the per-worktree deletion prompt and delete all worktrees (for CI/agents)
+    #[arg(long)]
+    pub delete_worktrees: bool,
 
     /// Suppress step output
     #[arg(long)]
