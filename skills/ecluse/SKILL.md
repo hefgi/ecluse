@@ -555,6 +555,20 @@ ps aux | grep ecluse      # check for live process
 rm .ecluse/state.lock     # remove stale lock if nothing found
 ```
 
+### Service can't find secrets from .env / .env.local
+
+ecluse symlinks `.env` and `.env.local` from the repo root into each worktree at `ecluse up` time — so the files are there on disk. Whether the service actually reads them depends on the framework:
+
+- **Auto-loaded** (no action needed): Next.js, Vite, Create React App, `docker compose` (reads `.env` from the compose file's directory)
+- **Must load explicitly**: Node.js without a dotenv call, Rails, Django, Go, Rust — the process only sees what ecluse injects via `command` / `.env.ecluse`
+
+For frameworks that need explicit loading, two options:
+
+1. Use a `post_up` hook to source the file or run a seed/setup script
+2. Make the app call `dotenv` (or equivalent) at startup to load `.env`
+
+Note: `ECLUSE_*` vars and `PORT` from `.env.ecluse` are always injected into the spawned process environment by ecluse — those never need explicit loading.
+
 ### Not inside a git repository
 
 ```bash

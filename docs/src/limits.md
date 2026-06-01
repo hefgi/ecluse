@@ -47,6 +47,24 @@ command = "next dev --port $PORT"
 command = "bundle exec rails s -p $PORT"
 ```
 
+## `.env` / `.env.local` are symlinked but not auto-loaded by every framework
+
+ecluse symlinks `.env` and `.env.local` from the repo root into each worktree at `ecluse up` time (configurable via `inherit_env`). The symlinks mean the files are present at the expected path inside the worktree, but **whether they are actually read depends on your framework**:
+
+- **Auto-load** (no action needed): Next.js, Vite, Create React App, docker-compose — these discover and load `.env` / `.env.local` automatically.
+- **Explicit-load required**: Node.js without dotenv, Rails, Django, Go, Rust binaries — the app must call `dotenv.config()` / `Dotenv::dotenv()` etc. at startup.
+
+`ECLUSE_*` variables and `PORT` are always injected directly into the spawned process environment — they do not rely on dotenv at all. Only secrets and base config that your app reads from `.env` at runtime require the framework to auto-load the file.
+
+If your framework does not auto-load, add a `post_up` hook to source the file or call your loader:
+
+```toml
+[hooks]
+post_up = "set -a && source .env && set +a && your-start-command"
+```
+
+Or configure your app's dotenv library to load the file explicitly.
+
 ## Mode is set at init time
 
 Mode is stored in `.ecluse.toml` and applies to all sessions. Changing mode requires editing `.ecluse.toml` and tearing down all existing sessions first.
