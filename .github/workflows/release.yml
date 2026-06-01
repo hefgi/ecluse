@@ -182,4 +182,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/ecluse.rb
           git commit -m "ecluse ${VERSION#v}"
+          git pull --rebase
           git push
