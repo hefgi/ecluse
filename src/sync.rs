@@ -148,6 +148,21 @@ pub fn write_pid_file(
     Ok(pid_path)
 }
 
+/// Returns true iff the named tmux window's pane shell (or any descendant process)
+/// is listening on `port`. False on any error (tmux absent, session/window gone, etc.)
+pub fn tmux_window_owns_port(session: &str, window: &str, port: u16) -> bool {
+    match tmux_pane_pid(session, window) {
+        None => false,
+        Some(pane_pid) => subtree_owns_port(pane_pid, port),
+    }
+}
+
+/// Returns true iff the named window exists in the tmux session.
+/// Used as a fallback when no port has been allocated yet for a service.
+pub(crate) fn tmux_window_exists(session: &str, window: &str) -> bool {
+    tmux_pane_pid(session, window).is_some()
+}
+
 // ── internal helpers ──────────────────────────────────────────────────────────
 
 /// Return unique PIDs of processes with an open file descriptor inside `dir`.
@@ -187,7 +202,7 @@ fn process_cmdline(pid: u32) -> Option<String> {
 }
 
 /// Return all TCP ports this PID is currently listening on.
-fn pid_listening_ports(pid: u32) -> Vec<u16> {
+pub(crate) fn pid_listening_ports(pid: u32) -> Vec<u16> {
     let output = match Command::new("lsof")
         .args([
             "-p",
@@ -240,7 +255,7 @@ fn find_port_in_subtree(pid: u32, depth: u8) -> Option<u16> {
 }
 
 /// Return direct child PIDs of `pid` using `pgrep`.
-fn child_pids(pid: u32) -> Vec<u32> {
+pub(crate) fn child_pids(pid: u32) -> Vec<u32> {
     let output = match Command::new("pgrep")
         .args(["-P", &pid.to_string()])
         .output()
@@ -252,6 +267,39 @@ fn child_pids(pid: u32) -> Vec<u32> {
         .lines()
         .filter_map(|l| l.trim().parse().ok())
         .collect()
+}
+
+/// Get the pane shell PID for a named window in a tmux session.
+///
+/// Returns `None` if tmux is unavailable, the session doesn't exist, or the
+/// window doesn't exist (tmux exits non-zero in all these cases).
+fn tmux_pane_pid(session: &str, window: &str) -> Option<u32> {
+    let target = format!("{}:{}", session, window);
+    let output = Command::new("tmux")
+        .args(["list-panes", "-t", &target, "-F", "#{pane_pid}"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .and_then(|l| l.trim().parse().ok())
+}
+
+/// Check whether `pid` or any process in its descendant subtree is listening on `port`.
+///
+/// Uses an iterative walk (no depth cap) via `child_pids` + `pid_listening_ports`.
+fn subtree_owns_port(pid: u32, port: u16) -> bool {
+    let mut stack: Vec<u32> = vec![pid];
+    while let Some(current) = stack.pop() {
+        if pid_listening_ports(current).contains(&port) {
+            return true;
+        }
+        stack.extend(child_pids(current));
+    }
+    false
 }
 
 /// Generic launcher prefixes to strip before matching.
@@ -502,6 +550,68 @@ mod tests {
         let matches = match_services(&[&svc], &procs);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].port, None);
+    }
+
+    // ── pid_listening_ports ───────────────────────────────────────────────────
+
+    #[test]
+    fn pid_listening_ports_empty_for_dead_pid() {
+        assert!(pid_listening_ports(9_999_999).is_empty());
+    }
+
+    #[test]
+    fn pid_listening_ports_detects_own_bound_port() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let my_pid = std::process::id();
+        assert!(pid_listening_ports(my_pid).contains(&port));
+    }
+
+    // ── child_pids ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn child_pids_empty_for_dead_pid() {
+        assert!(child_pids(9_999_999).is_empty());
+    }
+
+    // ── subtree_owns_port ─────────────────────────────────────────────────────
+
+    #[test]
+    fn subtree_owns_port_false_for_dead_pid() {
+        assert!(!subtree_owns_port(9_999_999, 3000));
+    }
+
+    #[test]
+    fn subtree_owns_port_false_when_port_not_owned() {
+        // Port 1 is privileged — current process won't be listening on it.
+        let my_pid = std::process::id();
+        assert!(!subtree_owns_port(my_pid, 1));
+    }
+
+    #[test]
+    fn subtree_owns_port_true_when_self_owns_port() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let my_pid = std::process::id();
+        assert!(subtree_owns_port(my_pid, port));
+    }
+
+    // ── tmux_window_owns_port / tmux_window_exists ────────────────────────────
+
+    #[test]
+    fn tmux_window_owns_port_false_for_nonexistent_session() {
+        assert!(!tmux_window_owns_port(
+            "ecluse-nonexistent-xyz-9999",
+            "api",
+            3000
+        ));
+    }
+
+    #[test]
+    fn tmux_window_exists_false_for_nonexistent_session() {
+        assert!(!tmux_window_exists("ecluse-nonexistent-xyz-9999", "api"));
     }
 
     // ── write_pid_file ────────────────────────────────────────────────────────
