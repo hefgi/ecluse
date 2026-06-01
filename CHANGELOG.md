@@ -13,6 +13,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ecluse up` with no argument uses the git worktree location to determine intent: inside an ecluse-registered worktree → reuse stored slug; inside any other git worktree → auto-detect branch from cwd and register the worktree (no `--reuse-worktree` flag needed); in the main worktree / repo root → prompt for a branch name. Detached HEAD exits with a clear error.
 - Worktree deletion guard: `ecluse down` and `ecluse shutdown` now always prompt before removing a worktree (stop / keep / delete). A ⚠ warning is shown if the worktree has uncommitted changes. Pass `--delete-worktree` / `--delete-worktrees` to skip the prompt and delete (for CI/agents), or `--keep-worktree` / `--keep-worktrees` to skip and keep.
 
+### Changed
+- `ecluse status` session header is now a borderless key-value block (`Slug`, `Slot`, `Worktree`, `Tmux`) with right-aligned labels, replacing the single run-on line. Labels use the user-facing term "Slug" (not "Session").
+- `ecluse status` last column adapts to the session's process manager: `WINDOW` (tmux window name) for tmux sessions, `PID` for nohup, omitted entirely for container-only sessions.
+- `ecluse status` native service health check for tmux sessions now verifies that a descendant of the tmux pane's shell process owns the expected port, rather than probing the port directly. This correctly handles port collisions with unrelated processes and services that fail to start despite their tmux window existing.
+
 ### Fixed
 - `docker stop` calls in `--force` now use `DOCKER_HOST` from the active Docker context, so OrbStack containers are correctly targeted.
 - tmux session spawning no longer fails with "duplicate session" when the previous session's shell is still alive after services crash. The stale session is killed before a new one is created.

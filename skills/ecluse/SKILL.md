@@ -153,7 +153,7 @@ ecluse down <slug> --delete-worktree
 ecluse ls                       # all sessions: ports as name=value pairs; TMUX column when tmux is in use
 ecluse env <slug>               # same JSON as up --json: worktree_path + all env vars
 ecluse env                      # auto-detects current session if run from inside a worktree
-ecluse status <slug>            # per-service health: ✓/✗ with port and PID; exit 1 if any down
+ecluse status <slug>            # per-service health: ✓/✗ with port; shows WINDOW (tmux) or PID (nohup); exit 1 if any down
 ecluse status <slug> --json     # machine-readable health check
 ecluse status                   # auto-detect slug from cwd
 ```

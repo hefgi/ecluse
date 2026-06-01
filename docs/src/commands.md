@@ -170,6 +170,12 @@ ecluse status                   # auto-detect slug from cwd (must be inside a wo
 
 For native services, ecluse matches running processes in the worktree by their command line. For docker services, it queries `docker ps` by container name.
 
+The last column and the session header adapt to the process manager:
+
+- **tmux** — header shows the tmux session name (`tmux=ecluse-<slug>`); last column is `WINDOW` showing the tmux window name for each native service. Health is verified by checking that a process in the pane's subtree owns the expected port — a port collision with an unrelated process correctly shows the service as down.
+- **nohup** — last column is `PID` showing the stored process ID.
+- **none** (container-only sessions) — no trailing column.
+
 | Flag | Description |
 |---|---|
 | `--json` | Output as JSON (implies `--quiet`) |
