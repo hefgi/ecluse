@@ -1745,10 +1745,25 @@ struct ServiceStatus {
     port: Option<u16>,
     healthy: bool,
     pid: Option<u32>,
+    tmux_window: Option<String>,
 }
 
 #[derive(Tabled)]
-struct StatusRow {
+struct StatusRowTmux {
+    #[tabled(rename = "SERVICE")]
+    service: String,
+    #[tabled(rename = "TYPE")]
+    kind: String,
+    #[tabled(rename = "PORT")]
+    port: String,
+    #[tabled(rename = "STATUS")]
+    status: String,
+    #[tabled(rename = "WINDOW")]
+    window: String,
+}
+
+#[derive(Tabled)]
+struct StatusRowNohup {
     #[tabled(rename = "SERVICE")]
     service: String,
     #[tabled(rename = "TYPE")]
@@ -1759,6 +1774,18 @@ struct StatusRow {
     status: String,
     #[tabled(rename = "PID")]
     pid: String,
+}
+
+#[derive(Tabled)]
+struct StatusRowNone {
+    #[tabled(rename = "SERVICE")]
+    service: String,
+    #[tabled(rename = "TYPE")]
+    kind: String,
+    #[tabled(rename = "PORT")]
+    port: String,
+    #[tabled(rename = "STATUS")]
+    status: String,
 }
 
 fn cmd_status(args: cli::StatusArgs) -> Result<()> {
@@ -1816,28 +1843,48 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
                 (alive, Some(m.pid), p)
             }
             None => {
-                // Fall back to PID file if sync was used.
+                let p = session.port_overrides.get(&svc.name).copied();
                 let pid_file = root
                     .join(".ecluse")
                     .join("pids")
                     .join(&session.slug)
                     .join(format!("{}.pid", svc.name));
                 if pid_file.exists() {
+                    // Nohup-managed: verify the stored PID is alive.
                     if let Ok(content) = std::fs::read_to_string(&pid_file) {
                         if let Ok(pid) = content.trim().parse::<u32>() {
                             let alive = process::pid_alive(pid);
-                            let p = session.port_overrides.get(&svc.name).copied();
                             (alive, Some(pid), p)
                         } else {
-                            (false, None, session.port_overrides.get(&svc.name).copied())
+                            (false, None, p)
                         }
                     } else {
-                        (false, None, session.port_overrides.get(&svc.name).copied())
+                        (false, None, p)
+                    }
+                } else if matches!(session.process_manager, Some(process::ProcessManager::Tmux)) {
+                    // Tmux-managed: verify the pane's process subtree owns the port.
+                    // This rules out port collisions from unrelated processes.
+                    if let Some(ref tmux_session) = session.tmux_session {
+                        let healthy = if let Some(port) = p {
+                            sync::tmux_window_owns_port(tmux_session, &svc.name, port)
+                        } else {
+                            // No port allocated yet — fall back to window existence.
+                            sync::tmux_window_exists(tmux_session, &svc.name)
+                        };
+                        (healthy, None, p)
+                    } else {
+                        (false, None, p)
                     }
                 } else {
-                    (false, None, session.port_overrides.get(&svc.name).copied())
+                    (false, None, p)
                 }
             }
+        };
+        let tmux_window = if matches!(session.process_manager, Some(process::ProcessManager::Tmux))
+        {
+            Some(svc.name.clone())
+        } else {
+            None
         };
         statuses.push(ServiceStatus {
             name: svc.name.clone(),
@@ -1845,6 +1892,7 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
             port,
             healthy,
             pid,
+            tmux_window,
         });
     }
 
@@ -1861,6 +1909,7 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
             port,
             healthy,
             pid: None,
+            tmux_window: None,
         });
     }
 
@@ -1876,6 +1925,7 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
                     "port": s.port,
                     "healthy": s.healthy,
                     "pid": s.pid,
+                    "tmux_window": s.tmux_window,
                 })
             })
             .collect();
@@ -1883,34 +1933,78 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
             "slug": session.slug,
             "slot": session.slot,
             "all_healthy": all_healthy,
+            "tmux_session": session.tmux_session,
             "services": services_json,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else if !args.quiet {
-        println!(
-            "Session: {}  slot={}  worktree={}",
-            session.slug, session.slot, session.worktree_path
-        );
+        let mut meta: Vec<(&str, String)> = vec![
+            ("Slug", session.slug.clone()),
+            ("Slot", session.slot.to_string()),
+            ("Worktree", session.worktree_path.clone()),
+        ];
+        if let Some(ref ts) = session.tmux_session {
+            meta.push(("Tmux", ts.clone()));
+        }
+        let label_width = meta.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+        for (label, value) in &meta {
+            println!("  {:>width$}  {}", label, value, width = label_width);
+        }
         println!();
 
         if statuses.is_empty() {
             println!("No services defined in .ecluse.toml.");
         } else {
-            let rows: Vec<StatusRow> = statuses
-                .iter()
-                .map(|s| StatusRow {
-                    service: s.name.clone(),
-                    kind: s.kind.to_string(),
-                    port: s.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
-                    status: if s.healthy {
-                        "\u{2713} up".into()
-                    } else {
-                        "\u{2717} down".into()
-                    },
-                    pid: s.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
-                })
-                .collect();
-            println!("{}", Table::new(rows));
+            let status_str = |s: &ServiceStatus| -> String {
+                if s.healthy {
+                    "\u{2713} up".into()
+                } else {
+                    "\u{2717} down".into()
+                }
+            };
+            let port_str = |s: &ServiceStatus| -> String {
+                s.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into())
+            };
+            match session.process_manager {
+                Some(process::ProcessManager::Tmux) => {
+                    let rows: Vec<StatusRowTmux> = statuses
+                        .iter()
+                        .map(|s| StatusRowTmux {
+                            service: s.name.clone(),
+                            kind: s.kind.to_string(),
+                            port: port_str(s),
+                            status: status_str(s),
+                            window: s.tmux_window.clone().unwrap_or_else(|| "-".into()),
+                        })
+                        .collect();
+                    println!("{}", Table::new(rows));
+                }
+                Some(process::ProcessManager::Nohup) => {
+                    let rows: Vec<StatusRowNohup> = statuses
+                        .iter()
+                        .map(|s| StatusRowNohup {
+                            service: s.name.clone(),
+                            kind: s.kind.to_string(),
+                            port: port_str(s),
+                            status: status_str(s),
+                            pid: s.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+                        })
+                        .collect();
+                    println!("{}", Table::new(rows));
+                }
+                _ => {
+                    let rows: Vec<StatusRowNone> = statuses
+                        .iter()
+                        .map(|s| StatusRowNone {
+                            service: s.name.clone(),
+                            kind: s.kind.to_string(),
+                            port: port_str(s),
+                            status: status_str(s),
+                        })
+                        .collect();
+                    println!("{}", Table::new(rows));
+                }
+            }
             println!();
 
             let down_count = statuses.iter().filter(|s| !s.healthy).count();
