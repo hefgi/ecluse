@@ -2,7 +2,7 @@
 
 ```
 ecluse init     [--mode container|host|hybrid] [--explain] [--yes] [--quiet]
-ecluse up       [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...] [--quiet]
+ecluse up       [<slug>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...] [--quiet]
 ecluse sync     [<slug>] [--json] [--quiet]
 ecluse down     [<slug>] [--keep-volumes] [--keep-branch] [--keep-worktree] [--delete-worktree] [--quiet]
 ecluse shutdown [--keep-volumes] [--keep-worktrees] [--delete-worktrees] [--quiet]
@@ -31,21 +31,23 @@ Creates a git worktree, allocates a slot, starts services, and writes `.env.eclu
 
 When run against a session that already exists, `ecluse up` is idempotent: it reuses the existing worktree and slot, checks which services are running, and starts only the ones that are down. Each service decision is logged explicitly.
 
-When run from inside a worktree (any subdirectory of `.ecluse/worktrees/<slug>`), the slug is auto-detected — omit it entirely.
+When run from inside an ecluse worktree, the slug is auto-detected — omit it entirely. When run from repo root (or any non-ecluse directory), the slug is read from the current git branch. Trunk branches (`main`, `master`, `develop`, `dev`) prompt for a branch name.
+
+The positional argument accepts branch names with slashes — `feat/add-auth` becomes slug `feat-add-auth` while the original branch name is preserved for `git worktree add`.
 
 ```bash
-ecluse up feat-foo              # new session: create worktree, allocate slot, start all
-ecluse up feat-foo              # existing session: skip worktree creation, start only downed services
-ecluse up                       # auto-detect slug from cwd (must be inside a worktree)
+ecluse up feat/add-auth     # branch=feat/add-auth, slug=feat-add-auth
+ecluse up feat-add-auth     # already a valid slug — same result
+ecluse up                       # reads current git branch, sanitizes to slug
+ecluse up                       # on main/master/develop/dev → prompts for branch name
 ecluse up feat-foo --force      # kill all running services on allocated ports, then restart all
-ecluse up --force               # same but slug auto-detected from cwd
+ecluse up --force               # same but slug auto-detected
 ecluse up feat-foo --skip api   # skip the api service; start everything else
 ecluse up --force --skip postgres  # kill + restart all except postgres
 ```
 
 | Flag | Description |
 |---|---|
-| `--branch <name>` | Use a specific branch name instead of the slug |
 | `--watch` | Stream service logs after startup |
 | `--json` | Output worktree path + env vars as JSON |
 | `--reuse-worktree` | Reuse an existing worktree instead of creating one |

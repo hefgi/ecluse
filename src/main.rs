@@ -365,8 +365,8 @@ mod tests {
 
     #[test]
     fn sanitize_to_slug_multiple_slashes() {
-        let (slug, _) = sanitize_to_slug("feat/sc-10477/sub").unwrap();
-        assert_eq!(slug, "feat-sc-10477-sub");
+        let (slug, _) = sanitize_to_slug("feat/add-auth/sub").unwrap();
+        assert_eq!(slug, "feat-add-auth-sub");
     }
 
     #[test]

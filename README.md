@@ -131,7 +131,7 @@ Three thin mode implementations share this slot primitive. Mode is selected once
 
 ```
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
-ecluse up [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...]
+ecluse up [<slug>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...]
 ecluse sync [<slug>] [--json]
 ecluse shell <slug>
 ecluse env [<slug>]
@@ -148,6 +148,14 @@ ecluse status [<slug>] [--json] [--quiet]
 ```bash
 ecluse env feat-foo          # full JSON: worktree_path, slot, all ECLUSE_* vars
 ecluse env                   # auto-detects session if run from inside a worktree
+```
+
+**Branch names as argument** — pass your git branch name directly; ecluse sanitizes it to a valid slug and uses the original as the branch:
+
+```bash
+ecluse up feat/add-auth   # slug=feat-add-auth, branch=feat/add-auth
+ecluse up                     # reads current git branch, same result
+ecluse up                     # on main/master → prompts for branch name
 ```
 
 **Idempotent up** — `ecluse up` is safe to run on an existing session. It reuses the worktree and slot, checks which services are running, and starts only the ones that are down. Slug is auto-detected from cwd:

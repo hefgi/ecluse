@@ -9,6 +9,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - `debug_port` field on `[[services]]` blocks: secondary port for debuggers or auxiliary servers. ecluse computes `debug_port + slot` and exposes it as `ECLUSE_<NAME>_DEBUG_PORT`. Use when a service exposes a second listener (Node.js `--inspect`, Delve, debugpy, pprof, etc.) that defaults to a hardcoded port and would collide across parallel sessions.
+- `ecluse up` now accepts branch names with slashes directly: `ecluse up feat/add-auth` → slug `feat-add-auth`, branch `feat/add-auth`. The `--branch` flag is removed — branch comes from the argument itself.
+- `ecluse up` with no argument now reads the current git branch and sanitizes it to a slug. On trunk branches (`main`, `master`, `develop`, `dev`) it prompts for a branch name. On detached HEAD it exits with a clear error.
+- Worktree deletion guard: `ecluse down` and `ecluse shutdown` now always prompt before removing a worktree (stop / keep / delete). A ⚠ warning is shown if the worktree has uncommitted changes. Pass `--delete-worktree` / `--delete-worktrees` to skip the prompt and delete (for CI/agents), or `--keep-worktree` / `--keep-worktrees` to skip and keep.
 
 ### Fixed
 - `docker stop` calls in `--force` now use `DOCKER_HOST` from the active Docker context, so OrbStack containers are correctly targeted.

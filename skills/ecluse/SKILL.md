@@ -70,7 +70,7 @@ Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Us
 
 **New session:**
 1. Allocates a slot (integer 1–N)
-2. Creates a git worktree at `.ecluse/worktrees/<slug>` on branch `ecluse/<slug>`
+2. Creates a git worktree at `.ecluse/worktrees/<slug>` on the given branch (branch name preserved; slug is the sanitized form used for paths and Docker names)
 3. Depending on mode: starts containers, writes `.env.ecluse`, runs `on_up` hook if configured
 4. `on_up` runs in the worktree with all env vars set — use it for migrations, seeding, etc.
 
@@ -80,12 +80,16 @@ Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Us
 - Each service decision is logged: "already running — skipped" / "down — will start"
 - Slug is auto-detected from cwd when inside a worktree
 
+Pass your git branch name directly — slashes are sanitized to hyphens:
+
 ```bash
-ecluse up feat-foo          # new or existing: always does the right thing
-ecluse up                   # slug auto-detected from cwd
-ecluse up --force           # kill all services on allocated ports, restart all
-ecluse up --skip api        # skip the api service; start everything else
-ecluse up --force --skip db # kill + restart all except db
+ecluse up feat/add-auth   # branch=feat/add-auth, slug=feat-add-auth
+ecluse up feat-add-auth   # same result — already a valid slug
+ecluse up feat-foo            # new or existing: always does the right thing
+ecluse up                     # slug auto-detected from cwd (or reads current git branch)
+ecluse up --force             # kill all services on allocated ports, restart all
+ecluse up --skip api          # skip the api service; start everything else
+ecluse up --force --skip db   # kill + restart all except db
 ```
 
 ### Common first-time failures
@@ -103,22 +107,22 @@ You're in a repo with `.ecluse.toml`. Use ecluse. Every task gets its own isolat
 ### The canonical loop
 
 ```bash
-# 1. Create session — get everything you need in one JSON call
-ecluse up <slug> --json
+# 1. Create session — pass your git branch name directly (slashes OK)
+ecluse up feat/add-auth --json
 # Returns:
 # {
-#   "slug": "feat-auth",
+#   "slug": "feat-add-auth",   ← sanitized: / replaced with -, lowercased
 #   "slot": 1,
 #   "mode": "hybrid",
-#   "branch": "ecluse/feat-auth",
-#   "worktree_path": "/path/to/.ecluse/worktrees/feat-auth",
-#   "env_file": "/path/to/.ecluse/worktrees/feat-auth/.env.ecluse",
+#   "branch": "feat/add-auth", ← original branch name preserved
+#   "worktree_path": "/path/to/.ecluse/worktrees/feat-add-auth",
+#   "env_file": "/path/to/.ecluse/worktrees/feat-add-auth/.env.ecluse",
 #   "env": {
 #     "PORT": "3001",                  ← alias for first native [[services]] entry
 #     "ECLUSE_API_PORT": "3001",       ← if [[services]] name="api" base_port=3000
 #     "ECLUSE_POSTGRES_PORT": "5433",  ← if [[services]] name="postgres" base_port=5432 run="docker"
 #     "ECLUSE_SLOT": "1",
-#     "ECLUSE_SLUG": "feat-auth",
+#     "ECLUSE_SLUG": "feat-add-auth",
 #     "ECLUSE_MODE": "hybrid",
 #     ...
 #   }
