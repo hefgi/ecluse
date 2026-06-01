@@ -2,8 +2,8 @@ services:
   postgres:
     image: postgres:16
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     ports:
       - "5432:5432"
     volumes:
@@ -14,7 +14,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      DATABASE_URL: "postgres://postgres:postgres@postgres:5432/app"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/app"
       PORT: "3000"
     depends_on:
       postgres:
