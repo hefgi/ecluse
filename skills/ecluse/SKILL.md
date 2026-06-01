@@ -61,7 +61,7 @@ ecluse init --mode hybrid --yes          # write .ecluse.toml non-interactively
 ecluse up feat-foo --json                # worktree + slot + all env vars in one JSON call
 # → use worktree_path and env from JSON to run commands and edit files
 ecluse ls                                # see active sessions
-ecluse down feat-foo                     # clean teardown
+ecluse down feat-foo --delete-worktree   # clean teardown (--delete-worktree skips the interactive prompt)
 ```
 
 Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Use `ecluse up --json` or `ecluse env <slug>` to get the worktree path and env, then operate directly.
@@ -133,7 +133,7 @@ cd <worktree_path> && PORT=<port> npm test
 cd <worktree_path> && source .env.ecluse && npm test
 
 # 4. Tear down
-ecluse down <slug>
+ecluse down <slug> --delete-worktree
 ```
 
 ### Query an existing session anytime
@@ -225,7 +225,8 @@ Each session is a separate git branch and worktree. They don't interfere.
 
 ### Common failures
 
-- **"all slots in use"** — `ecluse ls` to find stale sessions, `ecluse down` the oldest
+- **"all slots in use"** — `ecluse ls` to find stale sessions, `ecluse down <slug> --delete-worktree` the oldest
+- **`ecluse down` hangs waiting for input** — always pass `--delete-worktree` (or `--keep-worktree`) when running non-interactively; without either flag the command prompts the user before removing the worktree
 - **Port in use** — `lsof -iTCP:<port> -sTCP:LISTEN` to find the blocker; or `ecluse up --force` to let ecluse kill it
 
 ### Port wiring — exhaust .ecluse.toml options before touching app code
@@ -667,7 +668,7 @@ See [examples.md](examples.md) for 5 canonical config templates covering host, c
 ecluse init [--mode container|host|hybrid] [--explain] [--yes]
 ecluse up [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...]
 ecluse env [<slug>]
-ecluse down [<slug>] [--keep-volumes] [--keep-branch] [--keep-worktree]
+ecluse down [<slug>] [--keep-volumes] [--keep-branch] [--keep-worktree] [--delete-worktree]
 ecluse ls [--json]
 ecluse validate [--ports]
 ecluse status [<slug>] [--json] [--quiet]

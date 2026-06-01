@@ -4,8 +4,8 @@
 ecluse init     [--mode container|host|hybrid] [--explain] [--yes] [--quiet]
 ecluse up       [<slug>] [--branch <name>] [--watch] [--json] [--reuse-worktree] [--port <name>=<value>] [--services <name>,...] [--force] [--skip <name>,...] [--quiet]
 ecluse sync     [<slug>] [--json] [--quiet]
-ecluse down     [<slug>] [--keep-volumes] [--keep-branch] [--keep-worktree] [--quiet]
-ecluse shutdown [--keep-volumes] [--keep-worktrees] [--quiet]
+ecluse down     [<slug>] [--keep-volumes] [--keep-branch] [--keep-worktree] [--delete-worktree] [--quiet]
+ecluse shutdown [--keep-volumes] [--keep-worktrees] [--delete-worktrees] [--quiet]
 ecluse flush    [--yes] [--quiet]
 ecluse ls       [--json]
 ecluse shell    [<slug>]
@@ -78,23 +78,27 @@ If a session for the slug already exists in `state.json`, sync refreshes its por
 
 ## ecluse down
 
-Tears down services, frees the slot, and removes the worktree. Slug is auto-detected from cwd when omitted.
+Tears down services, frees the slot, and prompts before removing the worktree. Slug is auto-detected from cwd when omitted.
+
+The worktree prompt always appears; if the worktree has uncommitted changes an extra warning is shown. Pass `--delete-worktree` to skip the prompt and delete, or `--keep-worktree` to skip the prompt and keep.
 
 | Flag | Description |
 |---|---|
 | `--keep-volumes` | Preserve named Docker volumes |
 | `--keep-branch` | Keep the git branch (no-op — branches are never deleted by ecluse) |
-| `--keep-worktree` | Keep the worktree directory on disk |
+| `--keep-worktree` | Skip prompt, keep the worktree on disk |
+| `--delete-worktree` | Skip prompt, delete the worktree (for CI/agents) |
 | `--quiet` | Suppress step output |
 
 ## ecluse shutdown
 
-Tears down all active sessions at once. Equivalent to running `ecluse down` on every session.
+Tears down all active sessions at once. Prompts before removing each worktree (same guard as `ecluse down`).
 
 | Flag | Description |
 |---|---|
 | `--keep-volumes` | Preserve named Docker volumes |
-| `--keep-worktrees` | Keep worktree directories on disk |
+| `--keep-worktrees` | Skip prompt, keep all worktrees on disk |
+| `--delete-worktrees` | Skip prompt, delete all worktrees (for CI/agents) |
 | `--quiet` | Suppress step output |
 
 ## ecluse flush
