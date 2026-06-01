@@ -181,6 +181,14 @@ fn tmux_session_name(slug: &str) -> String {
     format!("ecluse-{}", slug)
 }
 
+fn tmux_session_exists(session: &str) -> bool {
+    Command::new("tmux")
+        .args(["has-session", "-t", session])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
 fn spawn_tmux(
     slug: &str,
     services: &[&&ServiceConfig],
@@ -189,6 +197,14 @@ fn spawn_tmux(
 ) -> Result<SpawnResult> {
     let session = tmux_session_name(slug);
     let env_prefix = build_env_prefix(worktree, env);
+
+    // Kill any stale tmux session with this name (processes exited but shell remains).
+    if tmux_session_exists(&session) {
+        Command::new("tmux")
+            .args(["kill-session", "-t", &session])
+            .output()
+            .ok();
+    }
 
     // Create detached session
     let status = Command::new("tmux")
