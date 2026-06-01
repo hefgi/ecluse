@@ -71,7 +71,7 @@ Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Us
 **New session:**
 1. Allocates a slot (integer 1–N)
 2. Creates a git worktree at `.ecluse/worktrees/<slug>` on the given branch (branch name preserved; slug is the sanitized form used for paths and Docker names)
-3. Symlinks `.env` and `.env.local` from the repo root into the worktree (configurable via `inherit_env` in `.ecluse.toml`; set to `[]` to opt out; pass `--no-inherit-env` to skip for this run)
+3. Symlinks `.env` and `.env.local` from the repo root into the worktree **by default — no config needed**. To opt out entirely set `inherit_env = []` in `.ecluse.toml`, or pass `--no-inherit-env` to skip for a single run. To symlink a different set of files: `inherit_env = [".env", ".env.staging"]`.
 4. Depending on mode: starts containers, writes `.env.ecluse`, runs `pre_up` then `post_up` hooks if configured
 5. `post_up` runs in the worktree with all env vars set — use it for migrations, seeding, etc.
 
