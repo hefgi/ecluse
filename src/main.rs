@@ -374,22 +374,6 @@ mod tests {
         // Single char after sanitization → invalid slug
         assert!(sanitize_to_slug("a").is_err());
     }
-
-    // ── is_trunk_branch ───────────────────────────────────────────────────────
-
-    #[test]
-    fn is_trunk_branch_detects_trunk() {
-        assert!(is_trunk_branch("main"));
-        assert!(is_trunk_branch("master"));
-        assert!(is_trunk_branch("develop"));
-        assert!(is_trunk_branch("dev"));
-    }
-
-    #[test]
-    fn is_trunk_branch_feature_is_not_trunk() {
-        assert!(!is_trunk_branch("feat/sc-123-foo"));
-        assert!(!is_trunk_branch("fix/bug-42"));
-    }
 }
 
 /// Sanitize a branch name or slug into a valid ecluse slug + original branch pair.
@@ -404,10 +388,10 @@ fn sanitize_to_slug(input: &str) -> Result<(String, String)> {
     Ok((slug, branch))
 }
 
-fn current_git_branch(root: &std::path::Path) -> Result<String> {
+fn current_git_branch(cwd: &std::path::Path) -> Result<String> {
     let output = std::process::Command::new("git")
         .args(["branch", "--show-current"])
-        .current_dir(root)
+        .current_dir(cwd)
         .output()
         .context("failed to run git branch --show-current")?;
     let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -419,12 +403,8 @@ fn current_git_branch(root: &std::path::Path) -> Result<String> {
     Ok(branch)
 }
 
-fn is_trunk_branch(branch: &str) -> bool {
-    matches!(branch, "main" | "master" | "develop" | "dev")
-}
-
 fn prompt_branch_name() -> Result<String> {
-    print!("You are on a trunk branch. Enter a branch name to create a worktree for: ");
+    print!("You are in the main worktree. Enter a branch name to create a worktree for: ");
     io::stdout().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
@@ -435,40 +415,46 @@ fn prompt_branch_name() -> Result<String> {
     Ok(branch)
 }
 
-/// Resolve (slug, branch) for `ecluse up`.
+/// Resolve (slug, branch, reuse_worktree) for `ecluse up`.
 ///
 /// 1. Explicit arg → sanitize to slug, use original as branch.
-/// 2. Inside an ecluse worktree → return stored slug + branch from state.
-/// 3. Otherwise → read current git branch, prompt if on trunk.
+/// 2. cwd inside an ecluse-registered worktree → return stored slug + branch.
+/// 3. cwd inside a non-ecluse git worktree (git rev-parse --git-dir contains
+///    /.git/worktrees/) → read branch from cwd, auto-register (reuse_worktree=true).
+/// 4. cwd in main worktree / repo root → prompt for branch name.
 fn resolve_slug_and_branch(
     arg: &Option<String>,
     guard: &state::StateGuard,
-    root: &std::path::Path,
-) -> Result<(String, String)> {
+    _root: &std::path::Path,
+) -> Result<(String, String, bool)> {
     if let Some(input) = arg {
-        return sanitize_to_slug(input);
+        let (slug, branch) = sanitize_to_slug(input)?;
+        return Ok((slug, branch, false));
     }
 
-    // Check if cwd is inside an existing ecluse worktree.
     let cwd = std::env::current_dir().context("could not determine current directory")?;
+
+    // 1. Inside an ecluse-registered worktree → reuse stored slug/branch.
     if let Some(session) = guard
         .state
         .sessions
         .iter()
         .find(|s| cwd.starts_with(std::path::Path::new(&s.worktree_path)))
     {
-        return Ok((session.slug.clone(), session.branch.clone()));
+        return Ok((session.slug.clone(), session.branch.clone(), true));
     }
 
-    // Read current git branch, prompt if on trunk.
-    let branch = current_git_branch(root)?;
-    let branch = if is_trunk_branch(&branch) {
-        prompt_branch_name()?
-    } else {
-        branch
-    };
+    // 2. Inside a non-ecluse git worktree → auto-register it.
+    if worktree::is_inside_git_worktree(&cwd) {
+        let branch = current_git_branch(&cwd)?;
+        let (slug, branch) = sanitize_to_slug(&branch)?;
+        return Ok((slug, branch, true));
+    }
 
-    sanitize_to_slug(&branch)
+    // 3. In main worktree / repo root → prompt for branch name.
+    let branch = prompt_branch_name()?;
+    let (slug, branch) = sanitize_to_slug(&branch)?;
+    Ok((slug, branch, false))
 }
 
 fn resolve_slug_from_args(
@@ -575,8 +561,8 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
 
     let mut guard = state::StateGuard::acquire(&root)?;
 
-    // Resolve slug + branch: from arg (branch name or slug), cwd detection, or current git branch.
-    let (slug, branch) = resolve_slug_and_branch(&args.slug, &guard, &root)?;
+    // Resolve slug + branch: from arg, ecluse worktree state, non-ecluse worktree, or prompt.
+    let (slug, branch, implicit_reuse) = resolve_slug_and_branch(&args.slug, &guard, &root)?;
     validate_branch(&branch)?;
 
     // Resume path: session already exists — restart/skip services idempotently.
@@ -610,7 +596,7 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         &config,
         &root,
         args.watch,
-        args.reuse_worktree,
+        args.reuse_worktree || implicit_reuse,
         &port_overrides,
         service_filter.as_ref(),
         &std::collections::HashSet::new(),

@@ -127,6 +127,21 @@ impl WorktreeManager {
     }
 }
 
+/// Returns true if `cwd` is inside a linked git worktree (not the main worktree).
+/// Detects this by checking whether `git rev-parse --git-dir` output contains
+/// `/.git/worktrees/`, which git writes only for linked worktrees.
+pub fn is_inside_git_worktree(cwd: &Path) -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--git-dir"])
+        .current_dir(cwd)
+        .output()
+        .map(|o| {
+            let out = String::from_utf8_lossy(&o.stdout);
+            out.contains("/.git/worktrees/")
+        })
+        .unwrap_or(false)
+}
+
 /// Returns true if the worktree at `path` has any uncommitted changes
 /// (staged, unstaged, or untracked files).
 pub fn has_uncommitted_changes(path: &Path) -> bool {
@@ -292,6 +307,28 @@ mod tests {
 
         wt.create(&path, "my-existing-branch").unwrap();
         assert!(path.exists());
+        wt.remove(&path).unwrap();
+    }
+
+    // ── is_inside_git_worktree ────────────────────────────────────────────────
+
+    #[test]
+    fn is_inside_git_worktree_returns_false_in_main_repo() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+        assert!(!is_inside_git_worktree(dir.path()));
+    }
+
+    #[test]
+    fn is_inside_git_worktree_returns_true_in_linked_worktree() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+        let wt = WorktreeManager::new(dir.path().to_owned());
+        let config = make_config_for_worktree();
+        let path = wt.worktree_path(&config, "feat");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        wt.create(&path, "ecluse/feat").unwrap();
+        assert!(is_inside_git_worktree(&path));
         wt.remove(&path).unwrap();
     }
 
