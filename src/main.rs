@@ -692,10 +692,22 @@ fn force_kill_session_services(
         process::kill_services(pm, &filtered_result);
     }
 
-    // Kill by port for any residual processes.
+    // Kill by port for residual native processes only.
+    // Docker services are stopped via docker stop — never kill their host port
+    // by PID, as the listening process may be the container runtime itself
+    // (e.g. OrbStack) rather than the container.
+    let docker_svc_names: std::collections::HashSet<&str> = config
+        .services
+        .iter()
+        .filter(|s| s.run == config::ServiceRun::Docker)
+        .map(|s| s.name.as_str())
+        .collect();
     for (svc_name, port) in &session.port_overrides {
         if skip.contains(svc_name) {
             log.detail(&format!("{}: skipped (--skip)", svc_name));
+            continue;
+        }
+        if docker_svc_names.contains(svc_name.as_str()) {
             continue;
         }
         // lsof -ti TCP:<port> returns PIDs; kill -9 each
