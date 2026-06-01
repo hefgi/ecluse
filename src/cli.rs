@@ -102,6 +102,10 @@ pub struct UpArgs {
     #[arg(long)]
     pub force: bool,
 
+    /// Skip symlinking inherited env files (inherit_env in .ecluse.toml) — for CI/agents
+    #[arg(long)]
+    pub no_inherit_env: bool,
+
     /// Suppress step output (implied by --json)
     #[arg(long)]
     pub quiet: bool,

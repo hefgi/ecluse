@@ -142,6 +142,61 @@ pub fn is_inside_git_worktree(cwd: &Path) -> bool {
         .unwrap_or(false)
 }
 
+#[derive(Debug, PartialEq)]
+pub enum EnvConflictChoice {
+    Skip,
+    Overwrite,
+}
+
+/// Symlink each file in `files` from `root` into `worktree_path`.
+/// Files absent in root are silently skipped. If the destination already exists
+/// (file or broken symlink), the user is prompted to skip or overwrite.
+pub fn symlink_env_files(
+    root: &Path,
+    worktree_path: &Path,
+    files: &[String],
+    log: &crate::log::StepLogger,
+) -> anyhow::Result<()> {
+    for name in files {
+        let src = root.join(name);
+        if !src.exists() {
+            continue;
+        }
+        let dst = worktree_path.join(name);
+        if dst.exists() || dst.symlink_metadata().is_ok() {
+            match prompt_env_file_conflict(&dst, name) {
+                EnvConflictChoice::Skip => {
+                    log.detail(&format!("skipped {} (file already exists)", name));
+                    continue;
+                }
+                EnvConflictChoice::Overwrite => {
+                    std::fs::remove_file(&dst)
+                        .with_context(|| format!("failed to remove existing {}", dst.display()))?;
+                }
+            }
+        }
+        std::os::unix::fs::symlink(&src, &dst)
+            .with_context(|| format!("failed to symlink {} into worktree", name))?;
+        log.detail(&format!("symlinked {}", name));
+    }
+    Ok(())
+}
+
+/// Prompt the user when an env file already exists in the worktree.
+/// Reads from /dev/tty so the prompt works even when stdin is piped.
+pub fn prompt_env_file_conflict(dst: &Path, name: &str) -> EnvConflictChoice {
+    eprintln!("\n  {} already exists in worktree: {}", name, dst.display());
+    eprintln!("    [1] skip      (keep existing file)");
+    eprintln!("    [2] overwrite (replace with symlink to repo root)");
+    eprint!("  Choice [1/2]: ");
+    let _ = std::io::stderr().flush();
+    let input = read_tty_line().unwrap_or_default();
+    match input.trim() {
+        "2" => EnvConflictChoice::Overwrite,
+        _ => EnvConflictChoice::Skip,
+    }
+}
+
 /// Returns true if the worktree at `path` has any uncommitted changes
 /// (staged, unstaged, or untracked files).
 pub fn has_uncommitted_changes(path: &Path) -> bool {
@@ -226,6 +281,7 @@ mod tests {
             port_search_range: 10,
             services: vec![],
             hooks: crate::config::HookConfig::default(),
+            inherit_env: vec![],
         }
     }
 
@@ -330,6 +386,49 @@ mod tests {
         wt.create(&path, "ecluse/feat").unwrap();
         assert!(is_inside_git_worktree(&path));
         wt.remove(&path).unwrap();
+    }
+
+    // ── symlink_env_files ─────────────────────────────────────────────────────
+
+    #[test]
+    fn symlink_env_files_creates_symlink() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+        let wt = WorktreeManager::new(dir.path().to_owned());
+        let config = make_config_for_worktree();
+        let wt_path = wt.worktree_path(&config, "feat");
+        std::fs::create_dir_all(&wt_path).unwrap();
+
+        // Create .env in root
+        let src = dir.path().join(".env");
+        std::fs::write(&src, "SECRET=abc\n").unwrap();
+
+        let log = crate::log::StepLogger::new(true);
+        symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
+
+        let dst = wt_path.join(".env");
+        assert!(dst.symlink_metadata().is_ok(), "symlink should exist");
+        assert!(std::fs::read_link(&dst).is_ok(), "dst should be a symlink");
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "SECRET=abc\n");
+    }
+
+    #[test]
+    fn symlink_env_files_skips_missing_src() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+        let wt = WorktreeManager::new(dir.path().to_owned());
+        let config = make_config_for_worktree();
+        let wt_path = wt.worktree_path(&config, "feat");
+        std::fs::create_dir_all(&wt_path).unwrap();
+
+        // .env does NOT exist in root
+        let log = crate::log::StepLogger::new(true);
+        symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
+
+        assert!(
+            !wt_path.join(".env").exists(),
+            "no symlink should be created"
+        );
     }
 
     // ── main_worktree_root ────────────────────────────────────────────────────

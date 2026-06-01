@@ -144,6 +144,7 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         port_search_range: 10,
         services: vec![],
         hooks: config::HookConfig::default(),
+        inherit_env: vec![".env".into(), ".env.local".into()],
     };
     cfg.save(&root)?;
     log.detail(&format!("mode: {mode}, max_slots: {}", args.max_slots));
@@ -613,6 +614,7 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         &root,
         args.watch,
         args.reuse_worktree || implicit_reuse,
+        args.no_inherit_env,
         &port_overrides,
         service_filter.as_ref(),
         &std::collections::HashSet::new(),
@@ -792,6 +794,7 @@ fn cmd_up_resume(
         &root,
         args.watch,
         true, // always reuse-worktree on resume
+        args.no_inherit_env,
         &port_overrides,
         service_filter.as_ref(),
         &skip_services,

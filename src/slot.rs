@@ -21,6 +21,7 @@ mod tests {
             port_search_range: 10,
             services: vec![],
             hooks: HookConfig::default(),
+            inherit_env: vec![],
         }
     }
 

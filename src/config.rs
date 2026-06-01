@@ -151,6 +151,10 @@ pub struct Config {
     pub services: Vec<ServiceConfig>,
     #[serde(default, skip_serializing_if = "HookConfig::is_empty")]
     pub hooks: HookConfig,
+    /// Files to symlink from the main worktree root into each new worktree at `ecluse up` time.
+    /// Defaults to [".env", ".env.local"]. Set to [] to opt out entirely.
+    #[serde(default = "default_inherit_env", skip_serializing_if = "Vec::is_empty")]
+    pub inherit_env: Vec<String>,
 }
 
 impl Config {
@@ -239,6 +243,9 @@ fn default_app_label_value() -> String {
 }
 fn default_port_search_range() -> u8 {
     10
+}
+fn default_inherit_env() -> Vec<String> {
+    vec![".env".into(), ".env.local".into()]
 }
 fn is_false(v: &bool) -> bool {
     !v
@@ -430,6 +437,7 @@ on_down = "echo bye"
             port_search_range: 10,
             services: vec![],
             hooks: HookConfig::default(),
+            inherit_env: vec![],
         };
         original.save(dir.path()).unwrap();
         let loaded = Config::load(dir.path()).unwrap();
@@ -613,6 +621,7 @@ base_port = 5432
                 },
             ],
             hooks: HookConfig::default(),
+            inherit_env: vec![],
         };
         let native = config.native_services();
         assert_eq!(native.len(), 1);

@@ -24,6 +24,7 @@ impl super::ModeHandler for HostMode {
         root: &Path,
         _watch: bool,
         reuse_worktree: bool,
+        no_inherit_env: bool,
         port_overrides: &std::collections::HashMap<String, u16>,
         service_filter: Option<&std::collections::HashSet<String>>,
         skip_services: &std::collections::HashSet<String>,
@@ -70,6 +71,11 @@ impl super::ModeHandler for HostMode {
             log.step(&format!("Creating worktree (branch: {branch})..."));
             log.detail(&worktree_path.display().to_string());
             wt.create(&worktree_path, branch)?;
+        }
+
+        if !no_inherit_env && !config.inherit_env.is_empty() {
+            log.step("Symlinking inherited env files...");
+            crate::worktree::symlink_env_files(root, &worktree_path, &config.inherit_env, log)?;
         }
 
         log.step("Writing .env.ecluse...");
