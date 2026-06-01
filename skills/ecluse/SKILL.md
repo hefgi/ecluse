@@ -71,8 +71,8 @@ Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Us
 **New session:**
 1. Allocates a slot (integer 1–N)
 2. Creates a git worktree at `.ecluse/worktrees/<slug>` on the given branch (branch name preserved; slug is the sanitized form used for paths and Docker names)
-3. Depending on mode: starts containers, writes `.env.ecluse`, runs `on_up` hook if configured
-4. `on_up` runs in the worktree with all env vars set — use it for migrations, seeding, etc.
+3. Depending on mode: starts containers, writes `.env.ecluse`, runs `pre_up` then `post_up` hooks if configured
+4. `post_up` runs in the worktree with all env vars set — use it for migrations, seeding, etc.
 
 **Existing session (idempotent):**
 - Reuses the existing worktree and slot — no worktree creation, no slot allocation
@@ -222,7 +222,7 @@ All vars are in the JSON from `ecluse up --json` or `ecluse env <slug>`.
 | `ECLUSE_SLUG` | `feat-auth` | Session slug |
 | `ECLUSE_MODE` | `hybrid` | `container`, `host`, or `hybrid` |
 
-**No `DATABASE_URL` or `REDIS_URL` are set automatically.** Data service ports are exposed as `ECLUSE_<SERVICE>_PORT` (e.g. `ECLUSE_POSTGRES_PORT=5433`). Construct connection strings in your `on_up` hook or app config using that port. This keeps ecluse engine-agnostic.
+**No `DATABASE_URL` or `REDIS_URL` are set automatically.** Data service ports are exposed as `ECLUSE_<SERVICE>_PORT` (e.g. `ECLUSE_POSTGRES_PORT=5433`). Construct connection strings in your `post_up` hook or app config using that port. This keeps ecluse engine-agnostic.
 
 ### Parallel sessions
 
@@ -310,7 +310,7 @@ ecluse init --explain   # show full signal score breakdown
 ecluse init --mode hybrid   # skip detection, force mode
 ```
 
-Detection runs 20 signals. Key ones:
+Detection runs 20+ signals. Key ones (run `ecluse init --explain` for the full breakdown):
 
 | Signal | container | host | hybrid |
 |---|---|---|---|
@@ -333,7 +333,7 @@ Confidence: gap ≥ 4 = High (auto-accept), 2–3 = Medium, 0–1 = Low (full br
 - **Nix flake** — use `nix develop`; ecluse doesn't understand `flake.nix`
 - **Bazel** — use Bazel's native sandbox
 - **Monorepo, single compose at root** — the common case; use `[[services]]` to allocate one port per native service (see `t3-monorepo` example)
-- **Monorepo, each service has its own compose file** — ecluse only reads one compose file per repo root; run `ecluse init` inside each service subdirectory, giving each its own `.ecluse.toml`, slot pool, and state; the agent must `cd` into the right subdirectory before running ecluse commands
+- **Monorepo, each service has its own compose file** — point each `[[services]]` block at its own file with `compose = "services/foo/docker-compose.yml"`; only use separate subdirectory `.ecluse.toml` files when you need fully independent slot pools and state
 
 ---
 
@@ -385,7 +385,7 @@ ecluse down feat-foo --keep-volumes   # keeps volumes
 
 ## Host Mode
 
-No containers. ecluse reserves a port range, writes `.env.ecluse`, creates the worktree, runs `on_up`. If `command` is set on a `[[services]]` entry, ecluse spawns it automatically via your global `process_manager` (tmux or nohup). Otherwise you start your own dev server.
+No containers. ecluse reserves a port range, writes `.env.ecluse`, creates the worktree, runs `pre_up` then `post_up` hooks. If `command` is set on a `[[services]]` entry, ecluse spawns it automatically via your global `process_manager` (tmux or nohup). Otherwise you start your own dev server.
 
 ### Prerequisites
 
@@ -403,12 +403,12 @@ ecluse up feat-foo
 
 cd .ecluse/worktrees/feat-foo
 source .env.ecluse
-npm run dev    # reads $PORT; run migrations via [hooks] on_up
+npm run dev    # reads $PORT; run migrations via [hooks] post_up
 ```
 
 ### Database in host mode
 
-ecluse does not provision databases. Use `[hooks] on_up` with your app's own tooling:
+ecluse does not provision databases. Use `[hooks] post_up` with your app's own tooling:
 
 ```toml
 [[services]]
@@ -416,8 +416,8 @@ name = "app"
 base_port = 3000
 
 [hooks]
-on_up = "npx prisma migrate deploy"
-on_down = "npx prisma migrate reset --force"
+post_up = "npx prisma migrate deploy"
+pre_down = "npx prisma migrate reset --force"
 ```
 
 Your app's connection string is defined in your `.env` (not managed by ecluse). The hook runs inside the worktree with all ecluse env vars set.
@@ -425,7 +425,7 @@ Your app's connection string is defined in your `.env` (not managed by ecluse). 
 ### Teardown
 
 ```bash
-ecluse down feat-foo   # runs on_down hook, removes worktree
+ecluse down feat-foo   # runs pre_down hook, removes worktree, then runs post_down
 ```
 
 ### Common failures
@@ -571,7 +571,7 @@ RUST_LOG=debug ecluse up feat-foo
 
 | Error | Cause | Fix |
 |---|---|---|
-| `SlugInvalid` | Slug doesn't match `^[a-z0-9][a-z0-9-]{0,30}[a-z0-9]$` | Lowercase letters, numbers, hyphens; 2–32 chars |
+| `SlugInvalid` | Slug doesn't match `^[a-z0-9][a-z0-9-]{0,60}[a-z0-9]$` | Lowercase letters, numbers, hyphens; 2–62 chars |
 | `SlotsExhausted` | All slots in use | `ecluse ls` then `ecluse down <slug>` |
 | `SessionNotFound` | Slug not in state | Check `ecluse ls` |
 | `LockTimeout` | Another process holds lock | Check processes; remove stale lock |
@@ -579,7 +579,7 @@ RUST_LOG=debug ecluse up feat-foo
 | `NotAGitRepo` | Not in a git repo | `git init` first |
 | `ComposeFileNotFound` | No compose file at repo root | Add compose file or switch mode |
 | `PortInUse` | Port bound by another process | `kill <pid>` then retry |
-| `HookFailed` | `on_up` or `on_down` exited non-zero | Check the hook command and its output |
+| `HookFailed` | A hook (`pre_up`, `post_up`, `pre_down`, `post_down`) exited non-zero | Check the hook command and its output |
 | `ProcessManagerUnavailable` | Configured `process_manager` binary not installed | Install it or set `process_manager = "none"` in `~/.config/ecluse/config.toml` |
 | `SpawnFailed` | Failed to spawn a native service process | Check the `command` field in `.ecluse.toml` and the binary's availability |
 
@@ -597,11 +597,11 @@ What ecluse intentionally does not do in v0. These are design decisions, not bug
 - **`localhost:<port>` only** — no public URLs; use cloudflared or ngrok alongside ecluse
 - **No agent process sandboxing** — container mode isolates services, not the agent's filesystem
 - **`ecluse shell` is for humans, not agents** — agents use `ecluse up --json` or `ecluse env` to get the worktree path and env vars, then operate directly; `ecluse shell` spawns an interactive subshell which blocks non-interactive execution
-- **No built-in database management** — ecluse allocates ports and writes env vars; use `[hooks] on_up`/`on_down` with your app's own tooling (prisma, rails db:create, psql, etc.)
+- **No built-in database management** — ecluse allocates ports and writes env vars; use `[hooks] post_up`/`pre_down` with your app's own tooling (prisma, rails db:create, psql, etc.)
 - **macOS and Linux only** — WSL2 acceptable but untested; native Windows not supported
 - **No background daemon** — every ecluse command is a short-lived process
 - **No Ctrl+C rollback guarantee** — if killed mid-`up`, run `ecluse down <slug>` to clean partial state
-- **No plugin/hook system** — wrap ecluse in a shell script for custom lifecycle behaviour
+- **Hooks run shell commands, not arbitrary plugins** — `[hooks]` in `.ecluse.toml` supports four lifecycle points (`pre_up`, `post_up`, `pre_down`, `post_down`); each runs a shell command in the worktree with all env vars set; there is no plugin API or event bus beyond these
 - **No telemetry** — no network calls except the optional Postgres TCP probe during `init`
 
 ---
@@ -615,6 +615,8 @@ mode = "hybrid"         # container | host | hybrid
 max_slots = 8           # max parallel sessions
 prefix = "ecluse"       # prefix for compose project names and volume names
 worktree_dir = ".ecluse/worktrees"
+# app_label = "ecluse.role"  # compose label key that marks the app service in hybrid mode
+# app_label_value = "app"    # value to match on that label
 
 # Port collision handling (both optional)
 # strict_port = false        # default: search for a free port on collision
@@ -649,8 +651,10 @@ base_port = 5432        # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
 
 # Optional: lifecycle hooks — run in the worktree with all env vars set
 [hooks]
-on_up = "npx prisma migrate deploy"
-on_down = "npx prisma migrate reset --force"
+pre_up = "..."           # before any infrastructure is created (no env vars yet)
+post_up = "npx prisma migrate deploy"   # after all services are up
+pre_down = "npx prisma migrate reset --force"  # before services are killed (all env vars set)
+post_down = "..."        # after worktree is removed
 ```
 
 ### Global config (`~/.config/ecluse/config.toml`)
@@ -667,7 +671,7 @@ process_manager = "tmux"   # "tmux" | "nohup" | "none"
 
 `ecluse init` auto-detects: tmux if present, otherwise nohup. `ecluse validate` checks the binary is installed. This is per-machine, not per-repo.
 
-Hooks run as shell commands inside the worktree directory. All `.env.ecluse` variables (`PORT`, `ECLUSE_SLUG`, `ECLUSE_<NAME>_PORT`, etc.) are available. ecluse does not manage databases directly — use `on_up` for migrations, `on_down` for teardown.
+Hooks run as shell commands inside the worktree directory. `pre_up` runs before any infrastructure exists (env vars not yet available). `post_up`, `pre_down`, and `post_down` all have the full `.env.ecluse` set (`PORT`, `ECLUSE_SLUG`, `ECLUSE_<NAME>_PORT`, etc.). ecluse does not manage databases directly — use `post_up` for migrations and `pre_down` for teardown.
 
 ## Examples
 
