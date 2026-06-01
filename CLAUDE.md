@@ -103,7 +103,7 @@ All tests are inline in source modules using `tempfile::TempDir` for isolation.
 
 1. Bump `version` in `Cargo.toml`.
 2. Add a `## [x.y.z] — YYYY-MM-DD` section to `CHANGELOG.md` with `Added`, `Changed`, and `Fixed` entries covering everything since the last release.
-3. Commit, tag (`git tag vx.y.z`), and push.
+3. Commit, tag (`git tag vx.y.z`), and push — **including tags**: `git push && git push --tags`. Pushing the tag triggers CI to build cross-platform binaries and update the Homebrew tap formula automatically.
 
 The changelog entry is required — do not skip it when publishing a new version.
 
