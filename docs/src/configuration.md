@@ -30,6 +30,10 @@ name = "postgres"
 run = "docker"
 base_port = 5432             # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
 
+# Env file inheritance — files symlinked from repo root into each worktree
+# Default: [".env", ".env.local"]. Set to [] to opt out.
+# inherit_env = [".env", ".env.local"]
+
 # Optional: lifecycle hooks (see Hooks page for full details)
 [hooks]
 post_up  = "npx prisma migrate deploy"
@@ -48,6 +52,7 @@ pre_down = "npx prisma migrate reset --force"
 | `port_search_range` | integer | `10` | How many alternatives to try on collision |
 | `app_label` | string | `"ecluse.role"` | Docker Compose label key used to identify app vs data services in hybrid mode |
 | `app_label_value` | string | `"app"` | Value of `app_label` that marks a service as the app (not a data service) |
+| `inherit_env` | array | `[".env", ".env.local"]` | Files to symlink from the repo root into each new worktree at `ecluse up` time. Symlinks keep worktrees in sync with root changes automatically. Set to `[]` to opt out. |
 
 ## `[[services]]`
 

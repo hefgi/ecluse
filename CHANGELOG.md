@@ -8,6 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.2.10] — 2026-06-01
 
 ### Added
+- `inherit_env` config field (default: `[".env", ".env.local"]`): files listed here are symlinked from the main worktree root into each new worktree at `ecluse up` time. Symlinks keep worktrees in sync with root changes automatically — no stale copies. Set to `[]` to opt out. If a listed file already exists in the worktree, ecluse prompts to skip or overwrite. Add `--no-inherit-env` to `ecluse up` to skip entirely (for CI/agents).
 - `debug_port` field on `[[services]]` blocks: secondary port for debuggers or auxiliary servers. ecluse computes `debug_port + slot` and exposes it as `ECLUSE_<NAME>_DEBUG_PORT`. Use when a service exposes a second listener (Node.js `--inspect`, Delve, debugpy, pprof, etc.) that defaults to a hardcoded port and would collide across parallel sessions.
 - `ecluse up` now accepts branch names with slashes directly: `ecluse up feat/add-auth` → slug `feat-add-auth`, branch `feat/add-auth`. The `--branch` flag is removed — branch comes from the argument itself.
 - `ecluse up` with no argument uses the git worktree location to determine intent: inside an ecluse-registered worktree → reuse stored slug; inside any other git worktree → auto-detect branch from cwd and register the worktree (no `--reuse-worktree` flag needed); in the main worktree / repo root → prompt for a branch name. Detached HEAD exits with a clear error.
