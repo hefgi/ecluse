@@ -633,6 +633,12 @@ worktree_dir = ".ecluse/worktrees"
 # app_label = "ecluse.role"  # compose label key that marks the app service in hybrid mode
 # app_label_value = "app"    # value to match on that label
 
+# Env file inheritance — symlinked from repo root into each new worktree at ecluse up time.
+# Default: [".env", ".env.local"] — active with no config needed, opt out with [].
+# inherit_env = [".env", ".env.local"]   # default — no need to set this explicitly
+# inherit_env = []                       # opt out entirely
+# inherit_env = [".env", ".env.staging"] # custom list for other env files
+
 # Port collision handling (both optional)
 # strict_port = false        # default: search for a free port on collision
 # port_search_range = 10     # how many alternatives to try (bump by max_slots each time)
