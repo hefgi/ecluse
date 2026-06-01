@@ -1088,6 +1088,9 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
     println!();
 
     if !failed.is_empty() {
+        eprintln!(
+            "hint: if services or containers are still running, try `ecluse flush` to hard-reset all ecluse state"
+        );
         return Err(anyhow::anyhow!(
             "shutdown completed with errors; {} session(s) could not be torn down: {}",
             failed.len(),
