@@ -4,9 +4,9 @@ description: >
   Complete reference for ecluse — ephemeral local environments for coding agents,
   any stack. Use this skill whenever ecluse is mentioned, a .ecluse.toml file is
   present in the repo, the user asks about worktree isolation, parallel dev
-  environments, or port/database conflicts between branches. If you are a coding
-  agent about to do substantive work in a repo that has .ecluse.toml, use this
-  skill automatically before starting — do not wait to be asked.
+  environments, or port/database conflicts between branches. When a .ecluse.toml
+  file is present in the repo, loading this skill before starting work is strongly
+  recommended so you understand the isolation model and avoid port conflicts.
 tags:
   - ecluse
   - worktree
@@ -601,7 +601,7 @@ What ecluse intentionally does not do in v0. These are design decisions, not bug
 - **macOS and Linux only** — WSL2 acceptable but untested; native Windows not supported
 - **No background daemon** — every ecluse command is a short-lived process
 - **No Ctrl+C rollback guarantee** — if killed mid-`up`, run `ecluse down <slug>` to clean partial state
-- **Hooks run shell commands, not arbitrary plugins** — `[hooks]` in `.ecluse.toml` supports four lifecycle points (`pre_up`, `post_up`, `pre_down`, `post_down`); each runs a shell command in the worktree with all env vars set; there is no plugin API or event bus beyond these
+- **Hooks run shell commands, not arbitrary plugins** — `[hooks]` in `.ecluse.toml` supports four lifecycle points (`pre_up`, `post_up`, `pre_down`, `post_down`); each runs a shell command in the worktree with all env vars set; there is no plugin API or event bus beyond these. Hooks execute with the same privileges as the agent — only run `ecluse up`/`ecluse down` in repositories whose `.ecluse.toml` you trust
 - **No telemetry** — no network calls except the optional Postgres TCP probe during `init`
 
 ---
