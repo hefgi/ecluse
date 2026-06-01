@@ -233,18 +233,15 @@ pub fn validate_config(config: &Config) -> Result<Vec<String>> {
         }
     }
 
-    // duplicate inspect_ports
-    let mut seen_inspect_ports: HashSet<u16> = HashSet::new();
+    // duplicate debug_ports
+    let mut seen_debug_ports: HashSet<u16> = HashSet::new();
     for svc in &config.services {
-        if let Some(ip) = svc.inspect_port {
+        if let Some(ip) = svc.debug_port {
             if ip == 0 {
+                errors.push(format!("service '{}': debug_port must not be 0", svc.name));
+            } else if !seen_debug_ports.insert(ip) {
                 errors.push(format!(
-                    "service '{}': inspect_port must not be 0",
-                    svc.name
-                ));
-            } else if !seen_inspect_ports.insert(ip) {
-                errors.push(format!(
-                    "duplicate inspect_port {}: multiple services share the same inspector base port",
+                    "duplicate debug_port {}: multiple services share the same debug base port",
                     ip
                 ));
             }
@@ -323,7 +320,7 @@ mod tests {
             compose: None,
             command: Some("echo hello".into()),
             port_env: vec![],
-            inspect_port: None,
+            debug_port: None,
         }
     }
 
@@ -335,7 +332,7 @@ mod tests {
             compose: compose.map(|s| s.into()),
             command: None,
             port_env: vec![],
-            inspect_port: None,
+            debug_port: None,
         }
     }
 
@@ -554,7 +551,7 @@ mod tests {
                 compose: Some("docker-compose.yml".into()),
                 command: Some("npm run dev".into()),
                 port_env: vec![],
-                inspect_port: None,
+                debug_port: None,
             }],
         );
         let warnings = validate_config(&config).unwrap();
@@ -575,7 +572,7 @@ mod tests {
                 compose: None,
                 command: None,
                 port_env: vec![],
-                inspect_port: None,
+                debug_port: None,
             }],
         );
         let err = validate_config(&config).unwrap_err();
@@ -595,7 +592,7 @@ mod tests {
                 compose: None,
                 command: Some("npm run dev".into()),
                 port_env: vec![],
-                inspect_port: None,
+                debug_port: None,
             }],
         );
         assert!(validate_config(&config).is_ok());
@@ -661,43 +658,43 @@ mod tests {
         assert!(err.to_string().contains("3000"));
     }
 
-    // --- inspect_port ---
+    // --- debug_port ---
 
     #[test]
-    fn inspect_port_unique_is_valid() {
+    fn debug_port_unique_is_valid() {
         let mut s1 = svc("app", 7100);
-        s1.inspect_port = Some(9229);
+        s1.debug_port = Some(9229);
         let mut s2 = svc("admin-app", 7200);
-        s2.inspect_port = Some(9239);
+        s2.debug_port = Some(9239);
         let config = make_config(8, 10, vec![s1, s2]);
         assert!(validate_config(&config).is_ok());
     }
 
     #[test]
-    fn inspect_port_none_is_valid() {
+    fn debug_port_none_is_valid() {
         let config = make_config(8, 10, vec![svc("api", 3000)]);
         assert!(validate_config(&config).is_ok());
     }
 
     #[test]
-    fn duplicate_inspect_ports_is_error() {
+    fn duplicate_debug_ports_is_error() {
         let mut s1 = svc("app", 7100);
-        s1.inspect_port = Some(9229);
+        s1.debug_port = Some(9229);
         let mut s2 = svc("admin-app", 7200);
-        s2.inspect_port = Some(9229);
+        s2.debug_port = Some(9229);
         let config = make_config(8, 10, vec![s1, s2]);
         let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("duplicate inspect_port"));
+        assert!(err.to_string().contains("duplicate debug_port"));
         assert!(err.to_string().contains("9229"));
     }
 
     #[test]
-    fn inspect_port_zero_is_error() {
+    fn debug_port_zero_is_error() {
         let mut s = svc("app", 7100);
-        s.inspect_port = Some(0);
+        s.debug_port = Some(0);
         let config = make_config(8, 10, vec![s]);
         let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("inspect_port must not be 0"));
+        assert!(err.to_string().contains("debug_port must not be 0"));
     }
 
     // --- process manager ---

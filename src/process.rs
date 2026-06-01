@@ -427,7 +427,7 @@ mod tests {
             compose: None,
             command: Some("echo hello".into()),
             port_env: vec![],
-            inspect_port: None,
+            debug_port: None,
         };
         let result = spawn_services(
             &ProcessManager::None,
@@ -496,7 +496,7 @@ mod tests {
             compose: None,
             command: Some("sleep 60".into()),
             port_env: vec![],
-            inspect_port: None,
+            debug_port: None,
         };
         let result = spawn_services(
             &ProcessManager::Nohup,

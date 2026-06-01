@@ -43,12 +43,9 @@ pub fn build_env(
                 env.insert(alias.clone(), port.to_string());
             }
 
-            // inspect_port: emit ECLUSE_<NAME>_INSPECT_PORT = inspect_port + slot
-            if let Some(inspect_port) = svc.inspect_port_for_slot(slot) {
-                env.insert(
-                    format!("ECLUSE_{}_INSPECT_PORT", key),
-                    inspect_port.to_string(),
-                );
+            // debug_port: emit ECLUSE_<NAME>_DEBUG_PORT = debug_port + slot
+            if let Some(debug_port) = svc.debug_port_for_slot(slot) {
+                env.insert(format!("ECLUSE_{}_DEBUG_PORT", key), debug_port.to_string());
             }
         }
     }
@@ -221,7 +218,7 @@ mod tests {
             compose: None,
             command: None,
             port_env: vec!["DJANGO_PORT".into()],
-            inspect_port: None,
+            debug_port: None,
         };
         let np = ports(&[("api", 3001)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc]);
@@ -239,7 +236,7 @@ mod tests {
             compose: None,
             command: None,
             port_env: vec!["DJANGO_PORT".into(), "APP_PORT".into()],
-            inspect_port: None,
+            debug_port: None,
         };
         let np = ports(&[("api", 3001)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc]);
@@ -257,7 +254,7 @@ mod tests {
             compose: None,
             command: None,
             port_env: vec![],
-            inspect_port: None,
+            debug_port: None,
         };
         let np = ports(&[("api", 3001)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc]);
@@ -278,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn inspect_port_emits_inspect_env_var() {
+    fn debug_port_emits_inspect_env_var() {
         use crate::config::{ServiceConfig, ServiceRun};
         let svc = ServiceConfig {
             name: "app".into(),
@@ -287,15 +284,15 @@ mod tests {
             compose: None,
             command: None,
             port_env: vec![],
-            inspect_port: Some(9229),
+            debug_port: Some(9229),
         };
         let np = ports(&[("app", 7101)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc]);
-        assert_eq!(env["ECLUSE_APP_INSPECT_PORT"], "9230");
+        assert_eq!(env["ECLUSE_APP_DEBUG_PORT"], "9230");
     }
 
     #[test]
-    fn inspect_port_slot_arithmetic() {
+    fn debug_port_slot_arithmetic() {
         use crate::config::{ServiceConfig, ServiceRun};
         let svc = ServiceConfig {
             name: "app".into(),
@@ -304,15 +301,15 @@ mod tests {
             compose: None,
             command: None,
             port_env: vec![],
-            inspect_port: Some(9229),
+            debug_port: Some(9229),
         };
         let np2 = ports(&[("app", 7102)]);
         let env2 = build_env(2, "s2", "host", &np2, &[], &[&svc]);
-        assert_eq!(env2["ECLUSE_APP_INSPECT_PORT"], "9231");
+        assert_eq!(env2["ECLUSE_APP_DEBUG_PORT"], "9231");
     }
 
     #[test]
-    fn no_inspect_port_means_no_inspect_env_var() {
+    fn no_debug_port_means_no_inspect_env_var() {
         use crate::config::{ServiceConfig, ServiceRun};
         let svc = ServiceConfig {
             name: "api".into(),
@@ -321,11 +318,11 @@ mod tests {
             compose: None,
             command: None,
             port_env: vec![],
-            inspect_port: None,
+            debug_port: None,
         };
         let np = ports(&[("api", 4445)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc]);
-        assert!(!env.contains_key("ECLUSE_API_INSPECT_PORT"));
+        assert!(!env.contains_key("ECLUSE_API_DEBUG_PORT"));
     }
 }
 

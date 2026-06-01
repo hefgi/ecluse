@@ -332,7 +332,7 @@ pub(crate) fn make_native_svc(name: &str, base_port: u16, command: &str) -> Serv
         compose: None,
         command: Some(command.into()),
         port_env: vec![],
-        inspect_port: None,
+        debug_port: None,
     }
 }
 
@@ -345,7 +345,7 @@ pub(crate) fn make_docker_svc(name: &str, base_port: u16) -> ServiceConfig {
         compose: None,
         command: None,
         port_env: vec![],
-        inspect_port: None,
+        debug_port: None,
     }
 }
 
