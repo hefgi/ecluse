@@ -985,6 +985,12 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
         .iter()
         .any(|s| s.tmux_session.is_some());
     let mut table = Table::new(rows);
+    {
+        use tabled::settings::object::Columns;
+        use tabled::settings::{Modify, Width};
+        // Truncate PORTS (col 3) to 40 chars so long port lists don't wrap the header.
+        table.with(Modify::new(Columns::single(3)).with(Width::truncate(40).suffix("…")));
+    }
     if !any_tmux {
         use tabled::settings::object::Columns;
         use tabled::settings::Disable;

@@ -9,6 +9,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.2.9] — 2026-06-01
+
+### Fixed
+- `ecluse ls` table no longer wraps when a session has many services. The PORTS column is truncated to 40 characters with a `…` suffix — use `ecluse env <slug>` or `ecluse ls --json` to see all ports.
+
+---
+
 ## [0.2.8] — 2026-05-29
 
 ### Added
