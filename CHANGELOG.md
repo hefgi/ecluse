@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.2.11] — 2026-06-02
+
+### Added
+- `inherit_env` config field (default: `[".env", ".env.local"]`) — files listed here are symlinked from the main worktree root into each new worktree at `ecluse up` time. Symlinks keep worktrees in sync with root changes automatically. Set to `[]` to opt out. Pass `--no-inherit-env` to skip for a single `up` call (for CI/agents).
+- `ecluse shutdown` now prints a `ecluse flush` hint when any session teardown fails, making recovery more discoverable.
+
+### Fixed
+- Hardcoded credentials removed from the `node-container` example compose file.
+
+---
+
 ## [0.2.10] — 2026-06-01
 
 ### Added
