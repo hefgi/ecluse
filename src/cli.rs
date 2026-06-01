@@ -70,12 +70,9 @@ pub struct InitArgs {
 
 #[derive(Args)]
 pub struct UpArgs {
-    /// Slug for this session (lowercase letters, numbers, hyphens); auto-detected from cwd when omitted
+    /// Branch name or slug for this session — auto-detected from current git branch when omitted.
+    /// Branch names with '/' are accepted: 'feat/sc-123-foo' → slug 'feat-sc-123-foo'.
     pub slug: Option<String>,
-
-    /// Branch to use (creates ecluse/<slug> from HEAD if not specified)
-    #[arg(long)]
-    pub branch: Option<String>,
 
     /// Enable compose watch mode
     #[arg(long)]

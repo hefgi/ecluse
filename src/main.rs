@@ -332,6 +332,143 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.ends_with('\n'));
     }
+
+    // ── sanitize_to_slug ──────────────────────────────────────────────────────
+
+    #[test]
+    fn sanitize_to_slug_replaces_slash() {
+        let (slug, branch) = sanitize_to_slug("feat/sc-123-foo").unwrap();
+        assert_eq!(slug, "feat-sc-123-foo");
+        assert_eq!(branch, "feat/sc-123-foo");
+    }
+
+    #[test]
+    fn sanitize_to_slug_lowercases() {
+        let (slug, branch) = sanitize_to_slug("FEAT/SC-123").unwrap();
+        assert_eq!(slug, "feat-sc-123");
+        assert_eq!(branch, "FEAT/SC-123");
+    }
+
+    #[test]
+    fn sanitize_to_slug_already_valid() {
+        let (slug, branch) = sanitize_to_slug("feat-sc-123-foo").unwrap();
+        assert_eq!(slug, "feat-sc-123-foo");
+        assert_eq!(branch, "feat-sc-123-foo");
+    }
+
+    #[test]
+    fn sanitize_to_slug_trims_leading_trailing_hyphens() {
+        let (slug, branch) = sanitize_to_slug("/feat/").unwrap();
+        assert_eq!(slug, "feat");
+        assert_eq!(branch, "/feat/");
+    }
+
+    #[test]
+    fn sanitize_to_slug_multiple_slashes() {
+        let (slug, _) = sanitize_to_slug("feat/sc-10477/sub").unwrap();
+        assert_eq!(slug, "feat-sc-10477-sub");
+    }
+
+    #[test]
+    fn sanitize_to_slug_invalid_after_sanitization() {
+        // Single char after sanitization → invalid slug
+        assert!(sanitize_to_slug("a").is_err());
+    }
+
+    // ── is_trunk_branch ───────────────────────────────────────────────────────
+
+    #[test]
+    fn is_trunk_branch_detects_trunk() {
+        assert!(is_trunk_branch("main"));
+        assert!(is_trunk_branch("master"));
+        assert!(is_trunk_branch("develop"));
+        assert!(is_trunk_branch("dev"));
+    }
+
+    #[test]
+    fn is_trunk_branch_feature_is_not_trunk() {
+        assert!(!is_trunk_branch("feat/sc-123-foo"));
+        assert!(!is_trunk_branch("fix/bug-42"));
+    }
+}
+
+/// Sanitize a branch name or slug into a valid ecluse slug + original branch pair.
+/// Replaces '/' with '-', lowercases, trims leading/trailing hyphens.
+/// The branch is the original input (used for `git worktree add`).
+/// The slug is the sanitized form (used for paths, Docker, tmux).
+fn sanitize_to_slug(input: &str) -> Result<(String, String)> {
+    let branch = input.to_string();
+    let slug = input.to_lowercase().replace('/', "-");
+    let slug = slug.trim_matches('-').to_string();
+    validate_slug(&slug)?;
+    Ok((slug, branch))
+}
+
+fn current_git_branch(root: &std::path::Path) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(root)
+        .output()
+        .context("failed to run git branch --show-current")?;
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() {
+        return Err(anyhow::anyhow!(
+            "detached HEAD — pass a branch name explicitly: ecluse up <branch>"
+        ));
+    }
+    Ok(branch)
+}
+
+fn is_trunk_branch(branch: &str) -> bool {
+    matches!(branch, "main" | "master" | "develop" | "dev")
+}
+
+fn prompt_branch_name() -> Result<String> {
+    print!("You are on a trunk branch. Enter a branch name to create a worktree for: ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let branch = input.trim().to_string();
+    if branch.is_empty() {
+        return Err(anyhow::anyhow!("no branch name provided"));
+    }
+    Ok(branch)
+}
+
+/// Resolve (slug, branch) for `ecluse up`.
+///
+/// 1. Explicit arg → sanitize to slug, use original as branch.
+/// 2. Inside an ecluse worktree → return stored slug + branch from state.
+/// 3. Otherwise → read current git branch, prompt if on trunk.
+fn resolve_slug_and_branch(
+    arg: &Option<String>,
+    guard: &state::StateGuard,
+    root: &std::path::Path,
+) -> Result<(String, String)> {
+    if let Some(input) = arg {
+        return sanitize_to_slug(input);
+    }
+
+    // Check if cwd is inside an existing ecluse worktree.
+    let cwd = std::env::current_dir().context("could not determine current directory")?;
+    if let Some(session) = guard
+        .state
+        .sessions
+        .iter()
+        .find(|s| cwd.starts_with(std::path::Path::new(&s.worktree_path)))
+    {
+        return Ok((session.slug.clone(), session.branch.clone()));
+    }
+
+    // Read current git branch, prompt if on trunk.
+    let branch = current_git_branch(root)?;
+    let branch = if is_trunk_branch(&branch) {
+        prompt_branch_name()?
+    } else {
+        branch
+    };
+
+    sanitize_to_slug(&branch)
 }
 
 fn resolve_slug_from_args(
@@ -438,11 +575,9 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
 
     let mut guard = state::StateGuard::acquire(&root)?;
 
-    // Resolve slug: from arg or auto-detect from cwd.
-    if args.slug.is_none() {
-        log.step("Looking for existing session...");
-    }
-    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse up <slug>")?;
+    // Resolve slug + branch: from arg (branch name or slug), cwd detection, or current git branch.
+    let (slug, branch) = resolve_slug_and_branch(&args.slug, &guard, &root)?;
+    validate_branch(&branch)?;
 
     // Resume path: session already exists — restart/skip services idempotently.
     if let Some(existing) = guard.state.find_session(&slug).cloned() {
@@ -454,17 +589,11 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         return cmd_up_resume(existing, args, config, root, guard, log);
     }
 
-    // New session path (unchanged).
+    // New session path.
     log.step("Allocating slot...");
     let allocator = slot::SlotAllocator::new(&config, &guard.state);
     let slot = allocator.allocate_next()?;
     log.detail(&format!("slot {slot}"));
-
-    let branch = args
-        .branch
-        .clone()
-        .unwrap_or_else(|| format!("{}/{}", config.prefix, slug));
-    validate_branch(&branch)?;
 
     let handler = modes::get_handler(&config);
 
