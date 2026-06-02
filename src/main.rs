@@ -421,6 +421,12 @@ fn current_git_branch(cwd: &std::path::Path) -> Result<String> {
 }
 
 fn prompt_branch_name() -> Result<String> {
+    // Non-interactive: fail fast instead of hanging on stdin.
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        return Err(anyhow::anyhow!(
+            "not inside a git worktree and stdin is not a terminal; pass a branch name explicitly: ecluse up <branch>"
+        ));
+    }
     print!("You are in the main worktree. Enter a branch name to create a worktree for: ");
     io::stdout().flush()?;
     let mut input = String::new();
