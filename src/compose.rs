@@ -193,10 +193,15 @@ pub fn generate_overlay(
 /// `ports:`, the overlay uses the `!override` YAML merge tag to replace rather
 /// than append (avoiding duplicate / conflicting host-port bindings that would
 /// arise from Docker Compose's default additive merge).
+///
+/// `extra_port_map` maps service_name → list of additional (host_port, container_port)
+/// pairs derived from `extra_ports` config entries. These are appended to the
+/// primary port entry for each service.
 pub fn generate_overlay_with_ports(
     compose: &ComposeFile,
     // (host_port, container_port) — container_port is typically base_port
     port_map: &HashMap<String, (u16, u16)>,
+    extra_port_map: &HashMap<String, Vec<(u16, u16)>>,
     suffix: &str,
     services_to_include: Option<&[String]>,
     prefix: &str,
@@ -230,11 +235,18 @@ pub fn generate_overlay_with_ports(
         // Unconditionally emit the port mapping when we have an allocation for
         // this service — regardless of whether the base compose declares ports:.
         if let Some(&(host_port, container_port)) = port_map.get(name) {
-            let port_str = format!("{}:{}", host_port, container_port);
-            svc_override.insert(
-                "ports".into(),
-                serde_yaml::Value::Sequence(vec![serde_yaml::Value::String(port_str)]),
-            );
+            let mut port_entries: Vec<serde_yaml::Value> = vec![serde_yaml::Value::String(
+                format!("{}:{}", host_port, container_port),
+            )];
+            if let Some(extras) = extra_port_map.get(name) {
+                for &(ep_host, ep_container) in extras {
+                    port_entries.push(serde_yaml::Value::String(format!(
+                        "{}:{}",
+                        ep_host, ep_container
+                    )));
+                }
+            }
+            svc_override.insert("ports".into(), serde_yaml::Value::Sequence(port_entries));
             if !svc.ports.is_empty() {
                 services_with_base_ports.insert(name.clone());
             }
@@ -969,7 +981,16 @@ mod tests {
         )]);
         let mut ports = HashMap::new();
         ports.insert("redis".to_string(), (6380u16, 6379u16));
-        let yaml = generate_overlay_with_ports(&cf, &ports, "feat-foo", None, "ecluse", 3).unwrap();
+        let yaml = generate_overlay_with_ports(
+            &cf,
+            &ports,
+            &HashMap::new(),
+            "feat-foo",
+            None,
+            "ecluse",
+            3,
+        )
+        .unwrap();
         assert!(
             yaml.contains("container_name: ecluse-redis-3"),
             "got: {}",
@@ -995,7 +1016,9 @@ mod tests {
         let cf = make_compose(vec![("postgres", null_svc(&[], &[]))]);
         let mut ports = HashMap::new();
         ports.insert("postgres".to_string(), (5433u16, 5432u16));
-        let yaml = generate_overlay_with_ports(&cf, &ports, "slug", None, "ecluse", 1).unwrap();
+        let yaml =
+            generate_overlay_with_ports(&cf, &ports, &HashMap::new(), "slug", None, "ecluse", 1)
+                .unwrap();
         assert!(yaml.contains("5433:5432"), "got: {}", yaml);
     }
 
@@ -1006,7 +1029,9 @@ mod tests {
         let cf = make_compose(vec![("postgres", null_svc(&[], &[]))]);
         let mut ports = HashMap::new();
         ports.insert("postgres".to_string(), (5433u16, 5432u16));
-        let yaml = generate_overlay_with_ports(&cf, &ports, "slug", None, "ecluse", 1).unwrap();
+        let yaml =
+            generate_overlay_with_ports(&cf, &ports, &HashMap::new(), "slug", None, "ecluse", 1)
+                .unwrap();
         assert!(!yaml.contains("!override"), "got: {}", yaml);
     }
 
@@ -1018,7 +1043,9 @@ mod tests {
         let cf = make_compose(vec![("postgres", null_svc(&["5432:5432"], &[]))]);
         let mut ports = HashMap::new();
         ports.insert("postgres".to_string(), (5433u16, 5432u16));
-        let yaml = generate_overlay_with_ports(&cf, &ports, "slug", None, "ecluse", 1).unwrap();
+        let yaml =
+            generate_overlay_with_ports(&cf, &ports, &HashMap::new(), "slug", None, "ecluse", 1)
+                .unwrap();
         assert!(yaml.contains("ports: !override"), "got: {}", yaml);
         assert!(yaml.contains("5433:5432"), "got: {}", yaml);
         assert!(!yaml.contains("5432:5432"), "got: {}", yaml);
@@ -1035,7 +1062,9 @@ mod tests {
         let mut ports = HashMap::new();
         ports.insert("postgres".to_string(), (5433u16, 5432u16));
         ports.insert("redis".to_string(), (6380u16, 6379u16));
-        let yaml = generate_overlay_with_ports(&cf, &ports, "slug", None, "ecluse", 1).unwrap();
+        let yaml =
+            generate_overlay_with_ports(&cf, &ports, &HashMap::new(), "slug", None, "ecluse", 1)
+                .unwrap();
         // postgres had base ports → gets !override
         assert!(yaml.contains("ports: !override"), "got: {}", yaml);
         // redis had no base ports → no !override anywhere near redis block
@@ -1046,6 +1075,38 @@ mod tests {
             "expected exactly one !override, got: {}",
             yaml
         );
+    }
+
+    #[test]
+    fn overlay_with_ports_extra_ports_appended() {
+        // extra_ports entries should be published as additional port bindings
+        // alongside the primary allocation.
+        let cf = make_compose(vec![("postgres", null_svc(&[], &[]))]);
+        let mut ports = HashMap::new();
+        ports.insert("postgres".to_string(), (5433u16, 5432u16));
+        let mut extras: HashMap<String, Vec<(u16, u16)>> = HashMap::new();
+        extras.insert("postgres".to_string(), vec![(11534u16, 11533u16)]);
+        let yaml =
+            generate_overlay_with_ports(&cf, &ports, &extras, "slug", None, "ecluse", 1).unwrap();
+        assert!(yaml.contains("5433:5432"), "primary missing, got: {}", yaml);
+        assert!(
+            yaml.contains("11534:11533"),
+            "extra port missing, got: {}",
+            yaml
+        );
+    }
+
+    #[test]
+    fn overlay_with_ports_extra_ports_empty_map_no_change() {
+        // Passing an empty extra_port_map should produce the same output as before.
+        let cf = make_compose(vec![("db", null_svc(&[], &[]))]);
+        let mut ports = HashMap::new();
+        ports.insert("db".to_string(), (5433u16, 5432u16));
+        let yaml =
+            generate_overlay_with_ports(&cf, &ports, &HashMap::new(), "slug", None, "ecluse", 1)
+                .unwrap();
+        assert!(yaml.contains("5433:5432"), "got: {}", yaml);
+        assert_eq!(yaml.matches("->").count(), 0); // no extra port lines
     }
 }
 

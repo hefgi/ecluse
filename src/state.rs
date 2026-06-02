@@ -171,7 +171,7 @@ impl StateGuard {
                     .create(true)
                     .truncate(false)
                     .write(true)
-                    .open(&ecluse_dir.join("state.lock"))
+                    .open(ecluse_dir.join("state.lock"))
                     .unwrap_or_else(|_| {
                         std::fs::create_dir_all(&ecluse_dir).ok();
                         OpenOptions::new()

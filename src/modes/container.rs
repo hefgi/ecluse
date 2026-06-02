@@ -105,17 +105,42 @@ impl super::ModeHandler for ContainerMode {
                     let overlay_name = overlay_name_for_compose(slug, compose_path, root);
                     let overlay_path = overlay_dir.join(&overlay_name);
 
-                    // Build env map for compose interpolation: ECLUSE_<NAME>_PORT vars
-                    let compose_env: std::collections::HashMap<String, String> = port_map
+                    // Build extra_port_map: service_name → [(host_port, container_port)]
+                    // for extra_ports entries on each docker service.
+                    let extra_port_map: std::collections::HashMap<String, Vec<(u16, u16)>> = svcs
+                        .iter()
+                        .filter_map(|s| {
+                            let extras: Vec<(u16, u16)> = s
+                                .extra_ports
+                                .iter()
+                                .map(|ep| (ep.base_port.saturating_add(slot as u16), ep.base_port))
+                                .collect();
+                            if extras.is_empty() {
+                                None
+                            } else {
+                                Some((s.name.clone(), extras))
+                            }
+                        })
+                        .collect();
+
+                    // Build env map for compose interpolation: ECLUSE_<NAME>_PORT + extra_ports vars
+                    let mut compose_env: std::collections::HashMap<String, String> = port_map
                         .iter()
                         .map(|(n, (hp, _))| {
                             (format!("ECLUSE_{}_PORT", n.to_uppercase()), hp.to_string())
                         })
                         .collect();
+                    for svc in svcs {
+                        for ep in &svc.extra_ports {
+                            let host_port = ep.base_port.saturating_add(slot as u16);
+                            compose_env.insert(ep.port_env.clone(), host_port.to_string());
+                        }
+                    }
 
                     let yaml = compose::generate_overlay_with_ports(
                         &compose_data,
                         &port_map,
+                        &extra_port_map,
                         &suffix,
                         None,
                         &config.prefix,

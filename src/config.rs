@@ -137,10 +137,6 @@ impl ServiceConfig {
         self.base_port.saturating_add(slot as u16)
     }
 
-    pub fn debug_port_for_slot(&self, slot: u8) -> Option<u16> {
-        self.debug_port.map(|base| base.saturating_add(slot as u16))
-    }
-
     /// Returns all extra port allocations for this service as `(base_port, env_var_name)` pairs.
     /// Merges `extra_ports` (new) with `debug_port` (legacy) so all callers go through one path.
     pub fn all_extra_ports(&self) -> Vec<(u16, String)> {
@@ -569,38 +565,6 @@ base_port = 5432
         assert_eq!(svc.port(1), 8001);
         assert_eq!(svc.port(2), 8002);
         assert_eq!(svc.port(8), 8008);
-    }
-
-    #[test]
-    fn debug_port_for_slot_none_when_unset() {
-        let svc = ServiceConfig {
-            name: "api".into(),
-            base_port: 8000,
-            run: ServiceRun::Native,
-            compose: None,
-            command: None,
-            port_env: vec![],
-            debug_port: None,
-            extra_ports: vec![],
-        };
-        assert_eq!(svc.debug_port_for_slot(1), None);
-    }
-
-    #[test]
-    fn debug_port_for_slot_computes_correctly() {
-        let svc = ServiceConfig {
-            name: "app".into(),
-            base_port: 7100,
-            run: ServiceRun::Native,
-            compose: None,
-            command: None,
-            port_env: vec![],
-            debug_port: Some(9229),
-            extra_ports: vec![],
-        };
-        assert_eq!(svc.debug_port_for_slot(1), Some(9230));
-        assert_eq!(svc.debug_port_for_slot(2), Some(9231));
-        assert_eq!(svc.debug_port_for_slot(0), Some(9229));
     }
 
     #[test]
