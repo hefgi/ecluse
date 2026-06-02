@@ -657,6 +657,8 @@ worktree_dir = ".ecluse/worktrees"
 name = "api"
 base_port = 3000        # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
 command = "npm run dev" # optional — ecluse spawns this on ecluse up
+#                       # omit for port-allocation-only: ecluse assigns the port and injects
+#                       # env vars; you (or a task runner) start the process yourself
 # port_env = "DJANGO_PORT"              # also set DJANGO_PORT = allocated port
 # port_env = ["DJANGO_PORT", "APP_PORT"] # or multiple aliases
 # debug_port = 9229   # optional — ECLUSE_API_DEBUG_PORT = 9229 + slot

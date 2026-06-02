@@ -200,8 +200,8 @@ pub fn validate_config(config: &Config) -> Result<Vec<String>> {
         }
 
         if svc.run == ServiceRun::Native && svc.command.is_none() {
-            errors.push(format!(
-                "service '{}': command is required for native services",
+            warnings.push(format!(
+                "service '{}': no command set — port will be allocated but ecluse will not spawn the process (port-allocation-only mode)",
                 svc.name
             ));
         }
@@ -562,7 +562,7 @@ mod tests {
     // --- mode × run ---
 
     #[test]
-    fn native_service_without_command_is_error() {
+    fn native_service_without_command_warns_port_only() {
         let config = make_config(
             8,
             10,
@@ -576,9 +576,9 @@ mod tests {
                 debug_port: None,
             }],
         );
-        let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("command is required"));
-        assert!(err.to_string().contains("api"));
+        let warnings = validate_config(&config).unwrap();
+        assert!(warnings.iter().any(|w| w.contains("port-allocation-only")));
+        assert!(warnings.iter().any(|w| w.contains("api")));
     }
 
     #[test]

@@ -15,13 +15,14 @@ worktree_dir = ".ecluse/worktrees"
 # One [[services]] block per service. port = base_port + slot.
 # Native services run on the host; docker services run in containers.
 # The first native entry also sets the PORT alias for framework compatibility.
-# command is required for native services — ecluse spawns it on up and uses it
-# to identify the process during ecluse sync.
+# command is optional for native services — omit to use port-allocation-only mode
+# (ecluse allocates the port and injects env vars; you start the process yourself).
+# When set, ecluse spawns it on up and uses it to identify the process during ecluse sync.
 
 [[services]]
 name = "api"
 base_port = 3000             # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
-command = "npm run dev"      # required for native services
+command = "npm run dev"      # optional — omit for port-allocation-only
 # port_env = "DJANGO_PORT"  # optional — also set DJANGO_PORT to the allocated port
 # port_env = ["DJANGO_PORT", "APP_PORT"]  # or multiple aliases
 
@@ -63,7 +64,7 @@ Each `[[services]]` block defines one service. Each gets a stable, collision-fre
 | `name` | string | Service name — becomes `ECLUSE_<NAME>_PORT` |
 | `base_port` | integer | Port formula: `base_port + slot` |
 | `run` | string | `"docker"` to run in a container; omit for native |
-| `command` | string | **Required for native services.** Shell command ecluse spawns on `ecluse up` and uses to identify the process during `ecluse sync`. Managed by your global `process_manager` setting. |
+| `command` | string | Shell command ecluse spawns on `ecluse up` and uses to identify the process during `ecluse sync`. Managed by your global `process_manager` setting. Omit to use **port-allocation-only mode** — ecluse allocates the port and injects env vars; you start the process yourself (e.g. via a task runner). |
 | `port_env` | string or array | Extra env var names to set to this service's allocated port — accepts a single string or an array |
 | `debug_port` | integer | Secondary port for debuggers or auxiliary servers: `debug_port + slot` → `ECLUSE_<NAME>_DEBUG_PORT`. Use when a service exposes a second listener (Node.js `--inspect`, Delve, debugpy, pprof, etc.) and multiple parallel sessions would collide on a hardcoded default port. |
 

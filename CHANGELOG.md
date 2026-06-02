@@ -11,6 +11,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `inherit_env` config field (default: `[".env", ".env.local"]`) — files listed here are symlinked from the main worktree root into each new worktree at `ecluse up` time. Symlinks keep worktrees in sync with root changes automatically. Set to `[]` to opt out. Pass `--no-inherit-env` to skip for a single `up` call (for CI/agents).
 - `ecluse shutdown` now prints a `ecluse flush` hint when any session teardown fails, making recovery more discoverable.
 
+### Changed
+- `command` is now optional for native services. Omitting it puts the service in **port-allocation-only mode**: ecluse allocates the port and injects all `ECLUSE_*` env vars, but does not spawn or manage the process — start it yourself via a task runner, `post_up` hook, or any other means. `ecluse validate` emits a warning (not an error) when `command` is absent.
+
 ### Fixed
 - Hardcoded credentials removed from the `node-container` example compose file.
 
