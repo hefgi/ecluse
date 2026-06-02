@@ -47,6 +47,24 @@ fn port_listener_pid(port: u16) -> Option<u32> {
     }
 }
 
+/// Returns true if any running Docker container has `port` bound on the host side.
+/// Best-effort: returns false if docker is unavailable or the command fails.
+fn port_in_use_by_docker(port: u16) -> bool {
+    let Ok(output) = Command::new("docker")
+        .args(["ps", "--format", "{{.Ports}}"])
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    // Each line looks like: "0.0.0.0:5433->5432/tcp, :::5433->5432/tcp"
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .any(|line| line.contains(&format!(":{port}->")))
+}
+
 /// Find a free port for a service on a given slot.
 ///
 /// Tries: `nominal`, `nominal + max_slots`, `nominal + 2*max_slots`, …
@@ -73,6 +91,13 @@ pub fn find_free_port(config: &Config, service: &ServiceConfig, slot: u8) -> Res
         if let Some(pid) = port_listener_pid(nominal) {
             return Err(crate::error::EcluseError::PortInUse { port: nominal, pid }.into());
         }
+        if port_in_use_by_docker(nominal) {
+            return Err(crate::error::EcluseError::PortInUse {
+                port: nominal,
+                pid: 0,
+            }
+            .into());
+        }
         return Ok(nominal);
     }
 
@@ -85,7 +110,7 @@ pub fn find_free_port(config: &Config, service: &ServiceConfig, slot: u8) -> Res
     );
 
     for port in candidates {
-        if port_listener_pid(port).is_none() {
+        if port_listener_pid(port).is_none() && !port_in_use_by_docker(port) {
             if port != nominal {
                 tracing::info!(
                     "port {} in use; using {} for service '{}'",
@@ -233,16 +258,30 @@ pub fn validate_config(config: &Config) -> Result<Vec<String>> {
         }
     }
 
-    // duplicate debug_ports
-    let mut seen_debug_ports: HashSet<u16> = HashSet::new();
+    // extra_ports + legacy debug_port validation
+    let mut seen_extra_ports: HashSet<u16> = HashSet::new();
     for svc in &config.services {
-        if let Some(ip) = svc.debug_port {
-            if ip == 0 {
-                errors.push(format!("service '{}': debug_port must not be 0", svc.name));
-            } else if !seen_debug_ports.insert(ip) {
+        if svc.debug_port.is_some() {
+            warnings.push(format!(
+                "service '{}': debug_port is deprecated; use extra_ports = [{{ base_port = ..., port_env = \"...\" }}] instead",
+                svc.name
+            ));
+        }
+        for (base, env_key) in svc.all_extra_ports() {
+            if base == 0 {
                 errors.push(format!(
-                    "duplicate debug_port {}: multiple services share the same debug base port",
-                    ip
+                    "service '{}': extra port '{}' base_port must not be 0",
+                    svc.name, env_key
+                ));
+            } else if base == svc.base_port {
+                errors.push(format!(
+                    "service '{}': extra port '{}' base_port {} duplicates the service's own base_port",
+                    svc.name, env_key, base
+                ));
+            } else if !seen_extra_ports.insert(base) {
+                errors.push(format!(
+                    "service '{}': extra port '{}' base_port {} is already used by another extra port",
+                    svc.name, env_key, base
                 ));
             }
         }
@@ -667,13 +706,14 @@ mod tests {
     // --- debug_port ---
 
     #[test]
-    fn debug_port_unique_is_valid() {
+    fn debug_port_unique_warns_deprecated() {
         let mut s1 = svc("app", 7100);
         s1.debug_port = Some(9229);
         let mut s2 = svc("admin-app", 7200);
         s2.debug_port = Some(9239);
         let config = make_config(8, 10, vec![s1, s2]);
-        assert!(validate_config(&config).is_ok());
+        let warnings = validate_config(&config).unwrap();
+        assert!(warnings.iter().any(|w| w.contains("deprecated")));
     }
 
     #[test]
@@ -690,7 +730,6 @@ mod tests {
         s2.debug_port = Some(9229);
         let config = make_config(8, 10, vec![s1, s2]);
         let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("duplicate debug_port"));
         assert!(err.to_string().contains("9229"));
     }
 
@@ -700,7 +739,40 @@ mod tests {
         s.debug_port = Some(0);
         let config = make_config(8, 10, vec![s]);
         let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("debug_port must not be 0"));
+        assert!(err.to_string().contains("must not be 0"));
+    }
+
+    #[test]
+    fn extra_ports_duplicate_base_port_is_error() {
+        use crate::config::ExtraPort;
+        let mut s1 = svc("api", 3000);
+        s1.extra_ports = vec![ExtraPort {
+            base_port: 9229,
+            port_env: "NODE_PORT".into(),
+        }];
+        let mut s2 = svc("worker", 4000);
+        s2.extra_ports = vec![ExtraPort {
+            base_port: 9229,
+            port_env: "WORKER_DEBUG".into(),
+        }];
+        let config = make_config(8, 10, vec![s1, s2]);
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("9229"));
+    }
+
+    #[test]
+    fn extra_ports_same_as_base_port_is_error() {
+        use crate::config::ExtraPort;
+        let mut s = svc("api", 3000);
+        s.extra_ports = vec![ExtraPort {
+            base_port: 3000,
+            port_env: "CLASH".into(),
+        }];
+        let config = make_config(8, 10, vec![s]);
+        let err = validate_config(&config).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("duplicates the service's own base_port"));
     }
 
     // --- process manager ---

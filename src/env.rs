@@ -43,9 +43,10 @@ pub fn build_env(
                 env.insert(alias.clone(), port.to_string());
             }
 
-            // debug_port: emit ECLUSE_<NAME>_DEBUG_PORT = debug_port + slot
-            if let Some(debug_port) = svc.debug_port_for_slot(slot) {
-                env.insert(format!("ECLUSE_{}_DEBUG_PORT", key), debug_port.to_string());
+            // extra_ports (and legacy debug_port): emit each as port_env = base_port + slot
+            for (base, env_key) in svc.all_extra_ports() {
+                let port = base.saturating_add(slot as u16);
+                env.insert(env_key, port.to_string());
             }
         }
     }
@@ -288,6 +289,7 @@ mod tests {
             command: None,
             port_env: vec![],
             debug_port: Some(9229),
+            extra_ports: vec![],
         };
         let np = ports(&[("app", 7101)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc]);
@@ -305,10 +307,61 @@ mod tests {
             command: None,
             port_env: vec![],
             debug_port: Some(9229),
+            extra_ports: vec![],
         };
         let np2 = ports(&[("app", 7102)]);
         let env2 = build_env(2, "s2", "host", &np2, &[], &[&svc]);
         assert_eq!(env2["ECLUSE_APP_DEBUG_PORT"], "9231");
+    }
+
+    #[test]
+    fn extra_ports_emitted_per_slot() {
+        use crate::config::{ExtraPort, ServiceConfig, ServiceRun};
+        let svc = ServiceConfig {
+            name: "api".into(),
+            base_port: 3000,
+            run: ServiceRun::Native,
+            compose: None,
+            command: None,
+            port_env: vec![],
+            debug_port: None,
+            extra_ports: vec![
+                ExtraPort {
+                    base_port: 9229,
+                    port_env: "NODE_INSPECT_PORT".into(),
+                },
+                ExtraPort {
+                    base_port: 11533,
+                    port_env: "PGPORT".into(),
+                },
+            ],
+        };
+        let np = ports(&[("api", 3001)]);
+        let env = build_env(1, "s", "host", &np, &[], &[&svc]);
+        assert_eq!(env["NODE_INSPECT_PORT"], "9230"); // 9229 + 1
+        assert_eq!(env["PGPORT"], "11534"); // 11533 + 1
+    }
+
+    #[test]
+    fn extra_ports_and_debug_port_both_emitted() {
+        use crate::config::{ExtraPort, ServiceConfig, ServiceRun};
+        let svc = ServiceConfig {
+            name: "api".into(),
+            base_port: 3000,
+            run: ServiceRun::Native,
+            compose: None,
+            command: None,
+            port_env: vec![],
+            debug_port: Some(9229),
+            extra_ports: vec![ExtraPort {
+                base_port: 5555,
+                port_env: "AUX_PORT".into(),
+            }],
+        };
+        let np = ports(&[("api", 3001)]);
+        let env = build_env(1, "s", "host", &np, &[], &[&svc]);
+        assert_eq!(env["ECLUSE_API_DEBUG_PORT"], "9230");
+        assert_eq!(env["AUX_PORT"], "5556");
     }
 
     #[test]

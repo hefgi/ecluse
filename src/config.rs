@@ -596,6 +596,7 @@ base_port = 5432
             command: None,
             port_env: vec![],
             debug_port: Some(9229),
+            extra_ports: vec![],
         };
         assert_eq!(svc.debug_port_for_slot(1), Some(9230));
         assert_eq!(svc.debug_port_for_slot(2), Some(9231));
