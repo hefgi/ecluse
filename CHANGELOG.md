@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.2.13] — 2026-06-02
 
 ### Added
 - `extra_ports` field on `[[services]]` blocks: a list of additional per-slot port allocations, each with `base_port` and `port_env`. The env var is set to `base_port + slot` in the process environment. For docker services the port is also published as a host→container binding in the compose overlay and injected into `compose_env` so compose files can interpolate it (e.g. `${PGPORT}`). This is the generic replacement for `debug_port` — use it for debugger ports (Node.js `--inspect`, Delve, debugpy, pprof), auxiliary listeners, or any secondary port a service exposes.
