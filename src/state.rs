@@ -156,6 +156,69 @@ impl StateGuard {
         })
     }
 
+    /// Acquire a shared (read-only) lock. Multiple readers can hold this simultaneously.
+    /// Use for commands that only read state: status, ls, env, shell.
+    pub fn acquire_shared(root: &Path) -> Result<Self> {
+        let ecluse_dir = root.join(".ecluse");
+        let lock_path = ecluse_dir.join("state.lock");
+
+        // If the lock file doesn't exist yet there's no state either — return empty.
+        if !lock_path.exists() {
+            return Ok(StateGuard {
+                state: State::default(),
+                state_path: ecluse_dir.join("state.json"),
+                _lock_file: OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .write(true)
+                    .open(&ecluse_dir.join("state.lock"))
+                    .unwrap_or_else(|_| {
+                        std::fs::create_dir_all(&ecluse_dir).ok();
+                        OpenOptions::new()
+                            .create(true)
+                            .truncate(false)
+                            .write(true)
+                            .open(&lock_path)
+                            .expect("failed to create lock file")
+                    }),
+            });
+        }
+
+        let lock_file = OpenOptions::new()
+            .read(true)
+            .open(&lock_path)
+            .with_context(|| format!("failed to open lock file {}", lock_path.display()))?;
+
+        let start = std::time::Instant::now();
+        loop {
+            match lock_file.try_lock_shared() {
+                Ok(()) => break,
+                Err(_) => {
+                    if start.elapsed() >= Duration::from_secs(10) {
+                        return Err(crate::error::EcluseError::LockTimeout.into());
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+
+        let state_path = ecluse_dir.join("state.json");
+        let state = if state_path.exists() {
+            let content =
+                std::fs::read_to_string(&state_path).context("failed to read state.json")?;
+            serde_json::from_str(&content)
+                .with_context(|| crate::error::EcluseError::StateCorrupt(content.clone()))?
+        } else {
+            State::default()
+        };
+
+        Ok(StateGuard {
+            state,
+            state_path,
+            _lock_file: lock_file,
+        })
+    }
+
     pub fn commit(&self) -> Result<()> {
         let tmp = self.state_path.with_extension("json.tmp");
         let data =

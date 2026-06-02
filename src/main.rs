@@ -1130,7 +1130,7 @@ struct SessionRow {
 
 fn cmd_ls(args: cli::LsArgs) -> Result<()> {
     let (_, root) = config::Config::find_and_load()?;
-    let guard = state::StateGuard::acquire(&root)?;
+    let guard = state::StateGuard::acquire_shared(&root)?;
 
     if guard.state.sessions.is_empty() {
         println!("no active sessions");
@@ -1205,7 +1205,7 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
 
 fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
     let (_, root) = config::Config::find_and_load()?;
-    let guard = state::StateGuard::acquire(&root)?;
+    let guard = state::StateGuard::acquire_shared(&root)?;
 
     let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse shell <slug>")?;
 
@@ -1334,7 +1334,7 @@ fn cmd_validate(args: cli::ValidateArgs) -> Result<()> {
 
 fn cmd_env(args: cli::EnvArgs) -> Result<()> {
     let (_, root) = config::Config::find_and_load()?;
-    let guard = state::StateGuard::acquire(&root)?;
+    let guard = state::StateGuard::acquire_shared(&root)?;
 
     let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse env <slug>")?;
     let session = guard
@@ -1800,7 +1800,7 @@ struct StatusRowNone {
 
 fn cmd_status(args: cli::StatusArgs) -> Result<()> {
     let (config, root) = config::Config::find_and_load()?;
-    let guard = state::StateGuard::acquire(&root)?;
+    let guard = state::StateGuard::acquire_shared(&root)?;
 
     let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse status <slug>")?;
     let session = guard
