@@ -64,6 +64,15 @@ ecluse ls                                # see active sessions
 ecluse down feat-foo --delete-worktree   # clean teardown (--delete-worktree skips the interactive prompt)
 ```
 
+**Important — use a long timeout for `ecluse up` and `ecluse down`.**
+Both commands run `post_up` / `pre_down` hooks synchronously. A `post_up` hook that polls until postgres is ready can take 30–120 seconds. Claude Code's default bash tool timeout is 120 seconds — if the hook takes longer, the process is SIGKILLed (exit 137) and the session is left in a broken state.
+
+Always invoke `ecluse up` and `ecluse down` with a timeout of at least 300 000 ms (5 minutes):
+```
+Bash({"command": "ecluse up feat-foo --json", "timeout": 300000})
+Bash({"command": "ecluse down feat-foo --delete-worktree", "timeout": 300000})
+```
+
 Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Use `ecluse up --json` or `ecluse env <slug>` to get the worktree path and env, then operate directly.
 
 ### What `ecluse up` does
