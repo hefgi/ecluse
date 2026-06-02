@@ -219,6 +219,7 @@ mod tests {
             command: None,
             port_env: vec!["DJANGO_PORT".into()],
             debug_port: None,
+            extra_ports: vec![],
         };
         let np = ports(&[("api", 3001)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc]);
@@ -237,6 +238,7 @@ mod tests {
             command: None,
             port_env: vec!["DJANGO_PORT".into(), "APP_PORT".into()],
             debug_port: None,
+            extra_ports: vec![],
         };
         let np = ports(&[("api", 3001)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc]);
@@ -255,6 +257,7 @@ mod tests {
             command: None,
             port_env: vec![],
             debug_port: None,
+            extra_ports: vec![],
         };
         let np = ports(&[("api", 3001)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc]);
@@ -319,6 +322,7 @@ mod tests {
             command: None,
             port_env: vec![],
             debug_port: None,
+            extra_ports: vec![],
         };
         let np = ports(&[("api", 4445)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc]);

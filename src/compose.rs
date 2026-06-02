@@ -540,6 +540,7 @@ mod tests {
             command: None,
             port_env: vec![],
             debug_port: None,
+            extra_ports: vec![],
         }
     }
 

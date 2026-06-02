@@ -55,6 +55,14 @@ impl std::fmt::Display for ServiceRun {
     }
 }
 
+/// A secondary port allocation on a service: allocated as `base_port + slot`,
+/// injected into the process environment under `port_env`.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct ExtraPort {
+    pub base_port: u16,
+    pub port_env: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ServiceConfig {
     pub name: String,
@@ -76,12 +84,20 @@ pub struct ServiceConfig {
         deserialize_with = "deserialize_string_or_vec"
     )]
     pub port_env: Vec<String>,
-    /// Secondary port for debuggers or auxiliary listeners (Node.js --inspect,
-    /// Delve, debugpy, pprof, etc.). ecluse computes ECLUSE_<NAME>_DEBUG_PORT =
-    /// debug_port + slot, same arithmetic as base_port. Use in command to give
-    /// each service a unique port across services and parallel sessions.
+    /// Deprecated — use `extra_ports` instead.
+    /// Kept for backward compatibility; maps to `ECLUSE_<NAME>_DEBUG_PORT`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub debug_port: Option<u16>,
+    /// Additional port allocations for this service. Each entry is allocated as
+    /// `base_port + slot` and injected under `port_env`. Use for debugger ports,
+    /// auxiliary listeners, or any secondary port the service exposes.
+    ///
+    /// Example:
+    /// ```toml
+    /// extra_ports = [{ base_port = 9229, port_env = "NODE_INSPECT_PORT" }]
+    /// ```
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_ports: Vec<ExtraPort>,
 }
 
 fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -123,6 +139,23 @@ impl ServiceConfig {
 
     pub fn debug_port_for_slot(&self, slot: u8) -> Option<u16> {
         self.debug_port.map(|base| base.saturating_add(slot as u16))
+    }
+
+    /// Returns all extra port allocations for this service as `(base_port, env_var_name)` pairs.
+    /// Merges `extra_ports` (new) with `debug_port` (legacy) so all callers go through one path.
+    pub fn all_extra_ports(&self) -> Vec<(u16, String)> {
+        let mut result: Vec<(u16, String)> = self
+            .extra_ports
+            .iter()
+            .map(|ep| (ep.base_port, ep.port_env.clone()))
+            .collect();
+        if let Some(dp) = self.debug_port {
+            let key = format!("ECLUSE_{}_DEBUG_PORT", self.name.to_uppercase());
+            if !result.iter().any(|(_, env)| env == &key) {
+                result.push((dp, key));
+            }
+        }
+        result
     }
 }
 
@@ -531,6 +564,7 @@ base_port = 5432
             command: None,
             port_env: vec![],
             debug_port: None,
+            extra_ports: vec![],
         };
         assert_eq!(svc.port(1), 8001);
         assert_eq!(svc.port(2), 8002);
@@ -547,6 +581,7 @@ base_port = 5432
             command: None,
             port_env: vec![],
             debug_port: None,
+            extra_ports: vec![],
         };
         assert_eq!(svc.debug_port_for_slot(1), None);
     }
@@ -609,6 +644,7 @@ base_port = 5432
                     command: None,
                     port_env: vec![],
                     debug_port: None,
+                    extra_ports: vec![],
                 },
                 ServiceConfig {
                     name: "postgres".into(),
@@ -618,6 +654,7 @@ base_port = 5432
                     command: None,
                     port_env: vec![],
                     debug_port: None,
+                    extra_ports: vec![],
                 },
             ],
             hooks: HookConfig::default(),

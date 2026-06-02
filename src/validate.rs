@@ -322,6 +322,7 @@ mod tests {
             command: Some("echo hello".into()),
             port_env: vec![],
             debug_port: None,
+            extra_ports: vec![],
         }
     }
 
@@ -334,6 +335,7 @@ mod tests {
             command: None,
             port_env: vec![],
             debug_port: None,
+            extra_ports: vec![],
         }
     }
 
@@ -553,6 +555,7 @@ mod tests {
                 command: Some("npm run dev".into()),
                 port_env: vec![],
                 debug_port: None,
+                extra_ports: vec![],
             }],
         );
         let warnings = validate_config(&config).unwrap();
@@ -574,6 +577,7 @@ mod tests {
                 command: None,
                 port_env: vec![],
                 debug_port: None,
+                extra_ports: vec![],
             }],
         );
         let warnings = validate_config(&config).unwrap();
@@ -594,6 +598,7 @@ mod tests {
                 command: Some("npm run dev".into()),
                 port_env: vec![],
                 debug_port: None,
+                extra_ports: vec![],
             }],
         );
         assert!(validate_config(&config).is_ok());
