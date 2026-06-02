@@ -474,11 +474,15 @@ impl super::ModeHandler for HybridMode {
             &native,
         );
 
-        // pre_down: before services are killed — app can drain/flush
+        // pre_down: before services are killed — app can drain/flush.
+        // Failure is a warning, not fatal — teardown must always complete.
         if let Some(cmd) = &config.hooks.pre_down {
             log.step("Running pre_down hook...");
             log.detail(cmd);
-            hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)?;
+            if let Err(e) = hooks::run(cmd, std::path::Path::new(&session.worktree_path), &env_map)
+            {
+                log.warn(&format!("pre_down hook failed (continuing teardown): {e}"));
+            }
         }
 
         if let Some(pm) = &session.process_manager {
@@ -523,11 +527,14 @@ impl super::ModeHandler for HybridMode {
             wt.remove(&wt_path)?;
         }
 
-        // post_down: everything torn down, worktree may no longer exist
+        // post_down: everything torn down, worktree may no longer exist.
+        // Failure is a warning, not fatal.
         if let Some(cmd) = &config.hooks.post_down {
             log.step("Running post_down hook...");
             log.detail(cmd);
-            hooks::run(cmd, root, &env_map)?;
+            if let Err(e) = hooks::run(cmd, root, &env_map) {
+                log.warn(&format!("post_down hook failed: {e}"));
+            }
         }
 
         Ok(())
