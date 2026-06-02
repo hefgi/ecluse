@@ -161,15 +161,11 @@ pub fn is_inside_git_worktree(cwd: &Path) -> bool {
         .unwrap_or(false)
 }
 
-#[derive(Debug, PartialEq)]
-pub enum EnvConflictChoice {
-    Skip,
-    Overwrite,
-}
-
 /// Symlink each file in `files` from `root` into `worktree_path`.
-/// Files absent in root are silently skipped. If the destination already exists
-/// (file or broken symlink), the user is prompted to skip or overwrite.
+/// Files absent in root are silently skipped.
+/// If the destination is already a symlink pointing to the right source, skip silently.
+/// If the destination is a real file (not a symlink), skip silently — never clobber user files.
+/// If the destination is a broken symlink, replace it.
 pub fn symlink_env_files(
     root: &Path,
     worktree_path: &Path,
@@ -182,38 +178,24 @@ pub fn symlink_env_files(
             continue;
         }
         let dst = worktree_path.join(name);
-        if dst.exists() || dst.symlink_metadata().is_ok() {
-            match prompt_env_file_conflict(&dst, name) {
-                EnvConflictChoice::Skip => {
-                    log.detail(&format!("skipped {} (file already exists)", name));
-                    continue;
-                }
-                EnvConflictChoice::Overwrite => {
-                    std::fs::remove_file(&dst)
-                        .with_context(|| format!("failed to remove existing {}", dst.display()))?;
-                }
+        if let Ok(target) = std::fs::read_link(&dst) {
+            if target == src {
+                // Already a correct symlink — nothing to do.
+                continue;
             }
+            // Broken or stale symlink — replace it.
+            std::fs::remove_file(&dst)
+                .with_context(|| format!("failed to remove stale symlink {}", dst.display()))?;
+        } else if dst.exists() {
+            // Real file owned by the user — leave it alone.
+            log.detail(&format!("skipped {} (real file exists in worktree)", name));
+            continue;
         }
         std::os::unix::fs::symlink(&src, &dst)
             .with_context(|| format!("failed to symlink {} into worktree", name))?;
         log.detail(&format!("symlinked {}", name));
     }
     Ok(())
-}
-
-/// Prompt the user when an env file already exists in the worktree.
-/// Reads from /dev/tty so the prompt works even when stdin is piped.
-pub fn prompt_env_file_conflict(dst: &Path, name: &str) -> EnvConflictChoice {
-    eprintln!("\n  {} already exists in worktree: {}", name, dst.display());
-    eprintln!("    [1] skip      (keep existing file)");
-    eprintln!("    [2] overwrite (replace with symlink to repo root)");
-    eprint!("  Choice [1/2]: ");
-    let _ = std::io::stderr().flush();
-    let input = read_tty_line().unwrap_or_default();
-    match input.trim() {
-        "2" => EnvConflictChoice::Overwrite,
-        _ => EnvConflictChoice::Skip,
-    }
 }
 
 /// Returns true if the worktree at `path` has any uncommitted changes
