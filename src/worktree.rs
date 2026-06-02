@@ -391,44 +391,121 @@ mod tests {
 
     // ── symlink_env_files ─────────────────────────────────────────────────────
 
-    #[test]
-    fn symlink_env_files_creates_symlink() {
+    fn setup_symlink_test(name: &str) -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
-        setup_git_repo(dir.path());
-        let wt = WorktreeManager::new(dir.path().to_owned());
-        let config = make_config_for_worktree();
-        let wt_path = wt.worktree_path(&config, "feat");
+        let wt_path = dir.path().join("worktree");
         std::fs::create_dir_all(&wt_path).unwrap();
+        std::fs::write(dir.path().join(name), "ROOT=1\n").unwrap();
+        (dir, wt_path)
+    }
 
-        // Create .env in root
-        let src = dir.path().join(".env");
-        std::fs::write(&src, "SECRET=abc\n").unwrap();
-
+    // Fresh worktree (ecluse-created or user-created): file absent → create symlink.
+    #[test]
+    fn symlink_env_files_creates_symlink_when_dst_missing() {
+        let (dir, wt_path) = setup_symlink_test(".env");
         let log = crate::log::StepLogger::new(true);
         symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
 
         let dst = wt_path.join(".env");
         assert!(dst.symlink_metadata().is_ok(), "symlink should exist");
-        assert!(std::fs::read_link(&dst).is_ok(), "dst should be a symlink");
-        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "SECRET=abc\n");
+        assert_eq!(
+            std::fs::read_link(&dst).unwrap(),
+            dir.path().join(".env"),
+            "symlink should point to root"
+        );
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "ROOT=1\n");
     }
 
+    // Idempotent: already the correct symlink → leave unchanged, no error.
     #[test]
-    fn symlink_env_files_skips_missing_src() {
-        let dir = TempDir::new().unwrap();
-        setup_git_repo(dir.path());
-        let wt = WorktreeManager::new(dir.path().to_owned());
-        let config = make_config_for_worktree();
-        let wt_path = wt.worktree_path(&config, "feat");
-        std::fs::create_dir_all(&wt_path).unwrap();
+    fn symlink_env_files_skips_when_correct_symlink_exists() {
+        let (dir, wt_path) = setup_symlink_test(".env");
+        let src = dir.path().join(".env");
+        let dst = wt_path.join(".env");
+        std::os::unix::fs::symlink(&src, &dst).unwrap();
 
-        // .env does NOT exist in root
         let log = crate::log::StepLogger::new(true);
         symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
 
-        assert!(
-            !wt_path.join(".env").exists(),
-            "no symlink should be created"
+        // Still a symlink pointing to the same source.
+        assert_eq!(std::fs::read_link(&dst).unwrap(), src);
+    }
+
+    // Restart / reuse: stale symlink pointing elsewhere → replaced with correct symlink.
+    #[test]
+    fn symlink_env_files_replaces_stale_symlink() {
+        let (dir, wt_path) = setup_symlink_test(".env");
+        let dst = wt_path.join(".env");
+        // Point to a non-existent path (broken / stale).
+        std::os::unix::fs::symlink("/tmp/does-not-exist-ecluse-test", &dst).unwrap();
+
+        let log = crate::log::StepLogger::new(true);
+        symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
+
+        assert_eq!(
+            std::fs::read_link(&dst).unwrap(),
+            dir.path().join(".env"),
+            "stale symlink should be replaced"
+        );
+    }
+
+    // User-owned worktree: real file present → leave it alone, no clobber.
+    #[test]
+    fn symlink_env_files_skips_real_file_in_worktree() {
+        let (dir, wt_path) = setup_symlink_test(".env");
+        let dst = wt_path.join(".env");
+        std::fs::write(&dst, "USER=custom\n").unwrap(); // real file, not a symlink
+
+        let log = crate::log::StepLogger::new(true);
+        symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
+
+        // Must still be a regular file with original content.
+        assert!(std::fs::read_link(&dst).is_err(), "must not be converted to symlink");
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "USER=custom\n");
+    }
+
+    // Source absent in root → no symlink created (file simply doesn't exist yet).
+    #[test]
+    fn symlink_env_files_skips_missing_src() {
+        let dir = TempDir::new().unwrap();
+        let wt_path = dir.path().join("worktree");
+        std::fs::create_dir_all(&wt_path).unwrap();
+        // .env does NOT exist in root
+
+        let log = crate::log::StepLogger::new(true);
+        symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
+
+        assert!(!wt_path.join(".env").exists(), "no symlink should be created");
+    }
+
+    // Multiple files: each handled independently.
+    #[test]
+    fn symlink_env_files_handles_multiple_files_independently() {
+        let dir = TempDir::new().unwrap();
+        let wt_path = dir.path().join("worktree");
+        std::fs::create_dir_all(&wt_path).unwrap();
+
+        std::fs::write(dir.path().join(".env"), "A=1\n").unwrap();
+        std::fs::write(dir.path().join(".env.local"), "B=2\n").unwrap();
+        // .env.local already exists as a real file in the worktree
+        std::fs::write(wt_path.join(".env.local"), "USER=local\n").unwrap();
+
+        let log = crate::log::StepLogger::new(true);
+        symlink_env_files(
+            dir.path(),
+            &wt_path,
+            &[".env".into(), ".env.local".into()],
+            &log,
+        )
+        .unwrap();
+
+        // .env: missing → symlinked
+        assert!(std::fs::read_link(wt_path.join(".env")).is_ok());
+        // .env.local: real file → untouched
+        assert!(std::fs::read_link(wt_path.join(".env.local")).is_err());
+        assert_eq!(
+            std::fs::read_to_string(wt_path.join(".env.local")).unwrap(),
+            "USER=local\n"
         );
     }
 
