@@ -25,11 +25,15 @@ base_port = 3000             # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 �
 command = "npm run dev"      # optional — omit for port-allocation-only
 # port_env = "DJANGO_PORT"  # optional — also set DJANGO_PORT to the allocated port
 # port_env = ["DJANGO_PORT", "APP_PORT"]  # or multiple aliases
+# extra_ports = [{ base_port = 9229, port_env = "NODE_INSPECT_PORT" }]
+#   slot 1 → NODE_INSPECT_PORT=9230, slot 2 → 9231 (also published in docker overlay)
 
 [[services]]
 name = "postgres"
 run = "docker"
 base_port = 5432             # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
+# extra_ports = [{ base_port = 11533, port_env = "PGPORT" }]
+#   slot 1 → PGPORT=11534 (injected into compose env so compose files can interpolate ${PGPORT})
 
 # Env file inheritance — files symlinked from repo root into each worktree
 # Default: [".env", ".env.local"]. Set to [] to opt out.
@@ -66,7 +70,8 @@ Each `[[services]]` block defines one service. Each gets a stable, collision-fre
 | `run` | string | `"docker"` to run in a container; omit for native |
 | `command` | string | Shell command ecluse spawns on `ecluse up` and uses to identify the process during `ecluse sync`. Managed by your global `process_manager` setting. Omit to use **port-allocation-only mode** — ecluse allocates the port and injects env vars; you start the process yourself (e.g. via a task runner). |
 | `port_env` | string or array | Extra env var names to set to this service's allocated port — accepts a single string or an array |
-| `debug_port` | integer | Secondary port for debuggers or auxiliary servers: `debug_port + slot` → `ECLUSE_<NAME>_DEBUG_PORT`. Use when a service exposes a second listener (Node.js `--inspect`, Delve, debugpy, pprof, etc.) and multiple parallel sessions would collide on a hardcoded default port. |
+| `extra_ports` | array | Additional per-slot port allocations. Each entry has `base_port` and `port_env`: `port_env` is set to `base_port + slot` in the process environment and (for docker services) published as a host→container port binding in the compose overlay. Use for debugger ports, auxiliary listeners, and any secondary port a service exposes. Example: `extra_ports = [{ base_port = 9229, port_env = "NODE_INSPECT_PORT" }]` |
+| `debug_port` | integer | *Deprecated — use `extra_ports` instead.* Secondary port: `debug_port + slot` → `ECLUSE_<NAME>_DEBUG_PORT`. Still works for backward compatibility; `ecluse validate` emits a deprecation warning when set. |
 
 The first native (non-docker) service entry also sets `PORT` for framework compatibility.
 

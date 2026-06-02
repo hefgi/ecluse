@@ -218,7 +218,8 @@ All vars are in the JSON from `ecluse up --json` or `ecluse env <slug>`.
 |---|---|---|
 | `PORT` | `3001` | Alias for the first native `[[services]]` entry — never hardcode 3000 |
 | `ECLUSE_<NAME>_PORT` | `ECLUSE_API_PORT=3001` | Per-service port: `base_port + slot` |
-| `ECLUSE_<NAME>_DEBUG_PORT` | `ECLUSE_API_DEBUG_PORT=9230` | Secondary debugger/auxiliary port: `debug_port + slot` (only emitted when `debug_port` is set in `.ecluse.toml`) |
+| `<port_env>` | `NODE_INSPECT_PORT=9230` | Custom var from `extra_ports[].port_env`: `base_port + slot`. Also published as a host→container binding in docker overlays. |
+| `ECLUSE_<NAME>_DEBUG_PORT` | `ECLUSE_API_DEBUG_PORT=9230` | *Deprecated — use `extra_ports` instead.* Emitted when `debug_port` is set in `.ecluse.toml`. |
 | `ECLUSE_SLOT` | `1` | Slot number |
 | `ECLUSE_SLUG` | `feat-auth` | Session slug |
 | `ECLUSE_MODE` | `hybrid` | `container`, `host`, or `hybrid` |
@@ -380,7 +381,7 @@ ecluse down feat-foo --keep-volumes   # keeps volumes
 - **Hardcoded port in app code or config file** — use a CLI flag in `command` or `port_env` in `.ecluse.toml` before modifying app source; see Port wiring section in Agent Workflow
 - **`--watch` requires Compose v2.22+** — pass `ecluse up --watch`
 - **Invoking `docker compose` directly** — the overlay won't be included; use `ecluse up` or add `-f .ecluse/overlays/<slug>.yml`
-- **Multiple services collide on a shared debugger/auxiliary port** — Node.js `--inspect` defaults to 9229, Delve to 2345, debugpy to 5678, etc. When multiple services share a default, the second one fails with `EADDRINUSE`. Fix: add `debug_port` to each conflicting `[[services]]` block and pass the allocated port explicitly in `command` (e.g. `NODE_OPTIONS='--inspect=0.0.0.0:$ECLUSE_<NAME>_DEBUG_PORT'`, `dlv ... --listen=:$ECLUSE_<NAME>_DEBUG_PORT`)
+- **Multiple services collide on a shared debugger/auxiliary port** — Node.js `--inspect` defaults to 9229, Delve to 2345, debugpy to 5678, etc. When multiple services share a default, the second one fails with `EADDRINUSE`. Fix: add `extra_ports = [{ base_port = 9229, port_env = "NODE_INSPECT_PORT" }]` to each conflicting `[[services]]` block and pass the allocated var in `command` (e.g. `NODE_OPTIONS='--inspect=0.0.0.0:$NODE_INSPECT_PORT'`, `dlv ... --listen=:$NODE_INSPECT_PORT`). For docker services the port is also published as a host→container binding automatically.
 
 ---
 
@@ -661,15 +662,18 @@ command = "npm run dev" # optional — ecluse spawns this on ecluse up
 #                       # env vars; you (or a task runner) start the process yourself
 # port_env = "DJANGO_PORT"              # also set DJANGO_PORT = allocated port
 # port_env = ["DJANGO_PORT", "APP_PORT"] # or multiple aliases
-# debug_port = 9229   # optional — ECLUSE_API_DEBUG_PORT = 9229 + slot
-#   use when services share a hardcoded debugger/auxiliary default port:
-#   Node.js: command = "NODE_OPTIONS='--inspect=0.0.0.0:$ECLUSE_API_DEBUG_PORT' npm run dev"
-#   Delve:   command = "dlv debug --headless --listen=:$ECLUSE_API_DEBUG_PORT ./cmd/api"
+# extra_ports = [{ base_port = 9229, port_env = "NODE_INSPECT_PORT" }]
+#   slot 1 → NODE_INSPECT_PORT=9230; for docker services also published as 9230:9229 in overlay
+#   use for debugger ports, auxiliary listeners, or any secondary port the service exposes:
+#   Node.js: command = "NODE_OPTIONS='--inspect=0.0.0.0:$NODE_INSPECT_PORT' npm run dev"
+#   Delve:   command = "dlv debug --headless --listen=:$NODE_INSPECT_PORT ./cmd/api"
 
 [[services]]
 name = "postgres"
 run = "docker"
 base_port = 5432        # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
+# extra_ports = [{ base_port = 11533, port_env = "PGPORT" }]
+#   slot 1 → PGPORT=11534 in compose env; also published as 11534:11533 in the overlay
 # compose = "services/postgres/docker-compose.yml"  # optional: per-service compose file
 
 # Optional: lifecycle hooks — run in the worktree with all env vars set

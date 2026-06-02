@@ -7,10 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `extra_ports` field on `[[services]]` blocks: a list of additional per-slot port allocations, each with `base_port` and `port_env`. The env var is set to `base_port + slot` in the process environment. For docker services the port is also published as a host→container binding in the compose overlay and injected into `compose_env` so compose files can interpolate it (e.g. `${PGPORT}`). This is the generic replacement for `debug_port` — use it for debugger ports (Node.js `--inspect`, Delve, debugpy, pprof), auxiliary listeners, or any secondary port a service exposes.
+- `debug_port` is now deprecated. It continues to work — existing configs are unchanged — but `ecluse validate` emits a warning and `extra_ports` should be used for new configs.
+
 ### Fixed
 - `ecluse down` (hybrid mode) now always stops Docker containers even when no overlay file paths are recorded in session state. Previously, if `overlay_file` was absent from state, `docker compose down` was never called and containers kept running silently.
 - `ecluse up` from inside a non-ecluse git worktree (e.g. a sibling path, not under `.ecluse/worktrees/`) now correctly uses the actual worktree directory instead of computing a path under `worktree_dir`. Previously the computed path didn't exist and `ecluse up` failed with a "worktree not found" error.
 - `ecluse status`, `ecluse ls`, `ecluse env`, and `ecluse shell` now acquire a shared (read-only) lock instead of an exclusive lock. These commands no longer time out with "another ecluse process may be running" when a long-running `ecluse up` holds the exclusive lock.
+- Port collision detection now checks `docker ps` host-port bindings in addition to `lsof`. Docker containers claim host ports before they start listening, so an `lsof`-only check could pick a port already reserved by a container. Both checks are best-effort: if Docker is unavailable, the check is skipped and never blocks.
 
 ---
 
