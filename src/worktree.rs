@@ -127,6 +127,25 @@ impl WorktreeManager {
     }
 }
 
+/// Returns the root directory of the git worktree that contains `cwd`.
+/// Uses `git rev-parse --show-toplevel` which outputs the worktree root, not the repo root.
+pub fn git_worktree_root(cwd: &Path) -> anyhow::Result<PathBuf> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd)
+        .output()
+        .context("failed to run git rev-parse --show-toplevel")?;
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "git rev-parse --show-toplevel failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(PathBuf::from(
+        String::from_utf8_lossy(&output.stdout).trim(),
+    ))
+}
+
 /// Returns true if `cwd` is inside a linked git worktree (not the main worktree).
 /// Detects this by checking whether `git rev-parse --git-dir` output contains
 /// `/.git/worktrees/`, which git writes only for linked worktrees.

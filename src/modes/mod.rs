@@ -23,6 +23,7 @@ pub trait ModeHandler {
         watch: bool,
         reuse_worktree: bool,
         no_inherit_env: bool,
+        worktree_override: Option<std::path::PathBuf>,
         port_overrides: &std::collections::HashMap<String, u16>,
         service_filter: Option<&std::collections::HashSet<String>>,
         skip_services: &std::collections::HashSet<String>,

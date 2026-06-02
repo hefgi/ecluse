@@ -443,10 +443,10 @@ fn resolve_slug_and_branch(
     arg: &Option<String>,
     guard: &state::StateGuard,
     _root: &std::path::Path,
-) -> Result<(String, String, bool)> {
+) -> Result<(String, String, bool, Option<std::path::PathBuf>)> {
     if let Some(input) = arg {
         let (slug, branch) = sanitize_to_slug(input)?;
-        return Ok((slug, branch, false));
+        return Ok((slug, branch, false, None));
     }
 
     let cwd = std::env::current_dir().context("could not determine current directory")?;
@@ -458,20 +458,21 @@ fn resolve_slug_and_branch(
         .iter()
         .find(|s| cwd.starts_with(std::path::Path::new(&s.worktree_path)))
     {
-        return Ok((session.slug.clone(), session.branch.clone(), true));
+        return Ok((session.slug.clone(), session.branch.clone(), true, None));
     }
 
-    // 2. Inside a non-ecluse git worktree → auto-register it.
+    // 2. Inside a non-ecluse git worktree → auto-register it, preserving the actual path.
     if worktree::is_inside_git_worktree(&cwd) {
+        let actual_root = worktree::git_worktree_root(&cwd)?;
         let branch = current_git_branch(&cwd)?;
         let (slug, branch) = sanitize_to_slug(&branch)?;
-        return Ok((slug, branch, true));
+        return Ok((slug, branch, true, Some(actual_root)));
     }
 
     // 3. In main worktree / repo root → prompt for branch name.
     let branch = prompt_branch_name()?;
     let (slug, branch) = sanitize_to_slug(&branch)?;
-    Ok((slug, branch, false))
+    Ok((slug, branch, false, None))
 }
 
 fn resolve_slug_from_args(
@@ -579,7 +580,8 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
     let mut guard = state::StateGuard::acquire(&root)?;
 
     // Resolve slug + branch: from arg, ecluse worktree state, non-ecluse worktree, or prompt.
-    let (slug, branch, implicit_reuse) = resolve_slug_and_branch(&args.slug, &guard, &root)?;
+    let (slug, branch, implicit_reuse, worktree_override) =
+        resolve_slug_and_branch(&args.slug, &guard, &root)?;
     validate_branch(&branch)?;
 
     // Resume path: session already exists — restart/skip services idempotently.
@@ -615,6 +617,7 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         args.watch,
         args.reuse_worktree || implicit_reuse,
         args.no_inherit_env,
+        worktree_override,
         &port_overrides,
         service_filter.as_ref(),
         &std::collections::HashSet::new(),
@@ -795,6 +798,7 @@ fn cmd_up_resume(
         args.watch,
         true, // always reuse-worktree on resume
         args.no_inherit_env,
+        None, // worktree path already recorded in existing session
         &port_overrides,
         service_filter.as_ref(),
         &skip_services,

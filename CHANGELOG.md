@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - `ecluse down` (hybrid mode) now always stops Docker containers even when no overlay file paths are recorded in session state. Previously, if `overlay_file` was absent from state, `docker compose down` was never called and containers kept running silently.
+- `ecluse up` from inside a non-ecluse git worktree (e.g. a sibling path, not under `.ecluse/worktrees/`) now correctly uses the actual worktree directory instead of computing a path under `worktree_dir`. Previously the computed path didn't exist and `ecluse up` failed with a "worktree not found" error.
 
 ---
 

@@ -25,6 +25,7 @@ impl super::ModeHandler for HostMode {
         _watch: bool,
         reuse_worktree: bool,
         no_inherit_env: bool,
+        worktree_override: Option<std::path::PathBuf>,
         port_overrides: &std::collections::HashMap<String, u16>,
         service_filter: Option<&std::collections::HashSet<String>>,
         skip_services: &std::collections::HashSet<String>,
@@ -32,7 +33,7 @@ impl super::ModeHandler for HostMode {
         log: &StepLogger,
     ) -> Result<Session> {
         let wt = WorktreeManager::new(root.to_owned());
-        let worktree_path = wt.worktree_path(config, slug);
+        let worktree_path = worktree_override.unwrap_or_else(|| wt.worktree_path(config, slug));
         let native_svcs: Vec<_> = config
             .native_services()
             .into_iter()
