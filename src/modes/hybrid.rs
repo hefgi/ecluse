@@ -467,14 +467,24 @@ impl super::ModeHandler for HybridMode {
                 .chain(session.overlay_files.iter().cloned())
                 .collect();
 
-            if !all_overlays.is_empty() {
-                log.step("Stopping docker services...");
-            }
+            log.step("Stopping docker services...");
 
-            tear_down_all_overlays(project, root, &all_overlays, !keep_volumes);
-
-            for ov in &all_overlays {
-                let _ = std::fs::remove_file(ov);
+            if all_overlays.is_empty() {
+                // No overlay paths recorded in state — fall back to the root compose file
+                // so containers are always stopped even if state was written without overlays.
+                if let Some(cp) = compose::find_compose_file(root) {
+                    let _ = crate::docker::compose_down(
+                        project,
+                        &cp.to_string_lossy(),
+                        None,
+                        !keep_volumes,
+                    );
+                }
+            } else {
+                tear_down_all_overlays(project, root, &all_overlays, !keep_volumes);
+                for ov in &all_overlays {
+                    let _ = std::fs::remove_file(ov);
+                }
             }
         }
 

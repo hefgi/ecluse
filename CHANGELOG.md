@@ -5,10 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- `ecluse down` (hybrid mode) now always stops Docker containers even when no overlay file paths are recorded in session state. Previously, if `overlay_file` was absent from state, `docker compose down` was never called and containers kept running silently.
+
+---
+
 ## [0.2.12] — 2026-06-02
 
 ### Changed
 - `command` is now optional for native services. Omitting it puts the service in **port-allocation-only mode**: ecluse allocates the port and injects all `ECLUSE_*` env vars, but does not spawn or manage the process — start it yourself via a task runner, `post_up` hook, or any other means. `ecluse validate` emits a warning (not an error) when `command` is absent.
+
+### Fixed
+- `ecluse down` (hybrid mode) now always stops Docker containers even when no overlay file paths are recorded in session state. Previously, if `overlay_file` was absent from state, `docker compose down` was never called and containers kept running silently.
 
 ---
 
