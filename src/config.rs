@@ -306,6 +306,18 @@ impl Config {
                 let config = Self::load(&root)?;
                 return Ok((config, root));
             }
+            // In a git repo but no .ecluse.toml — give a context-aware hint.
+            let is_linked_worktree = crate::worktree::is_inside_git_worktree(&cwd);
+            if is_linked_worktree {
+                return Err(anyhow::anyhow!(
+                    "no .ecluse.toml found; run `ecluse init` in the main repo root ({})",
+                    root.display()
+                ));
+            } else {
+                return Err(anyhow::anyhow!(
+                    "no .ecluse.toml found; run `ecluse init` to set up ecluse for this repo"
+                ));
+            }
         }
         // Fall back to filesystem walk for non-git directories.
         let mut dir = cwd.as_path();
