@@ -64,13 +64,16 @@ ecluse ls                                # see active sessions
 ecluse down feat-foo --delete-worktree   # clean teardown (--delete-worktree skips the interactive prompt)
 ```
 
-**Important — use a long timeout for `ecluse up` and `ecluse down`.**
-Both commands run `post_up` / `pre_down` hooks synchronously. A `post_up` hook that polls until postgres is ready can take 30–120 seconds. Claude Code's default bash tool timeout is 120 seconds — if the hook takes longer, the process is SIGKILLed (exit 137) and the session is left in a broken state.
-
-Always invoke `ecluse up` and `ecluse down` with a timeout of at least 300 000 ms (5 minutes):
+**Important — use a long timeout for `ecluse up` and use `--delete-worktree` for `ecluse down`.**
+`ecluse up` runs `post_up` hooks synchronously — a hook that polls until postgres is ready can take 30–120 seconds. Always invoke with a generous timeout:
 ```
 Bash({"command": "ecluse up feat-foo --json", "timeout": 300000})
-Bash({"command": "ecluse down feat-foo --delete-worktree", "timeout": 300000})
+```
+
+`ecluse down` prompts interactively before removing a worktree when neither `--keep-worktree` nor `--delete-worktree` is passed. In a non-interactive context (agents, CI) this blocks until killed. Always pass one of those flags:
+```
+Bash({"command": "ecluse down feat-foo --delete-worktree"})
+Bash({"command": "ecluse down feat-foo --keep-worktree"})
 ```
 
 Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Use `ecluse up --json` or `ecluse env <slug>` to get the worktree path and env, then operate directly.
