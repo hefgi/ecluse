@@ -1,5 +1,13 @@
 # Port allocation
 
+## Why not let Docker assign ports?
+
+Docker prevents container bind failures — but ecluse solves a different problem.
+
+A session has native processes (your app server, dev watcher) alongside containers. Docker has no authority over native ports, so two branches both binding port 3000 natively will still collide. And even for containers, Docker can only assign a port *after* startup — but your native app needs `DATABASE_URL` with the right port *before* it starts.
+
+Ecluse pre-allocates a consistent, non-overlapping port set for the entire session — native and container alike — so everything has the right addresses before anything starts.
+
 ## Formula
 
 Each service gets a port derived from the slot:
