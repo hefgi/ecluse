@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.2.14] — 2026-06-03
 
 ### Added
 - `ecluse status`: port-allocation-only services (no `command`) now show `—` in the STATUS column instead of `✗ down`. They are not counted in the "N services down" summary, do not trigger exit code 1, and have `"managed": false` in JSON output. This prevents agents from treating unmanaged services as failures.
