@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - `ecluse status`: port-allocation-only services (no `command`) now show `—` in the STATUS column instead of `✗ down`. They are not counted in the "N services down" summary, do not trigger exit code 1, and have `"managed": false` in JSON output. This prevents agents from treating unmanaged services as failures.
+- tmux windows now source `.env`, `.env.local`, and `.env.ecluse` before running the service command. Manual restarts inside a tmux window (`↑ Enter`) automatically have the correct environment without needing `source .env.ecluse &&` in every `command` field. Load order: `.env` → `.env.local` → `.env.ecluse` (ecluse slot vars win on overlap).
+- nohup-spawned services now receive vars from `.env`, `.env.local`, and `.env.ecluse` merged into their environment at spawn time, consistent with tmux behaviour.
 
 ### Fixed
 - `ecluse up` with no argument now fails fast with an actionable error when stdin is not a terminal (CI, agents, piped shells), instead of blocking on a branch-name prompt until killed.
