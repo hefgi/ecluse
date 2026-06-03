@@ -189,10 +189,47 @@ fn tmux_session_exists(session: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Parse a .env-style file into key=value pairs. Lines starting with `#`
+/// and blank lines are skipped. Values are not unquoted — taken as-is.
+fn parse_env_file(path: &Path) -> std::collections::HashMap<String, String> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return std::collections::HashMap::new();
+    };
+    content
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#') && l.contains('='))
+        .filter_map(|l| {
+            let (k, v) = l.split_once('=')?;
+            let k = k.trim().to_string();
+            if k.is_empty() {
+                return None;
+            }
+            Some((k, v.to_string()))
+        })
+        .collect()
+}
+
+/// Merge .env → .env.local → .env.ecluse from `worktree` into `base`,
+/// with later files winning on overlap. Returns the merged map.
+/// Files that don't exist are silently skipped.
+pub fn merge_worktree_env(
+    worktree: &Path,
+    base: &std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<String, String> {
+    let mut merged = base.clone();
+    for file in [".env", ".env.local", ".env.ecluse"] {
+        let path = worktree.join(file);
+        if path.exists() {
+            merged.extend(parse_env_file(&path));
+        }
+    }
+    merged
+}
+
 /// Build a shell one-liner that sources env files present in `worktree`,
 /// in order: .env → .env.local → .env.ecluse (ecluse vars win on overlap).
 /// Files that don't exist are silently skipped.
-/// This is sent as a separate command before the service command so that
+/// Sent as a separate command before the service command so that
 /// manual restarts inside the tmux window (`↑ Enter`) also have the env.
 fn build_source_preamble(worktree: &Path) -> String {
     let files = [".env", ".env.local", ".env.ecluse"];
@@ -211,7 +248,8 @@ fn spawn_tmux(
     env: &std::collections::HashMap<String, String>,
 ) -> Result<SpawnResult> {
     let session = tmux_session_name(slug);
-    let env_prefix = build_env_prefix(worktree, env);
+    let merged_env = merge_worktree_env(worktree, env);
+    let env_prefix = build_env_prefix(worktree, &merged_env);
     let source_preamble = build_source_preamble(worktree);
 
     // Kill any stale tmux session with this name (processes exited but shell remains).
@@ -320,6 +358,7 @@ fn spawn_nohup(
     std::fs::create_dir_all(&log_dir)?;
     std::fs::create_dir_all(&pid_dir)?;
 
+    let merged_env = merge_worktree_env(worktree, env);
     let mut pid_files = vec![];
 
     for svc in services {
@@ -338,7 +377,7 @@ fn spawn_nohup(
             .arg("-c")
             .arg(cmd)
             .current_dir(worktree)
-            .envs(env)
+            .envs(&merged_env)
             .stdout(log_file)
             .stderr(log_file2)
             .process_group(0)
@@ -526,5 +565,63 @@ mod tests {
         assert!(result.pid_files[0].exists());
         // Clean up the spawned process
         kill_services(&ProcessManager::Nohup, &result);
+    }
+
+    #[test]
+    fn parse_env_file_reads_key_value_pairs() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "FOO=bar\nBAZ=qux\n").unwrap();
+        let map = parse_env_file(&path);
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(map.get("BAZ").map(String::as_str), Some("qux"));
+    }
+
+    #[test]
+    fn parse_env_file_skips_comments_and_blanks() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "# comment\n\nFOO=bar\n").unwrap();
+        let map = parse_env_file(&path);
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    #[test]
+    fn parse_env_file_returns_empty_for_missing_file() {
+        let map = parse_env_file(std::path::Path::new("/nonexistent/.env"));
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn merge_worktree_env_ecluse_wins_on_overlap() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join(".env"), "PORT=3000\nSHARED=from-env\n").unwrap();
+        std::fs::write(dir.path().join(".env.ecluse"), "PORT=3001\nECLUSE_SLOT=2\n").unwrap();
+        let base = std::collections::HashMap::new();
+        let merged = merge_worktree_env(dir.path(), &base);
+        // .env.ecluse wins over .env for PORT
+        assert_eq!(merged.get("PORT").map(String::as_str), Some("3001"));
+        assert_eq!(merged.get("ECLUSE_SLOT").map(String::as_str), Some("2"));
+        assert_eq!(merged.get("SHARED").map(String::as_str), Some("from-env"));
+    }
+
+    #[test]
+    fn merge_worktree_env_base_preserved_when_no_files() {
+        let dir = TempDir::new().unwrap();
+        let mut base = std::collections::HashMap::new();
+        base.insert("EXISTING".to_string(), "value".to_string());
+        let merged = merge_worktree_env(dir.path(), &base);
+        assert_eq!(merged.get("EXISTING").map(String::as_str), Some("value"));
+    }
+
+    #[test]
+    fn merge_worktree_env_env_local_overrides_env() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join(".env"), "KEY=from-env\n").unwrap();
+        std::fs::write(dir.path().join(".env.local"), "KEY=from-local\n").unwrap();
+        let base = std::collections::HashMap::new();
+        let merged = merge_worktree_env(dir.path(), &base);
+        assert_eq!(merged.get("KEY").map(String::as_str), Some("from-local"));
     }
 }
