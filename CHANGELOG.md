@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- `ecluse status`: port-allocation-only services (no `command`) now show `—` in the STATUS column instead of `✗ down`. They are not counted in the "N services down" summary, do not trigger exit code 1, and have `"managed": false` in JSON output. This prevents agents from treating unmanaged services as failures.
+
+### Fixed
+- `ecluse up` with no argument now fails fast with an actionable error when stdin is not a terminal (CI, agents, piped shells), instead of blocking on a branch-name prompt until killed.
+- `ecluse down` and `ecluse shutdown` pre/post hook failures now emit a warning and continue teardown instead of aborting. Teardown must always complete regardless of hook exit codes.
+- Error messages when no `.ecluse.toml` is found or no active session exists are now context-aware: the hint differs depending on whether the cwd is a linked git worktree, the repo root, or unrelated to any known session.
+
+---
+
 ## [0.2.13] — 2026-06-02
 
 ### Added
