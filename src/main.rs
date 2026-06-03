@@ -493,18 +493,42 @@ fn resolve_slug_from_args(
         }
         None => {
             let cwd = std::env::current_dir().context("could not determine current directory")?;
-            guard
+
+            // Inside an active ecluse session — use it.
+            if let Some(session) = guard
                 .state
                 .sessions
                 .iter()
                 .find(|s| cwd.starts_with(std::path::Path::new(&s.worktree_path)))
-                .map(|s| s.slug.clone())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "not inside an ecluse worktree; pass a slug or cd into a worktree\n  hint: {}",
-                        hint
+            {
+                return Ok(session.slug.clone());
+            }
+
+            // No active session — give a context-aware hint.
+            let msg = if worktree::is_inside_git_worktree(&cwd) {
+                // Inside a linked git worktree with no active session (e.g. torn down).
+                let branch = current_git_branch(&cwd).unwrap_or_else(|_| "this branch".into());
+                format!(
+                    "no active session for '{branch}'; run `ecluse up` to start one\n  hint: {hint}"
+                )
+            } else if let Ok(root) = worktree::WorktreeManager::main_worktree_root(&cwd) {
+                if cwd == root {
+                    // At repo root — no sessions at all.
+                    format!(
+                        "no active sessions; run `ecluse up <branch>` to start one\n  hint: {hint}"
                     )
-                })
+                } else {
+                    format!(
+                        "not inside an ecluse worktree; pass a slug or cd into a worktree\n  hint: {hint}"
+                    )
+                }
+            } else {
+                format!(
+                    "not inside an ecluse worktree; pass a slug or cd into a worktree\n  hint: {hint}"
+                )
+            };
+
+            Err(anyhow::anyhow!("{msg}"))
         }
     }
 }
