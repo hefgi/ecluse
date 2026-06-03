@@ -1786,6 +1786,9 @@ struct ServiceStatus {
     kind: &'static str,
     port: Option<u16>,
     healthy: bool,
+    /// False for port-allocation-only native services (no command) — ecluse
+    /// never spawns them, so their health is not ecluse's responsibility.
+    managed: bool,
     pid: Option<u32>,
     tmux_window: Option<String>,
 }
@@ -1928,11 +1931,15 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
         } else {
             None
         };
+        // Port-allocation-only services (no command) are never spawned by
+        // ecluse — don't report them as down.
+        let managed = svc.command.is_some();
         statuses.push(ServiceStatus {
             name: svc.name.clone(),
             kind: "native",
             port,
-            healthy,
+            healthy: healthy || !managed,
+            managed,
             pid,
             tmux_window,
         });
@@ -1950,12 +1957,13 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
             kind: "docker",
             port,
             healthy,
+            managed: true,
             pid: None,
             tmux_window: None,
         });
     }
 
-    let all_healthy = statuses.iter().all(|s| s.healthy);
+    let all_healthy = statuses.iter().all(|s| !s.managed || s.healthy);
 
     if args.json {
         let services_json: Vec<serde_json::Value> = statuses
@@ -1966,6 +1974,7 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
                     "type": s.kind,
                     "port": s.port,
                     "healthy": s.healthy,
+                    "managed": s.managed,
                     "pid": s.pid,
                     "tmux_window": s.tmux_window,
                 })
@@ -1998,7 +2007,9 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
             println!("No services defined in .ecluse.toml.");
         } else {
             let status_str = |s: &ServiceStatus| -> String {
-                if s.healthy {
+                if !s.managed {
+                    "\u{2014}".into() // — port-only, not ecluse-managed
+                } else if s.healthy {
                     "\u{2713} up".into()
                 } else {
                     "\u{2717} down".into()
@@ -2049,7 +2060,7 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
             }
             println!();
 
-            let down_count = statuses.iter().filter(|s| !s.healthy).count();
+            let down_count = statuses.iter().filter(|s| s.managed && !s.healthy).count();
             if down_count > 0 {
                 eprintln!(
                     "{} service{} down",
