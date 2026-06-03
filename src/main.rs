@@ -530,7 +530,9 @@ fn resolve_worktree_keep(
     }
     use worktree::WorktreeRemovalChoice;
     match worktree::prompt_worktree_removal(worktree_path) {
-        WorktreeRemovalChoice::Stop => Err(anyhow::anyhow!("aborted")),
+        WorktreeRemovalChoice::Stop => Err(anyhow::anyhow!(
+            "aborted; pass --keep-worktree to preserve it or -y to delete it"
+        )),
         WorktreeRemovalChoice::KeepWorktree => Ok(true),
         WorktreeRemovalChoice::DeleteWorktree => Ok(false),
     }

@@ -16,6 +16,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ecluse up` from inside a non-ecluse git worktree (e.g. a sibling path, not under `.ecluse/worktrees/`) now correctly uses the actual worktree directory instead of computing a path under `worktree_dir`. Previously the computed path didn't exist and `ecluse up` failed with a "worktree not found" error.
 - `ecluse status`, `ecluse ls`, `ecluse env`, and `ecluse shell` now acquire a shared (read-only) lock instead of an exclusive lock. These commands no longer time out with "another ecluse process may be running" when a long-running `ecluse up` holds the exclusive lock.
 - Port collision detection now checks `docker ps` host-port bindings in addition to `lsof`. Docker containers claim host ports before they start listening, so an `lsof`-only check could pick a port already reserved by a container. Both checks are best-effort: if Docker is unavailable, the check is skipped and never blocks.
+- `ecluse down` and `ecluse shutdown` no longer block indefinitely when run non-interactively (CI, Claude Code Bash tool, piped shells). The worktree-removal prompt now detects non-interactive stdin and returns immediately with an actionable error instead of hanging until SIGKILL. Pass `--delete-worktree` / `-y` or `--keep-worktree` to skip the prompt.
 
 ---
 

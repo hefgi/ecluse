@@ -213,8 +213,15 @@ pub fn has_uncommitted_changes(path: &Path) -> bool {
 /// uncommitted-changes warning when dirty. Reads directly from /dev/tty
 /// so it works even when stdout/stderr are piped.
 ///
-/// Returns the user's choice. On any I/O error or EOF, returns Stop (safe default).
+/// Returns the user's choice. Returns Stop immediately when stdin is not a
+/// terminal (CI, piped shells, Claude Code Bash tool).
 pub fn prompt_worktree_removal(path: &Path) -> WorktreeRemovalChoice {
+    // Non-interactive: stdin is a pipe, not a terminal. Return Stop so the
+    // caller can emit an actionable error rather than blocking forever.
+    if !is_tty_interactive() {
+        return WorktreeRemovalChoice::Stop;
+    }
+
     let dirty = has_uncommitted_changes(path);
 
     // Write prompt to stderr so it is visible even when stdout is redirected.
@@ -236,6 +243,13 @@ pub fn prompt_worktree_removal(path: &Path) -> WorktreeRemovalChoice {
         "3" => WorktreeRemovalChoice::DeleteWorktree,
         _ => WorktreeRemovalChoice::Stop,
     }
+}
+
+/// Returns true only when stdin is connected to a terminal (i.e. a human is present).
+/// False in CI, piped shells, and Claude Code's Bash tool (where stdin is a pipe).
+fn is_tty_interactive() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
 }
 
 fn read_tty_line() -> std::io::Result<String> {
@@ -460,7 +474,10 @@ mod tests {
         symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
 
         // Must still be a regular file with original content.
-        assert!(std::fs::read_link(&dst).is_err(), "must not be converted to symlink");
+        assert!(
+            std::fs::read_link(&dst).is_err(),
+            "must not be converted to symlink"
+        );
         assert_eq!(std::fs::read_to_string(&dst).unwrap(), "USER=custom\n");
     }
 
@@ -475,7 +492,10 @@ mod tests {
         let log = crate::log::StepLogger::new(true);
         symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
 
-        assert!(!wt_path.join(".env").exists(), "no symlink should be created");
+        assert!(
+            !wt_path.join(".env").exists(),
+            "no symlink should be created"
+        );
     }
 
     // Multiple files: each handled independently.
