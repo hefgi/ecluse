@@ -39,6 +39,9 @@ jobs:
       - name: Generate llms.txt
         run: bash docs/build-llms.sh
 
+      - name: Add CNAME for custom domain
+        run: echo "ecluse.ai" > docs/book/CNAME
+
       - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
