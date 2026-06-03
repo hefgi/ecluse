@@ -189,6 +189,21 @@ fn tmux_session_exists(session: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Build a shell one-liner that sources env files present in `worktree`,
+/// in order: .env → .env.local → .env.ecluse (ecluse vars win on overlap).
+/// Files that don't exist are silently skipped.
+/// This is sent as a separate command before the service command so that
+/// manual restarts inside the tmux window (`↑ Enter`) also have the env.
+fn build_source_preamble(worktree: &Path) -> String {
+    let files = [".env", ".env.local", ".env.ecluse"];
+    files
+        .iter()
+        .filter(|f| worktree.join(f).exists())
+        .map(|f| format!("set -a; source {}; set +a", shell_escape(f)))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn spawn_tmux(
     slug: &str,
     services: &[&&ServiceConfig],
@@ -197,6 +212,7 @@ fn spawn_tmux(
 ) -> Result<SpawnResult> {
     let session = tmux_session_name(slug);
     let env_prefix = build_env_prefix(worktree, env);
+    let source_preamble = build_source_preamble(worktree);
 
     // Kill any stale tmux session with this name (processes exited but shell remains).
     if tmux_session_exists(&session) {
@@ -226,19 +242,13 @@ fn spawn_tmux(
     for (i, svc) in services.iter().enumerate() {
         let cmd = svc.command.as_deref().unwrap();
         let full_cmd = format!("{}; {}", env_prefix, cmd);
+        let target = if i == 0 {
+            format!("{}:0", session)
+        } else {
+            format!("{}:{}", session, svc.name)
+        };
 
         if i == 0 {
-            // Send to the initial window (window 0)
-            Command::new("tmux")
-                .args([
-                    "send-keys",
-                    "-t",
-                    &format!("{}:0", session),
-                    &full_cmd,
-                    "Enter",
-                ])
-                .status()
-                .ok();
             // Rename window 0
             Command::new("tmux")
                 .args(["rename-window", "-t", &format!("{}:0", session), &svc.name])
@@ -250,17 +260,21 @@ fn spawn_tmux(
                 .args(["new-window", "-t", &session, "-n", &svc.name])
                 .status()
                 .ok();
+        }
+
+        // Source env files first so manual restarts (↑ Enter) in the window
+        // also have the correct environment.
+        if !source_preamble.is_empty() {
             Command::new("tmux")
-                .args([
-                    "send-keys",
-                    "-t",
-                    &format!("{}:{}", session, svc.name),
-                    &full_cmd,
-                    "Enter",
-                ])
+                .args(["send-keys", "-t", &target, &source_preamble, "Enter"])
                 .status()
                 .ok();
         }
+
+        Command::new("tmux")
+            .args(["send-keys", "-t", &target, &full_cmd, "Enter"])
+            .status()
+            .ok();
     }
 
     Ok(SpawnResult {
