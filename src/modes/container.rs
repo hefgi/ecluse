@@ -262,6 +262,22 @@ impl super::ModeHandler for ContainerMode {
         );
         env::write_env_file(&worktree_path, &env_map)?;
 
+        // pre_spawn: env is written, containers already up — use for derived env (URLs etc.)
+        if let Some(cmd) = &config.hooks.pre_spawn {
+            log.step("Running pre_spawn hook...");
+            log.detail(cmd);
+            if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
+                tear_down_all_overlays(&project, root, &written_overlays, true);
+                if !reuse_worktree {
+                    let _ = wt.remove(&worktree_path);
+                }
+                for ov in &written_overlays {
+                    let _ = std::fs::remove_file(ov);
+                }
+                return Err(e);
+            }
+        }
+
         // post_up: all containers up, full env available
         if let Some(cmd) = &config.hooks.post_up {
             log.step("Running post_up hook...");

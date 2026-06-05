@@ -207,6 +207,11 @@ pub struct HookConfig {
     /// Runs before any infrastructure is created (no env vars available yet).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_up: Option<String>,
+    /// Runs after ports are allocated and .env.ecluse is written, but before
+    /// native services are spawned. Full ECLUSE_* env is available — use this
+    /// to derive URLs or write extra vars that services need at startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_spawn: Option<String>,
     /// Runs after all services are up and the process manager has spawned native services.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_up: Option<String>,
@@ -221,6 +226,7 @@ pub struct HookConfig {
 impl HookConfig {
     pub fn is_empty(&self) -> bool {
         self.pre_up.is_none()
+            && self.pre_spawn.is_none()
             && self.post_up.is_none()
             && self.pre_down.is_none()
             && self.post_down.is_none()
@@ -233,6 +239,8 @@ impl<'de> serde::Deserialize<'de> for HookConfig {
         struct Raw {
             #[serde(default)]
             pre_up: Option<String>,
+            #[serde(default)]
+            pre_spawn: Option<String>,
             #[serde(default)]
             post_up: Option<String>,
             #[serde(default)]
@@ -248,6 +256,7 @@ impl<'de> serde::Deserialize<'de> for HookConfig {
         let raw = Raw::deserialize(deserializer)?;
         Ok(HookConfig {
             pre_up: raw.pre_up.or(raw.on_up),
+            pre_spawn: raw.pre_spawn,
             post_up: raw.post_up,
             pre_down: raw.pre_down.or(raw.on_down),
             post_down: raw.post_down,

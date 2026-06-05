@@ -328,6 +328,13 @@ impl super::ModeHandler for HybridMode {
         );
         env::write_env_file(&worktree_path, &env_map)?;
 
+        // pre_spawn: env is written, native services not yet started — use for derived env (URLs etc.)
+        if let Some(cmd) = &config.hooks.pre_spawn {
+            log.step("Running pre_spawn hook...");
+            log.detail(cmd);
+            hooks::run(cmd, &worktree_path, &env_map)?;
+        }
+
         let global = process::load_global_config()?;
 
         let native_svcs_to_spawn: Vec<_> = native_svcs
