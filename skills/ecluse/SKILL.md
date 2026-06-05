@@ -607,7 +607,7 @@ RUST_LOG=debug ecluse up feat-foo
 | `NotAGitRepo` | Not in a git repo | `git init` first |
 | `ComposeFileNotFound` | No compose file at repo root | Add compose file or switch mode |
 | `PortInUse` | Port bound by another process | `kill <pid>` then retry |
-| `HookFailed` | A hook (`pre_up`, `post_up`, `pre_down`, `post_down`) exited non-zero | Check the hook command and its output |
+| `HookFailed` | A hook (`pre_up`, `pre_spawn`, `post_up`, `pre_down`, `post_down`) exited non-zero | Check the hook command and its output |
 | `ProcessManagerUnavailable` | Configured `process_manager` binary not installed | Install it or set `process_manager = "none"` in `~/.config/ecluse/config.toml` |
 | `SpawnFailed` | Failed to spawn a native service process | Check the `command` field in `.ecluse.toml` and the binary's availability |
 
@@ -629,7 +629,7 @@ What ecluse intentionally does not do in v0. These are design decisions, not bug
 - **macOS and Linux only** — WSL2 acceptable but untested; native Windows not supported
 - **No background daemon** — every ecluse command is a short-lived process
 - **No Ctrl+C rollback guarantee** — if killed mid-`up`, run `ecluse down <slug>` to clean partial state
-- **Hooks run shell commands, not arbitrary plugins** — `[hooks]` in `.ecluse.toml` supports four lifecycle points (`pre_up`, `post_up`, `pre_down`, `post_down`); each runs a shell command in the worktree with all env vars set; there is no plugin API or event bus beyond these. Hooks execute with the same privileges as the agent — only run `ecluse up`/`ecluse down` in repositories whose `.ecluse.toml` you trust
+- **Hooks run shell commands, not arbitrary plugins** — `[hooks]` in `.ecluse.toml` supports five lifecycle points (`pre_up`, `pre_spawn`, `post_up`, `pre_down`, `post_down`); each runs a shell command in the worktree with all env vars set; there is no plugin API or event bus beyond these. Hooks execute with the same privileges as the agent — only run `ecluse up`/`ecluse down` in repositories whose `.ecluse.toml` you trust
 - **No telemetry** — no network calls except the optional Postgres TCP probe during `init`
 
 ---
@@ -691,6 +691,9 @@ base_port = 5432        # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
 # Optional: lifecycle hooks — run in the worktree with all env vars set
 [hooks]
 pre_up = "..."           # before any infrastructure is created (no env vars yet)
+pre_spawn = "..."        # after .env.ecluse is written, before native services spawn; full ECLUSE_* env available
+#                        # use to compute derived values (URLs, connection strings) that depend on
+#                        # allocated ports but must exist before the process starts
 post_up = "npx prisma migrate deploy"   # after all services are up
 pre_down = "npx prisma migrate reset --force"  # before services are killed (all env vars set)
 post_down = "..."        # after worktree is removed
@@ -710,7 +713,7 @@ process_manager = "tmux"   # "tmux" | "nohup" | "none"
 
 `ecluse init` auto-detects: tmux if present, otherwise nohup. `ecluse validate` checks the binary is installed. This is per-machine, not per-repo.
 
-Hooks run as shell commands inside the worktree directory. `pre_up` runs before any infrastructure exists (env vars not yet available). `post_up`, `pre_down`, and `post_down` all have the full `.env.ecluse` set (`PORT`, `ECLUSE_SLUG`, `ECLUSE_<NAME>_PORT`, etc.). ecluse does not manage databases directly — use `post_up` for migrations and `pre_down` for teardown.
+Hooks run as shell commands inside the worktree directory. `pre_up` runs before any infrastructure exists (env vars not yet available). `pre_spawn` runs after `.env.ecluse` is written but before native services are started — use it to derive env values from allocated ports (e.g. `CORE_API_URL=http://localhost:$ECLUSE_API_PORT`). `post_up`, `pre_down`, and `post_down` all have the full `.env.ecluse` set (`PORT`, `ECLUSE_SLUG`, `ECLUSE_<NAME>_PORT`, etc.). ecluse does not manage databases directly — use `post_up` for migrations and `pre_down` for teardown.
 
 ## Examples
 

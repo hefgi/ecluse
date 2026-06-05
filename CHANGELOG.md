@@ -8,6 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.2.14] — 2026-06-03
 
 ### Added
+- `pre_spawn` hook: runs after `.env.ecluse` is written but before native services are spawned. Full `ECLUSE_*` env is available. Use it to compute derived values like `CORE_API_URL=http://localhost:$ECLUSE_API_PORT` that depend on allocated ports but must exist before processes start. In container mode it runs after containers are up.
 - `ecluse status`: port-allocation-only services (no `command`) now show `—` in the STATUS column instead of `✗ down`. They are not counted in the "N services down" summary, do not trigger exit code 1, and have `"managed": false` in JSON output. This prevents agents from treating unmanaged services as failures.
 - tmux windows now source `.env`, `.env.local`, and `.env.ecluse` before running the service command. Manual restarts inside a tmux window (`↑ Enter`) automatically have the correct environment without needing `source .env.ecluse &&` in every `command` field. Load order: `.env` → `.env.local` → `.env.ecluse` (ecluse slot vars win on overlap).
 - nohup-spawned services now receive vars from `.env`, `.env.local`, and `.env.ecluse` merged into their environment at spawn time, consistent with tmux behaviour.
