@@ -159,19 +159,6 @@ pub fn pid_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-fn build_env_prefix(worktree: &Path, env: &std::collections::HashMap<String, String>) -> String {
-    let mut parts: Vec<String> = env
-        .iter()
-        .map(|(k, v)| format!("export {}={}", k, shell_escape(v)))
-        .collect();
-    parts.sort(); // deterministic order
-    parts.push(format!(
-        "cd {}",
-        shell_escape(&worktree.display().to_string())
-    ));
-    parts.join("; ")
-}
-
 fn shell_escape(s: &str) -> String {
     // Wrap in single quotes, escaping any single quotes in the value
     format!("'{}'", s.replace('\'', "'\\''"))
@@ -241,6 +228,31 @@ fn build_source_preamble(worktree: &Path) -> String {
         .join("; ")
 }
 
+fn write_env_preamble_file(
+    worktree: &Path,
+    env: &std::collections::HashMap<String, String>,
+) -> Option<std::path::PathBuf> {
+    // Write merged env as a sourceable file into .ecluse/ so tmux windows can source it
+    // without sending a multi-KB export string through send-keys (which corrupts for
+    // large envs due to terminal line-length limits and key-event reordering).
+    let ecluse_dir = worktree
+        .ancestors()
+        .find(|p| p.join(".ecluse").exists())
+        .unwrap_or(worktree)
+        .join(".ecluse");
+    let _ = std::fs::create_dir_all(&ecluse_dir);
+    let preamble_path = ecluse_dir.join("env-preamble.sh");
+    let mut lines: Vec<String> = env
+        .iter()
+        .map(|(k, v)| format!("export {}={}", k, shell_escape(v)))
+        .collect();
+    lines.sort();
+    lines.push(String::new());
+    let content = lines.join("\n");
+    std::fs::write(&preamble_path, content).ok()?;
+    Some(preamble_path)
+}
+
 fn spawn_tmux(
     slug: &str,
     services: &[&&ServiceConfig],
@@ -249,8 +261,31 @@ fn spawn_tmux(
 ) -> Result<SpawnResult> {
     let session = tmux_session_name(slug);
     let merged_env = merge_worktree_env(worktree, env);
-    let env_prefix = build_env_prefix(worktree, &merged_env);
-    let source_preamble = build_source_preamble(worktree);
+
+    // Write merged env to a file so tmux windows source it rather than receiving
+    // a multi-KB export string through send-keys (safe for any env size).
+    let preamble_path = write_env_preamble_file(worktree, &merged_env);
+
+    // Build the source preamble: ecluse preamble file first, then the worktree env
+    // files (.env → .env.local → .env.ecluse) so manual restarts (↑ Enter) also
+    // have the correct environment. The preamble file is sourced first so the
+    // worktree files can override individual vars if needed.
+    let mut source_parts: Vec<String> = Vec::new();
+    if let Some(ref p) = preamble_path {
+        source_parts.push(format!(
+            "set -a; source {}; set +a",
+            shell_escape(&p.display().to_string())
+        ));
+    }
+    let worktree_files = build_source_preamble(worktree);
+    if !worktree_files.is_empty() {
+        source_parts.push(worktree_files);
+    }
+    source_parts.push(format!(
+        "cd {}",
+        shell_escape(&worktree.display().to_string())
+    ));
+    let setup_cmd = source_parts.join("; ");
 
     // Kill any stale tmux session with this name (processes exited but shell remains).
     if tmux_session_exists(&session) {
@@ -279,7 +314,6 @@ fn spawn_tmux(
 
     for (i, svc) in services.iter().enumerate() {
         let cmd = svc.command.as_deref().unwrap();
-        let full_cmd = format!("{}; {}", env_prefix, cmd);
         let target = if i == 0 {
             format!("{}:0", session)
         } else {
@@ -287,30 +321,27 @@ fn spawn_tmux(
         };
 
         if i == 0 {
-            // Rename window 0
             Command::new("tmux")
                 .args(["rename-window", "-t", &format!("{}:0", session), &svc.name])
                 .status()
                 .ok();
         } else {
-            // New window for subsequent services
             Command::new("tmux")
                 .args(["new-window", "-t", &session, "-n", &svc.name])
                 .status()
                 .ok();
         }
 
-        // Source env files first so manual restarts (↑ Enter) in the window
-        // also have the correct environment.
-        if !source_preamble.is_empty() {
-            Command::new("tmux")
-                .args(["send-keys", "-t", &target, &source_preamble, "Enter"])
-                .status()
-                .ok();
-        }
+        // Source env + cd to worktree, then run the service command.
+        // Two separate send-keys calls keeps each line short; the setup line
+        // is a handful of file paths, never a large export blob.
+        Command::new("tmux")
+            .args(["send-keys", "-t", &target, &setup_cmd, "Enter"])
+            .status()
+            .ok();
 
         Command::new("tmux")
-            .args(["send-keys", "-t", &target, &full_cmd, "Enter"])
+            .args(["send-keys", "-t", &target, cmd, "Enter"])
             .status()
             .ok();
     }
