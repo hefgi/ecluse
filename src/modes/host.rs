@@ -80,7 +80,7 @@ impl super::ModeHandler for HostMode {
         }
 
         log.step("Writing .env.ecluse...");
-        let env_map = env::build_env(slot, slug, "host", &native_ports, &[], &native_svcs);
+        let env_map = env::build_env(slot, slug, "host", &native_ports, &[], &native_svcs, &[]);
         env::write_env_file(&worktree_path, &env_map)?;
 
         // pre_spawn: env is written, services not yet started — use for derived env (URLs etc.)
@@ -204,6 +204,7 @@ impl super::ModeHandler for HostMode {
             &native_ports,
             &[],
             &native_svcs,
+            &[],
         );
 
         // pre_down: before services are killed — app can drain/flush.

@@ -252,6 +252,7 @@ impl super::ModeHandler for ContainerMode {
         }
 
         log.step("Writing .env.ecluse...");
+        let docker_svcs_ref: Vec<&crate::config::ServiceConfig> = docker_svcs_config.to_vec();
         let env_map = env::build_env(
             slot,
             slug,
@@ -259,6 +260,7 @@ impl super::ModeHandler for ContainerMode {
             &indexmap::IndexMap::new(),
             &allocated_ports,
             &[],
+            &docker_svcs_ref,
         );
         env::write_env_file(&worktree_path, &env_map)?;
 
@@ -340,6 +342,8 @@ impl super::ModeHandler for ContainerMode {
             .iter()
             .map(|(k, v)| (k.clone(), *v))
             .collect();
+        let docker_svcs = config.docker_services();
+        let docker_svcs_ref: Vec<&crate::config::ServiceConfig> = docker_svcs.to_vec();
         let env_map = env::build_env(
             session.slot,
             &session.slug,
@@ -347,6 +351,7 @@ impl super::ModeHandler for ContainerMode {
             &indexmap::IndexMap::new(),
             &allocated_ports,
             &[],
+            &docker_svcs_ref,
         );
 
         // pre_down: before containers are stopped — app can flush/drain.
