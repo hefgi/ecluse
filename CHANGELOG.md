@@ -5,9 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.2.15] — 2026-06-08
 
 ### Added
+- `pre_spawn` lifecycle hook — runs after the worktree and slot are allocated but before any services are started. Useful for provisioning secrets, seeding databases, or any setup that must happen before the first process starts. Receives the same env vars as `post_up`.
 - `host_port` field on `[[services]]` blocks: decouples the host-side port range from the container-internal port. Set `base_port` to the port the container listens on (e.g. `5432`) and `host_port` to the host range base (e.g. `11532`). ecluse publishes `(host_port+slot) → base_port` in the overlay and sets `ECLUSE_<NAME>_PORT = host_port + slot`. Defaults to `base_port` when omitted — existing configs are unaffected.
 
 ---
