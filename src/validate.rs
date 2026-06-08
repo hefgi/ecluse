@@ -749,11 +749,13 @@ mod tests {
         s1.extra_ports = vec![ExtraPort {
             base_port: 9229,
             port_env: "NODE_PORT".into(),
+            container_port: None,
         }];
         let mut s2 = svc("worker", 4000);
         s2.extra_ports = vec![ExtraPort {
             base_port: 9229,
             port_env: "WORKER_DEBUG".into(),
+            container_port: None,
         }];
         let config = make_config(8, 10, vec![s1, s2]);
         let err = validate_config(&config).unwrap_err();
@@ -767,6 +769,7 @@ mod tests {
         s.extra_ports = vec![ExtraPort {
             base_port: 3000,
             port_env: "CLASH".into(),
+            container_port: None,
         }];
         let config = make_config(8, 10, vec![s]);
         let err = validate_config(&config).unwrap_err();

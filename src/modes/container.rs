@@ -87,33 +87,43 @@ impl super::ModeHandler for ContainerMode {
 
                     let compose_data = compose::parse(compose_path)?;
 
-                    // (host_port, container_port) — container_port defaults to base_port
-                    let port_map: std::collections::HashMap<String, (u16, u16)> = svcs
-                        .iter()
-                        .map(|s| {
+                    // Build port_map: services that publish their primary base_port to the host.
+                    // Services with suppress_primary_publish are excluded — their only host-side
+                    // publish is via extra_port_map.
+                    let mut port_map: std::collections::HashMap<String, (u16, u16)> =
+                        std::collections::HashMap::new();
+                    for s in svcs {
+                        if s.suppress_primary_publish() {
+                            if let Some(ep) = s.extra_ports.first() {
+                                let hp = ep.base_port.saturating_add(slot as u16);
+                                allocated_ports.push((s.name.clone(), hp));
+                                log.detail(&format!("{}: {hp} (via extra_ports)", s.name));
+                            }
+                        } else {
                             let host_port = if let Some(&p) = port_overrides.get(&s.name) {
                                 p
                             } else {
                                 validate::find_free_port(config, s, slot)?
                             };
                             allocated_ports.push((s.name.clone(), host_port));
-                            log.detail(&format!("{}: {}", s.name, host_port));
-                            Ok((s.name.clone(), (host_port, s.base_port)))
-                        })
-                        .collect::<Result<_>>()?;
+                            log.detail(&format!("{}: {host_port}", s.name));
+                            port_map.insert(s.name.clone(), (host_port, s.base_port));
+                        }
+                    }
 
                     let overlay_name = overlay_name_for_compose(slug, compose_path, root);
                     let overlay_path = overlay_dir.join(&overlay_name);
 
-                    // Build extra_port_map: service_name → [(host_port, container_port)]
-                    // for extra_ports entries on each docker service.
+                    // Build extra_port_map using container_port from ExtraPort when set.
                     let extra_port_map: std::collections::HashMap<String, Vec<(u16, u16)>> = svcs
                         .iter()
                         .filter_map(|s| {
                             let extras: Vec<(u16, u16)> = s
-                                .extra_ports
-                                .iter()
-                                .map(|ep| (ep.base_port.saturating_add(slot as u16), ep.base_port))
+                                .extra_port_mappings()
+                                .into_iter()
+                                .map(|(host_base, cport)| {
+                                    (host_base.saturating_add(slot as u16), cport)
+                                })
                                 .collect();
                             if extras.is_empty() {
                                 None

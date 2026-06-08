@@ -55,12 +55,28 @@ impl std::fmt::Display for ServiceRun {
     }
 }
 
-/// A secondary port allocation on a service: allocated as `base_port + slot`,
+/// A secondary port allocation on a service: allocated as `base_port + slot` on the host,
 /// injected into the process environment under `port_env`.
+///
+/// For docker services, the overlay publishes `(base_port+slot) → container_port`.
+/// `container_port` defaults to `base_port` when omitted. Set it explicitly when the
+/// in-container listener port differs from the host range base — e.g. to publish Postgres
+/// (which listens on 5432 inside the container) on host port 11533:
+/// ```toml
+/// extra_ports = [{ base_port = 11532, port_env = "PGPORT", container_port = 5432 }]
+/// ```
+/// This publishes `11533→5432` and sets `PGPORT=11533` in the env.
+///
+/// When `container_port` is set, the primary `base_port` of the parent service is **not**
+/// published to the host — only the extra_ports entries are. This lets you keep the
+/// canonical port (5432, 3306) unpublished while exposing a high-numbered host range.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ExtraPort {
     pub base_port: u16,
     pub port_env: String,
+    /// Container-side port for the docker overlay mapping. Defaults to `base_port`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -137,7 +153,7 @@ impl ServiceConfig {
         self.base_port.saturating_add(slot as u16)
     }
 
-    /// Returns all extra port allocations for this service as `(base_port, env_var_name)` pairs.
+    /// Returns all extra port allocations as `(host_base_port, env_var_name)` pairs.
     /// Merges `extra_ports` (new) with `debug_port` (legacy) so all callers go through one path.
     pub fn all_extra_ports(&self) -> Vec<(u16, String)> {
         let mut result: Vec<(u16, String)> = self
@@ -152,6 +168,24 @@ impl ServiceConfig {
             }
         }
         result
+    }
+
+    /// Returns extra port entries as `(host_base_port, container_port)` pairs for overlay generation.
+    /// `container_port` is `ep.container_port` when set, otherwise `ep.base_port`.
+    pub fn extra_port_mappings(&self) -> Vec<(u16, u16)> {
+        self.extra_ports
+            .iter()
+            .map(|ep| (ep.base_port, ep.container_port.unwrap_or(ep.base_port)))
+            .collect()
+    }
+
+    /// True when any extra_port has an explicit `container_port` set. In that case the
+    /// primary `base_port` of this service should not be published to the host — the
+    /// extra_ports entries are the only host-side publishes.
+    pub fn suppress_primary_publish(&self) -> bool {
+        self.extra_ports
+            .iter()
+            .any(|ep| ep.container_port.is_some())
     }
 }
 

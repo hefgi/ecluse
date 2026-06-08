@@ -352,10 +352,12 @@ mod tests {
                 ExtraPort {
                     base_port: 9229,
                     port_env: "NODE_INSPECT_PORT".into(),
+                    container_port: None,
                 },
                 ExtraPort {
                     base_port: 11533,
                     port_env: "PGPORT".into(),
+                    container_port: None,
                 },
             ],
         };
@@ -379,6 +381,7 @@ mod tests {
             extra_ports: vec![ExtraPort {
                 base_port: 5555,
                 port_env: "AUX_PORT".into(),
+                container_port: None,
             }],
         };
         let np = ports(&[("api", 3001)]);
@@ -419,6 +422,7 @@ mod tests {
             extra_ports: vec![ExtraPort {
                 base_port: 11532,
                 port_env: "PGPORT".into(),
+                container_port: None,
             }],
         };
         // slot 1: ECLUSE_POSTGRES_PORT = 5433 (primary), PGPORT = 11533 (extra)
@@ -459,6 +463,40 @@ mod tests {
         );
         assert_eq!(env["ECLUSE_DOLT_PORT"], "3307");
         assert_eq!(env["DOLT_PORT"], "3307");
+    }
+
+    #[test]
+    fn docker_extra_port_with_container_port_emits_host_port_in_env() {
+        // When container_port is set, the env var should still be host_base + slot.
+        // The container_port only affects the overlay mapping, not the env value.
+        use crate::config::{ExtraPort, ServiceConfig, ServiceRun};
+        let svc = ServiceConfig {
+            name: "postgres".into(),
+            base_port: 5432,
+            run: ServiceRun::Docker,
+            compose: None,
+            command: None,
+            port_env: vec![],
+            debug_port: None,
+            extra_ports: vec![ExtraPort {
+                base_port: 11532,
+                port_env: "PGPORT".into(),
+                container_port: Some(5432),
+            }],
+        };
+        // suppress_primary_publish=true: caller tracks extra port as primary
+        // build_env receives extra port host value (11533) as the docker_ports entry
+        let env = build_env(
+            1,
+            "s",
+            "hybrid",
+            &IndexMap::new(),
+            &[("postgres".into(), 11533)],
+            &[],
+            &[&svc],
+        );
+        assert_eq!(env["ECLUSE_POSTGRES_PORT"], "11533");
+        assert_eq!(env["PGPORT"], "11533"); // extra_port: 11532 + 1
     }
 }
 
