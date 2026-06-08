@@ -237,6 +237,14 @@ pub fn validate_config(config: &Config) -> Result<Vec<String>> {
                 svc.name
             ));
         }
+
+        if svc.host_port.is_some() && svc.extra_ports.iter().any(|ep| ep.container_port.is_some()) {
+            warnings.push(format!(
+                "service '{}': host_port and extra_ports[].container_port are both set; \
+                 host_port already redirects the primary port — extra_ports[].container_port may conflict",
+                svc.name
+            ));
+        }
     }
 
     // duplicate service names
@@ -362,6 +370,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            host_port: None,
         }
     }
 
@@ -375,6 +384,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            host_port: None,
         }
     }
 
@@ -595,6 +605,7 @@ mod tests {
                 port_env: vec![],
                 debug_port: None,
                 extra_ports: vec![],
+                host_port: None,
             }],
         );
         let warnings = validate_config(&config).unwrap();
@@ -617,6 +628,7 @@ mod tests {
                 port_env: vec![],
                 debug_port: None,
                 extra_ports: vec![],
+                host_port: None,
             }],
         );
         let warnings = validate_config(&config).unwrap();
@@ -638,6 +650,7 @@ mod tests {
                 port_env: vec![],
                 debug_port: None,
                 extra_ports: vec![],
+                host_port: None,
             }],
         );
         assert!(validate_config(&config).is_ok());

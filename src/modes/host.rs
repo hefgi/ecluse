@@ -269,6 +269,7 @@ fn native_ports_for_slot(
                 port_env: vec![],
                 debug_port: None,
                 extra_ports: vec![],
+                host_port: None,
             };
             validate::find_free_port(config, &fallback, slot)?
         };

@@ -114,6 +114,18 @@ pub struct ServiceConfig {
     /// ```
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_ports: Vec<ExtraPort>,
+    /// Host-side port range base for docker services. When set, the overlay publishes
+    /// `(host_port+slot) → base_port` instead of `(base_port+slot) → base_port`.
+    /// Defaults to `base_port` when omitted — zero behavior change for existing configs.
+    ///
+    /// Use this when the container listens on a well-known port (e.g. 5432) but you
+    /// want host ports in a high-numbered range (e.g. 11532+slot):
+    /// ```toml
+    /// base_port = 5432    # container-internal port
+    /// host_port = 11532   # host range base; slot 1 → 11533
+    /// ```
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_port: Option<u16>,
 }
 
 fn deserialize_string_or_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -149,8 +161,14 @@ where
 }
 
 impl ServiceConfig {
+    /// Returns the base used for host-side port allocation.
+    /// When `host_port` is set, that is used; otherwise falls back to `base_port`.
+    pub fn host_port_base(&self) -> u16 {
+        self.host_port.unwrap_or(self.base_port)
+    }
+
     pub fn port(&self, slot: u8) -> u16 {
-        self.base_port.saturating_add(slot as u16)
+        self.host_port_base().saturating_add(slot as u16)
     }
 
     /// Returns all extra port allocations as `(host_base_port, env_var_name)` pairs.
@@ -616,6 +634,7 @@ base_port = 5432
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            host_port: None,
         };
         assert_eq!(svc.port(1), 8001);
         assert_eq!(svc.port(2), 8002);
@@ -665,6 +684,7 @@ base_port = 5432
                     port_env: vec![],
                     debug_port: None,
                     extra_ports: vec![],
+                    host_port: None,
                 },
                 ServiceConfig {
                     name: "postgres".into(),
@@ -675,6 +695,7 @@ base_port = 5432
                     port_env: vec![],
                     debug_port: None,
                     extra_ports: vec![],
+                    host_port: None,
                 },
             ],
             hooks: HookConfig::default(),
@@ -840,5 +861,62 @@ base_port = 3000
         );
         let config = Config::load(dir.path()).unwrap();
         assert_eq!(config.services[0].run, ServiceRun::Native);
+    }
+
+    #[test]
+    fn host_port_defaults_to_none() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"hybrid\"\n[[services]]\nname = \"postgres\"\nrun = \"docker\"\nbase_port = 5432\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.services[0].host_port, None);
+    }
+
+    #[test]
+    fn host_port_loads_from_toml() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"hybrid\"\n[[services]]\nname = \"postgres\"\nrun = \"docker\"\nbase_port = 5432\nhost_port = 11532\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.services[0].host_port, Some(11532));
+    }
+
+    #[test]
+    fn host_port_base_falls_back_to_base_port_when_unset() {
+        let svc = ServiceConfig {
+            name: "postgres".into(),
+            base_port: 5432,
+            run: ServiceRun::Docker,
+            compose: None,
+            command: None,
+            port_env: vec![],
+            debug_port: None,
+            extra_ports: vec![],
+            host_port: None,
+        };
+        assert_eq!(svc.host_port_base(), 5432);
+        assert_eq!(svc.port(1), 5433);
+    }
+
+    #[test]
+    fn host_port_base_uses_host_port_when_set() {
+        let svc = ServiceConfig {
+            name: "postgres".into(),
+            base_port: 5432,
+            run: ServiceRun::Docker,
+            compose: None,
+            command: None,
+            port_env: vec![],
+            debug_port: None,
+            extra_ports: vec![],
+            host_port: Some(11532),
+        };
+        assert_eq!(svc.host_port_base(), 11532);
+        assert_eq!(svc.port(1), 11533);
+        assert_eq!(svc.port(2), 11534);
     }
 }

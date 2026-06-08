@@ -513,6 +513,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            host_port: None,
         };
         let result = spawn_services(
             &ProcessManager::None,
@@ -583,6 +584,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            host_port: None,
         };
         let result = spawn_services(
             &ProcessManager::Nohup,

@@ -244,6 +244,7 @@ mod tests {
             port_env: vec!["DJANGO_PORT".into()],
             debug_port: None,
             extra_ports: vec![],
+            host_port: None,
         };
         let np = ports(&[("api", 3001)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
@@ -263,6 +264,7 @@ mod tests {
             port_env: vec!["DJANGO_PORT".into(), "APP_PORT".into()],
             debug_port: None,
             extra_ports: vec![],
+            host_port: None,
         };
         let np = ports(&[("api", 3001)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
@@ -282,6 +284,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            host_port: None,
         };
         let np = ports(&[("api", 3001)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
@@ -313,6 +316,7 @@ mod tests {
             port_env: vec![],
             debug_port: Some(9229),
             extra_ports: vec![],
+            host_port: None,
         };
         let np = ports(&[("app", 7101)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
@@ -331,6 +335,7 @@ mod tests {
             port_env: vec![],
             debug_port: Some(9229),
             extra_ports: vec![],
+            host_port: None,
         };
         let np2 = ports(&[("app", 7102)]);
         let env2 = build_env(2, "s2", "host", &np2, &[], &[&svc], &[]);
@@ -360,6 +365,7 @@ mod tests {
                     container_port: None,
                 },
             ],
+            host_port: None,
         };
         let np = ports(&[("api", 3001)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
@@ -383,6 +389,7 @@ mod tests {
                 port_env: "AUX_PORT".into(),
                 container_port: None,
             }],
+            host_port: None,
         };
         let np = ports(&[("api", 3001)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
@@ -402,6 +409,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            host_port: None,
         };
         let np = ports(&[("api", 4445)]);
         let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
@@ -424,6 +432,7 @@ mod tests {
                 port_env: "PGPORT".into(),
                 container_port: None,
             }],
+            host_port: None,
         };
         // slot 1: ECLUSE_POSTGRES_PORT = 5433 (primary), PGPORT = 11533 (extra)
         let env = build_env(
@@ -451,6 +460,7 @@ mod tests {
             port_env: vec!["DOLT_PORT".into()],
             debug_port: None,
             extra_ports: vec![],
+            host_port: None,
         };
         let env = build_env(
             1,
@@ -483,6 +493,7 @@ mod tests {
                 port_env: "PGPORT".into(),
                 container_port: Some(5432),
             }],
+            host_port: None,
         };
         // suppress_primary_publish=true: caller tracks extra port as primary
         // build_env receives extra port host value (11533) as the docker_ports entry
