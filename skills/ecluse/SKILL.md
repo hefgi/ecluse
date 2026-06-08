@@ -683,7 +683,11 @@ command = "npm run dev" # optional — ecluse spawns this on ecluse up
 [[services]]
 name = "postgres"
 run = "docker"
-base_port = 5432        # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
+base_port = 5432        # container-internal port (unchanged)
+# host_port = 11532     # host range base — slot 1 → ECLUSE_POSTGRES_PORT=11533, slot 2 → 11534
+#                       # overlay maps 11533→5432 (host_port+slot → base_port)
+#                       # defaults to base_port when omitted (5433, 5434, …)
+# port_env = "PGPORT"   # also set PGPORT = allocated host port (e.g. 11533)
 # extra_ports = [{ base_port = 11533, port_env = "PGPORT" }]
 #   slot 1 → PGPORT=11534 in compose env; also published as 11534:11533 in the overlay
 # compose = "services/postgres/docker-compose.yml"  # optional: per-service compose file

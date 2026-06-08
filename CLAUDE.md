@@ -29,6 +29,7 @@ ecluse validate   # validate .ecluse.toml port ranges and service gaps
 ```bash
 cargo fmt --check && cargo clippy -- -D warnings && cargo test   # run before pushing; CI enforces all three
 cargo build
+cargo build --release && cp target/release/ecluse ~/.local/bin/ecluse && codesign --sign - ~/.local/bin/ecluse   # install locally
 cargo test
 cargo clippy -- -D warnings
 cargo fmt
