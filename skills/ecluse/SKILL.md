@@ -167,8 +167,10 @@ ecluse ls                       # all sessions: ports as name=value pairs; TMUX 
 ecluse env <slug>               # same JSON as up --json: worktree_path + all env vars
 ecluse env                      # auto-detects current session if run from inside a worktree
 ecluse status <slug>            # per-service health: ✓/✗ with port; shows WINDOW (tmux) or PID (nohup); exit 1 if any down
-ecluse status <slug> --json     # machine-readable health check
+ecluse status <slug> --json     # machine-readable health check (includes PIDs per service)
 ecluse status                   # auto-detect slug from cwd
+ecluse whose-pid <pid>          # which session owns this PID? exit 1 if not owned by any session
+ecluse whose-pid <pid> --json   # machine-readable; required before any raw kill of an ecluse-allocated port
 ```
 
 ### Sync a manually-started environment
@@ -252,7 +254,34 @@ Each session is a separate git branch and worktree. They don't interfere.
 
 - **"all slots in use"** — `ecluse ls` to find stale sessions, `ecluse down <slug> --delete-worktree` the oldest
 - **`ecluse down` hangs waiting for input** — always pass `--delete-worktree` (or `--keep-worktree`) when running non-interactively; without either flag the command prompts the user before removing the worktree
-- **Port in use** — `lsof -iTCP:<port> -sTCP:LISTEN` to find the blocker; or `ecluse up --force` to let ecluse kill it
+- **Port in use** — first determine *who* owns it (see "Killing services safely" below). Never run a blind `lsof -ti TCP:<port> \| xargs kill` — that's how parallel agents kill each other.
+
+### Killing services safely — never raw-kill ecluse-allocated ports
+
+**Never `kill` a process on an ecluse-allocated port without checking ownership first.**
+
+The canonical fix for misbehaving services is `ecluse down` + `ecluse up`, not `kill`:
+
+```bash
+ecluse down <your-slug> --keep-worktree
+ecluse up <your-slug> --reuse-worktree
+```
+
+This tears down only **your** services and respawns them with the right env. Idempotent, safe under parallel sessions, never touches another agent's work. Reach for this 95% of the time.
+
+**If raw `kill` is truly unavoidable, always verify ownership first:**
+
+```bash
+ecluse whose-pid <pid>
+# → "owned by session <slug>" → STOP. Do not kill. Coordinate with that session.
+# → "not owned by any ecluse session" → safe to kill if you're sure it's not other work
+```
+
+Never run `lsof -ti TCP:<port> | xargs kill` blind. Every PID gets checked individually with `whose-pid` first.
+
+**Why this matters:** in parallel sessions, the process on the port "next to yours" is almost always *another agent's working service*, not your own stale leftover. Kill it and you derail a sibling session. This has happened in production: three parallel agents killed each other's services seven times in seven minutes, each one thinking it was "cleaning up rogue processes" from the others' worktrees.
+
+**Caveat — services spawned outside ecluse:** if you ran `task ...`, `make ...`, `npm run ...`, or similar from a tmux/Bash shell instead of letting ecluse spawn via `command = ...` in `.ecluse.toml`, ecluse may not know about those PIDs. Run `ecluse sync <your-slug>` first to register them, then `ecluse down --keep-worktree` will kill them properly.
 
 ### Port wiring — exhaust .ecluse.toml options before touching app code
 
@@ -297,6 +326,8 @@ When a service has a hardcoded port or reads it from a config file, resolve it t
 3. **Modify app source code** — only if the framework has no `--port` flag and reads no env var at all (rare). Document why the other options were not viable before making the change.
 
 **Do not** modify `vite.config.ts`, `next.config.js`, `config/puma.rb`, or similar config files when a CLI flag or `port_env` can achieve the same result.
+
+**Avoid external task runners as service entry points.** `task`, `make`, `npm run` and similar runners re-read `.env.local` and inherit the spawning shell's env — neither of those is `.env.ecluse`. Under parallel sessions this causes services to bind to the *wrong slot's* ports because the spawning shell may carry env from a different worktree. Always put the actual service command directly in `[[services]] command = "..."` so ecluse spawns it with the correct slot env in one step. If you must use an external runner, run `ecluse sync <your-slug>` immediately after starting it so the resulting PIDs are tracked.
 
 ---
 
@@ -733,6 +764,7 @@ ecluse down [<slug>] [--keep-volumes] [--keep-branch] [--keep-worktree] [--delet
 ecluse ls [--json]
 ecluse validate [--ports]
 ecluse status [<slug>] [--json] [--quiet]
+ecluse whose-pid <pid> [--json]
 ```
 
 `ecluse shell` exists but is human-only — it spawns an interactive subshell that blocks non-interactive execution. Agents must not use it.

@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- `ecluse whose-pid <pid>` command: reverse-maps a PID to the ecluse session that owns it. Checks `.ecluse/pids/<slug>/*.pid` files and walks descendants up to 5 levels, so `task`/`make`-spawned children resolve to the right session. For tmux-managed sessions also checks pane PIDs and their subtrees. Use `--json` for machine-readable output. Exit code: `0` if owned, `1` if not. Required before any manual `kill` of a process on an ecluse-allocated port — prevents parallel agents from killing each other's services.
+
+### Changed
+- `skills/ecluse/SKILL.md` adds a "Killing services safely" section: forbids raw `lsof -ti | xargs kill` of ecluse-allocated ports, mandates `ecluse down --keep-worktree` + `ecluse up --reuse-worktree` as the canonical reset, and requires `ecluse whose-pid` ownership verification before any manual kill. Also warns that external task runners (`task`, `make`, `npm run`) bypass `.env.ecluse` and should be replaced with `command = "..."` entries in `.ecluse.toml`.
+
+---
+
 ## [0.2.15] — 2026-06-08
 
 ### Added
