@@ -152,6 +152,83 @@ fn duplicate_slug_resumes_idempotently() {
 }
 
 #[test]
+fn resume_honors_external_worktree_path() {
+    // Regression test: when a session's worktree lives outside .ecluse/worktrees/
+    // (e.g. a sibling git worktree the user created manually), `ecluse up` from
+    // inside that worktree must reuse the recorded worktree_path on resume —
+    // not recompute the default <root>/<worktree_dir>/<slug> location.
+    let repo = tmp_repo();
+    ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
+
+    // Create a sibling worktree in its own tmpdir on a new branch.
+    let sibling_parent = tempfile::tempdir().unwrap();
+    let sibling = sibling_parent.path().join("sibling-wt");
+    let out = Command::new("git")
+        .args(["worktree", "add", "-b", "feature/sibling"])
+        .arg(&sibling)
+        .current_dir(repo.path())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git worktree add failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // First `ecluse up` from inside the sibling auto-registers it with the
+    // external path. This should succeed without --reuse-worktree.
+    let out = ecluse(&sibling, &["up"]);
+    assert!(out.status.success(), "first up failed: {}", stderr(&out));
+
+    // state.json should record the sibling path, not the default location.
+    // Canonicalize both to handle macOS `/private/var` vs `/var` symlink.
+    let sibling_canon = std::fs::canonicalize(&sibling).unwrap();
+    let state_path = repo.path().join(".ecluse/state.json");
+    let state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    let sessions = state["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1);
+    let recorded_path = sessions[0]["worktree_path"].as_str().unwrap();
+    assert_eq!(
+        std::fs::canonicalize(recorded_path).unwrap(),
+        sibling_canon,
+        "first up should record the actual worktree location"
+    );
+
+    // Second `ecluse up` (the resume path) MUST honor the recorded path, not
+    // recompute <root>/.ecluse/worktrees/<slug>. Before the fix, bring_up was
+    // called with worktree_override=None and recomputed the default location,
+    // failing the reuse_worktree existence check with
+    // "worktree not found at <wrong path>". --force ensures the resume path
+    // actually invokes bring_up (it would otherwise short-circuit when no
+    // services need restarting).
+    let out = ecluse(&sibling, &["up", "--force"]);
+    assert!(
+        out.status.success(),
+        "resume failed (the bug): {}",
+        stderr(&out)
+    );
+
+    // After resume, state must still point at the sibling path — the resume
+    // must not silently rewrite the path either.
+    let state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    let recorded_path = state["sessions"][0]["worktree_path"].as_str().unwrap();
+    assert_eq!(
+        std::fs::canonicalize(recorded_path).unwrap(),
+        sibling_canon,
+        "resume must preserve external worktree path"
+    );
+
+    // Clean up the sibling worktree.
+    let _ = Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(&sibling)
+        .current_dir(repo.path())
+        .output();
+}
+
+#[test]
 fn down_removes_worktree_and_clears_state() {
     let repo = tmp_repo();
     ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);

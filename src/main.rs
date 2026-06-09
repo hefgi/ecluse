@@ -878,7 +878,11 @@ fn cmd_up_resume(
         args.watch,
         true, // always reuse-worktree on resume
         args.no_inherit_env,
-        None, // worktree path already recorded in existing session
+        // Honor the worktree path recorded in state.json. Without this, bring_up
+        // recomputes the default `<root>/<worktree_dir>/<slug>` location and breaks
+        // sessions whose worktree lives outside `.ecluse/worktrees/` — e.g. those
+        // auto-registered from a sibling git worktree directory.
+        Some(std::path::PathBuf::from(&existing.worktree_path)),
         &port_overrides,
         service_filter.as_ref(),
         &skip_services,

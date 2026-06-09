@@ -14,6 +14,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - `skills/ecluse/SKILL.md` adds a "Killing services safely" section: forbids raw `lsof -ti | xargs kill` of ecluse-allocated ports, mandates `ecluse down --keep-worktree` + `ecluse up --reuse-worktree` as the canonical reset, and requires `ecluse whose-pid` ownership verification before any manual kill. Also warns that external task runners (`task`, `make`, `npm run`) bypass `.env.ecluse` and should be replaced with `command = "..."` entries in `.ecluse.toml`.
 
+### Fixed
+- `ecluse up` on resume (second invocation against an existing session) now honors the `worktree_path` recorded in `state.json` instead of recomputing the default `<root>/<worktree_dir>/<slug>` location. Sessions whose worktree lives outside `.ecluse/worktrees/` — e.g. those auto-registered from a sibling git worktree the user created manually — no longer fail with "worktree not found at <wrong path>; remove --reuse-worktree or run ecluse up without it" on the second `ecluse up`.
+
 ---
 
 ## [0.2.15] — 2026-06-08
