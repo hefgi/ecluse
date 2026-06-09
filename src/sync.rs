@@ -291,7 +291,7 @@ fn tmux_pane_pid(session: &str, window: &str) -> Option<u32> {
 /// Check whether `pid` or any process in its descendant subtree is listening on `port`.
 ///
 /// Uses an iterative walk (no depth cap) via `child_pids` + `pid_listening_ports`.
-fn subtree_owns_port(pid: u32, port: u16) -> bool {
+pub(crate) fn subtree_owns_port(pid: u32, port: u16) -> bool {
     let mut stack: Vec<u32> = vec![pid];
     while let Some(current) = stack.pop() {
         if pid_listening_ports(current).contains(&port) {

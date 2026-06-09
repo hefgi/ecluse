@@ -16,6 +16,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - `ecluse up` on resume (second invocation against an existing session) now honors the `worktree_path` recorded in `state.json` instead of recomputing the default `<root>/<worktree_dir>/<slug>` location. Sessions whose worktree lives outside `.ecluse/worktrees/` — e.g. those auto-registered from a sibling git worktree the user created manually — no longer fail with "worktree not found at <wrong path>; remove --reuse-worktree or run ecluse up without it" on the second `ecluse up`.
+- `ecluse status` now always reports the port allocated by ecluse (from `state.json` / `.env.ecluse`), never a port that happens to be open in the service's process subtree. Previously, if a child process in the service tree was listening on a different port (e.g. a `task`-spawned helper that bound 2080 while the actual service was on 11734), `status` reported that child's port — making the table contradict `.env.ecluse` and hiding the real problem. Health is now computed by verifying that the service process subtree owns the *expected* port; if it doesn't, the service shows as down. Affects native services in tmux and nohup process_manager modes.
 
 ---
 

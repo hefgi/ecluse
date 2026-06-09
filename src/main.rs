@@ -1933,50 +1933,72 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
     let mut statuses: Vec<ServiceStatus> = Vec::new();
 
     for svc in &native_svcs {
+        // The expected port is the source of truth — it's what ecluse allocated and
+        // wrote into .env.ecluse. Never substitute a "discovered" port here:
+        // if the process tree contains a listener on a different port (e.g. a
+        // child task spawned its own server), trusting that port would make
+        // `status` lie about what's actually wired up.
+        let expected_port: Option<u16> =
+            session.port_overrides.get(&svc.name).copied().or_else(|| {
+                // Fallback for old state.json files that don't have port_overrides
+                // for native services — compute the nominal port from config.
+                if svc.base_port == 0 {
+                    None
+                } else {
+                    Some(svc.port(session.slot, config.slot_stride))
+                }
+            });
+
         let matched = native_matches.iter().find(|m| m.service_name == svc.name);
         let (healthy, pid, port) = match matched {
             Some(m) => {
                 let alive = process::pid_alive(m.pid);
-                let p = m
-                    .port
-                    .or_else(|| session.port_overrides.get(&svc.name).copied());
-                (alive, Some(m.pid), p)
+                // Verify the matched process actually owns the expected port.
+                // If it doesn't, the service is listening on the wrong port
+                // (e.g. external task runner inherited the wrong env) — that's
+                // a health failure, not "discovered new port".
+                let on_expected_port = match expected_port {
+                    Some(p) => sync::subtree_owns_port(m.pid, p),
+                    None => true, // no expected port → just check liveness
+                };
+                (alive && on_expected_port, Some(m.pid), expected_port)
             }
             None => {
-                let p = session.port_overrides.get(&svc.name).copied();
                 let pid_file = root
                     .join(".ecluse")
                     .join("pids")
                     .join(&session.slug)
                     .join(format!("{}.pid", svc.name));
                 if pid_file.exists() {
-                    // Nohup-managed: verify the stored PID is alive.
+                    // Nohup-managed: verify the stored PID is alive AND on the right port.
                     if let Ok(content) = std::fs::read_to_string(&pid_file) {
                         if let Ok(pid) = content.trim().parse::<u32>() {
                             let alive = process::pid_alive(pid);
-                            (alive, Some(pid), p)
+                            let on_expected_port = match expected_port {
+                                Some(p) => sync::subtree_owns_port(pid, p),
+                                None => true,
+                            };
+                            (alive && on_expected_port, Some(pid), expected_port)
                         } else {
-                            (false, None, p)
+                            (false, None, expected_port)
                         }
                     } else {
-                        (false, None, p)
+                        (false, None, expected_port)
                     }
                 } else if matches!(session.process_manager, Some(process::ProcessManager::Tmux)) {
                     // Tmux-managed: verify the pane's process subtree owns the port.
-                    // This rules out port collisions from unrelated processes.
                     if let Some(ref tmux_session) = session.tmux_session {
-                        let healthy = if let Some(port) = p {
+                        let healthy = if let Some(port) = expected_port {
                             sync::tmux_window_owns_port(tmux_session, &svc.name, port)
                         } else {
-                            // No port allocated yet — fall back to window existence.
                             sync::tmux_window_exists(tmux_session, &svc.name)
                         };
-                        (healthy, None, p)
+                        (healthy, None, expected_port)
                     } else {
-                        (false, None, p)
+                        (false, None, expected_port)
                     }
                 } else {
-                    (false, None, p)
+                    (false, None, expected_port)
                 }
             }
         };

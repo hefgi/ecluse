@@ -152,6 +152,57 @@ fn duplicate_slug_resumes_idempotently() {
 }
 
 #[test]
+fn status_reports_expected_port_from_state() {
+    // Regression: cmd_status used to report whatever port the matched
+    // process happened to be listening on (m.port from sync::match_services),
+    // which could be wrong if a child process bound a different port.
+    // It must always report the allocated/expected port from state.json
+    // — the same port written into .env.ecluse — so `ecluse status` never
+    // contradicts the env the agent is actually using.
+    let repo = tmp_repo();
+    std::fs::write(
+        repo.path().join(".ecluse.toml"),
+        r#"mode = "host"
+
+[[services]]
+name = "api"
+base_port = 4000
+command = "echo api"
+"#,
+    )
+    .unwrap();
+
+    let up = ecluse(repo.path(), &["up", "feat-foo"]);
+    assert!(up.status.success(), "up failed: {}", stderr(&up));
+
+    let status = ecluse(repo.path(), &["status", "feat-foo", "--json"]);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&status)).expect("status --json output is not valid JSON");
+
+    // Verify the api service's reported port matches the allocated port
+    // (base_port=4000 + slot=1 = 4001), and matches what's in state.json.
+    let services = parsed["services"].as_array().unwrap();
+    let api = services.iter().find(|s| s["name"] == "api").unwrap();
+    assert_eq!(
+        api["port"].as_u64(),
+        Some(4001),
+        "status should report the allocated port from state, got: {}",
+        api
+    );
+
+    // And state.json should have the same value — confirms the chain is
+    // consistent.
+    let state: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repo.path().join(".ecluse/state.json")).unwrap(),
+    )
+    .unwrap();
+    let recorded = state["sessions"][0]["port_overrides"]["api"]
+        .as_u64()
+        .unwrap();
+    assert_eq!(recorded, 4001);
+}
+
+#[test]
 fn resume_honors_external_worktree_path() {
     // Regression test: when a session's worktree lives outside .ecluse/worktrees/
     // (e.g. a sibling git worktree the user created manually), `ecluse up` from
