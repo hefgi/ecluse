@@ -13,6 +13,7 @@ mod slot;
 mod state;
 mod sync;
 mod validate;
+mod whose_pid;
 mod worktree;
 
 use anyhow::{Context, Result};
@@ -50,7 +51,53 @@ fn run(cli: cli::Cli) -> Result<()> {
         cli::Command::Sync(args) => cmd_sync(args),
         cli::Command::Flush(args) => cmd_flush(args),
         cli::Command::Status(args) => cmd_status(args),
+        cli::Command::WhosePid(args) => cmd_whose_pid(args),
     }
+}
+
+// ── whose-pid ────────────────────────────────────────────────────────────────
+
+fn cmd_whose_pid(args: cli::WhosePidArgs) -> Result<()> {
+    let (_, root) = config::Config::find_and_load()?;
+    let guard = state::StateGuard::acquire_shared(&root)?;
+    let owner = whose_pid::resolve(&root, &guard.state.sessions, args.pid);
+
+    if args.json {
+        let out = match &owner {
+            Some(o) => serde_json::json!({
+                "pid": args.pid,
+                "owned": true,
+                "slug": o.slug,
+                "slot": o.slot,
+                "service": o.service,
+                "port": o.port,
+            }),
+            None => serde_json::json!({
+                "pid": args.pid,
+                "owned": false,
+            }),
+        };
+        println!("{}", serde_json::to_string_pretty(&out)?);
+    } else {
+        match &owner {
+            Some(o) => {
+                let svc = o.service.as_deref().unwrap_or("?");
+                let port = o.port.map(|p| format!(", port {p}")).unwrap_or_default();
+                println!(
+                    "PID {} is owned by session '{}' (slot {}, service '{}'{})",
+                    args.pid, o.slug, o.slot, svc, port
+                );
+            }
+            None => {
+                println!("PID {} is not owned by any ecluse session", args.pid);
+            }
+        }
+    }
+
+    if owner.is_none() {
+        std::process::exit(1);
+    }
+    Ok(())
 }
 
 // ── init ─────────────────────────────────────────────────────────────────────

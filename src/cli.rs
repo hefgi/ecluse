@@ -39,6 +39,8 @@ pub enum Command {
     Flush(FlushArgs),
     /// Show health status of services for a session
     Status(StatusArgs),
+    /// Look up which ecluse session owns a given PID
+    WhosePid(WhosePidArgs),
 }
 
 #[derive(Args)]
@@ -223,6 +225,15 @@ pub struct StatusArgs {
     /// Suppress table output (only exit code matters)
     #[arg(long)]
     pub quiet: bool,
+}
+
+#[derive(Args)]
+pub struct WhosePidArgs {
+    /// PID to look up
+    pub pid: u32,
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args)]
