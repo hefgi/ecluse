@@ -84,8 +84,9 @@ pub fn find_free_port(config: &Config, service: &ServiceConfig, slot: u8) -> Res
         }
     });
 
-    let nominal = service.port(slot);
+    let nominal = service.port(slot, config.slot_stride);
     let max_slots = config.max_slots as u16;
+    let stride = config.slot_stride.max(1) as u16;
 
     if config.strict_port {
         if let Some(pid) = port_listener_pid(nominal) {
@@ -101,11 +102,13 @@ pub fn find_free_port(config: &Config, service: &ServiceConfig, slot: u8) -> Res
         return Ok(nominal);
     }
 
-    // Try nominal port first, then bump by max_slots increments.
+    // Try nominal port first, then bump by `max_slots * slot_stride` increments.
+    // This ensures candidates never land on another slot's nominal port.
     // Use saturating arithmetic to avoid wrapping on high base_port values.
+    let bump = max_slots.saturating_mul(stride);
     let candidates = std::iter::once(nominal).chain(
         (1..=config.port_search_range as u16)
-            .map(|i| nominal.saturating_add(i.saturating_mul(max_slots)))
+            .map(|i| nominal.saturating_add(i.saturating_mul(bump)))
             .take_while(|&p| p != u16::MAX),
     );
 
@@ -302,15 +305,18 @@ pub fn validate_config(config: &Config) -> Result<Vec<String>> {
 
         let max_slots = config.max_slots as u32;
         let range = config.port_search_range as u32;
+        let stride = config.slot_stride.max(1) as u32;
 
         for window in sorted.windows(2) {
             let lower = window[0];
             let upper = window[1];
 
-            // Highest port the lower service could ever use (any slot, any bump)
-            let lower_max = lower.base_port as u32 + max_slots + range * max_slots;
-            // Lowest port the upper service uses (slot 1 nominal)
-            let upper_min = upper.base_port as u32 + 1;
+            // Highest port the lower service could ever use (any slot, any bump).
+            // Each slot bumps by stride; each search candidate bumps by max_slots*stride.
+            let lower_max =
+                lower.base_port as u32 + max_slots * stride + range * max_slots * stride;
+            // Lowest port the upper service uses (slot 1 nominal).
+            let upper_min = upper.base_port as u32 + stride;
 
             if lower_max >= upper_min {
                 errors.push(format!(
@@ -354,6 +360,7 @@ mod tests {
             app_label_value: "app".into(),
             strict_port: false,
             port_search_range,
+            slot_stride: 1,
             services,
             hooks: HookConfig::default(),
             inherit_env: vec![],

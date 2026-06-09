@@ -294,6 +294,7 @@ mod tests {
             app_label_value: "app".into(),
             strict_port: false,
             port_search_range: 10,
+            slot_stride: 1,
             services: vec![],
             hooks: crate::config::HookConfig::default(),
             inherit_env: vec![],

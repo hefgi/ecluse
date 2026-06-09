@@ -189,6 +189,7 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         app_label_value: "app".into(),
         strict_port: false,
         port_search_range: 10,
+        slot_stride: 1,
         services: vec![],
         hooks: config::HookConfig::default(),
         inherit_env: vec![".env".into(), ".env.local".into()],
@@ -1382,7 +1383,7 @@ fn cmd_validate(args: cli::ValidateArgs) -> Result<()> {
                 svc.name,
                 svc.run,
                 svc.base_port,
-                svc.port(1),
+                svc.port(1, config.slot_stride),
             );
         }
     }
@@ -1400,7 +1401,7 @@ fn cmd_validate(args: cli::ValidateArgs) -> Result<()> {
             let port_parts: Vec<String> = config
                 .services
                 .iter()
-                .map(|s| format!("{:>20}", s.port(slot)))
+                .map(|s| format!("{:>20}", s.port(slot, config.slot_stride)))
                 .collect();
             println!("  {:>6}  {}", slot, port_parts.join("  "));
         }

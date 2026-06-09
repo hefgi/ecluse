@@ -683,15 +683,20 @@ worktree_dir = ".ecluse/worktrees"
 # inherit_env = []                       # opt out entirely
 # inherit_env = [".env", ".env.staging"] # custom list for other env files
 
-# Port collision handling (both optional)
+# Port collision handling (all optional)
 # strict_port = false        # default: search for a free port on collision
-# port_search_range = 10     # how many alternatives to try (bump by max_slots each time)
-#                            # Guard: port_search_range × max_slots must not exceed
+# port_search_range = 10     # how many alternatives to try (bump by max_slots × slot_stride each time)
+#                            # Guard: port_search_range × max_slots × slot_stride must not exceed
 #                            # the gap between adjacent service base_ports.
 #                            # Run `ecluse validate` to check.
+# slot_stride = 1            # spacing between adjacent slots' ports.
+#                            # slot_stride = 1 (default): slots 1/2/3 → base+1, base+2, base+3
+#                            # slot_stride = 10:          slots 1/2/3 → base+10, base+20, base+30
+#                            # Wider stride makes adjacent-slot ports visually distinct in lsof
+#                            # output and reduces the chance of agents misidentifying them.
 
 # One [[services]] block per service.
-# port = base_port + slot  (slot 1 → +1, slot 2 → +2, …)
+# port = host_port_base + slot × slot_stride  (default stride 1: slot 1 → +1, slot 2 → +2)
 # run = "native" (default) runs on host; run = "docker" runs in a container.
 # The first native entry also sets the PORT alias for framework compatibility.
 # Omit [[services]] entirely for single-service stacks — PORT = 3000 + slot.

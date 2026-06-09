@@ -167,8 +167,12 @@ impl ServiceConfig {
         self.host_port.unwrap_or(self.base_port)
     }
 
-    pub fn port(&self, slot: u8) -> u16 {
-        self.host_port_base().saturating_add(slot as u16)
+    /// Compute the allocated port for `slot` using the given `slot_stride`.
+    /// `port = host_port_base + slot * slot_stride`. Use stride=1 for default behavior.
+    pub fn port(&self, slot: u8, slot_stride: u8) -> u16 {
+        let stride = slot_stride.max(1) as u16;
+        self.host_port_base()
+            .saturating_add((slot as u16).saturating_mul(stride))
     }
 
     /// Returns all extra port allocations as `(host_base_port, env_var_name)` pairs.
@@ -224,10 +228,19 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "is_false")]
     pub strict_port: bool,
     /// Number of alternative ports to try per service when a port is already in use.
-    /// Each candidate is `nominal + i * max_slots` to avoid stealing another slot's port.
-    /// Guard: port_search_range * max_slots must not exceed the gap between adjacent services.
+    /// Each candidate is `nominal + i * max_slots * slot_stride` to avoid stealing another slot's port.
+    /// Guard: port_search_range * max_slots * slot_stride must not exceed the gap between adjacent services.
     #[serde(default = "default_port_search_range")]
     pub port_search_range: u8,
+    /// Spacing between ports of adjacent slots. With `slot_stride = 10`, slots 1/2/3
+    /// get ports `base+10`, `base+20`, `base+30` instead of `base+1`, `base+2`, `base+3`.
+    /// Wider spacing reduces the chance of agents misidentifying adjacent-slot ports
+    /// as their own. Defaults to 1 (no change for existing configs).
+    #[serde(
+        default = "default_slot_stride",
+        skip_serializing_if = "is_default_slot_stride"
+    )]
+    pub slot_stride: u8,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub services: Vec<ServiceConfig>,
     #[serde(default, skip_serializing_if = "HookConfig::is_empty")]
@@ -333,6 +346,12 @@ fn default_app_label_value() -> String {
 }
 fn default_port_search_range() -> u8 {
     10
+}
+fn default_slot_stride() -> u8 {
+    1
+}
+fn is_default_slot_stride(v: &u8) -> bool {
+    *v == 1
 }
 fn default_inherit_env() -> Vec<String> {
     vec![".env".into(), ".env.local".into()]
@@ -537,6 +556,7 @@ on_down = "echo bye"
             app_label_value: "app".into(),
             strict_port: false,
             port_search_range: 10,
+            slot_stride: 1,
             services: vec![],
             hooks: HookConfig::default(),
             inherit_env: vec![],
@@ -636,9 +656,9 @@ base_port = 5432
             extra_ports: vec![],
             host_port: None,
         };
-        assert_eq!(svc.port(1), 8001);
-        assert_eq!(svc.port(2), 8002);
-        assert_eq!(svc.port(8), 8008);
+        assert_eq!(svc.port(1, 1), 8001);
+        assert_eq!(svc.port(2, 1), 8002);
+        assert_eq!(svc.port(8, 1), 8008);
     }
 
     #[test]
@@ -674,6 +694,7 @@ base_port = 5432
             app_label_value: "app".into(),
             strict_port: false,
             port_search_range: 10,
+            slot_stride: 1,
             services: vec![
                 ServiceConfig {
                     name: "api".into(),
@@ -899,7 +920,7 @@ base_port = 3000
             host_port: None,
         };
         assert_eq!(svc.host_port_base(), 5432);
-        assert_eq!(svc.port(1), 5433);
+        assert_eq!(svc.port(1, 1), 5433);
     }
 
     #[test]
@@ -916,7 +937,59 @@ base_port = 3000
             host_port: Some(11532),
         };
         assert_eq!(svc.host_port_base(), 11532);
-        assert_eq!(svc.port(1), 11533);
-        assert_eq!(svc.port(2), 11534);
+        assert_eq!(svc.port(1, 1), 11533);
+        assert_eq!(svc.port(2, 1), 11534);
+    }
+
+    #[test]
+    fn port_with_stride_spaces_slots_by_stride() {
+        let svc = ServiceConfig {
+            name: "api".into(),
+            base_port: 3000,
+            run: ServiceRun::Native,
+            compose: None,
+            command: None,
+            port_env: vec![],
+            debug_port: None,
+            extra_ports: vec![],
+            host_port: None,
+        };
+        assert_eq!(svc.port(1, 10), 3010);
+        assert_eq!(svc.port(2, 10), 3020);
+        assert_eq!(svc.port(3, 10), 3030);
+    }
+
+    #[test]
+    fn port_with_stride_zero_is_treated_as_one() {
+        let svc = ServiceConfig {
+            name: "api".into(),
+            base_port: 3000,
+            run: ServiceRun::Native,
+            compose: None,
+            command: None,
+            port_env: vec![],
+            debug_port: None,
+            extra_ports: vec![],
+            host_port: None,
+        };
+        // Stride of 0 would zero out the slot offset; we clamp to 1 to keep ports unique.
+        assert_eq!(svc.port(1, 0), 3001);
+        assert_eq!(svc.port(2, 0), 3002);
+    }
+
+    #[test]
+    fn slot_stride_loads_from_toml() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\nslot_stride = 10\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.slot_stride, 10);
+    }
+
+    #[test]
+    fn slot_stride_defaults_to_one() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.slot_stride, 1);
     }
 }
