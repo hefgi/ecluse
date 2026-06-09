@@ -551,12 +551,40 @@ If `strict_port = true` is set (or all alternatives are exhausted):
 **Error:** `port 3001 is already in use by PID 12345; stop that process first`
 
 ```bash
+ecluse whose-pid 12345   # MUST verify before killing — see "Killing services safely" above
+# If unowned:
 kill 12345
 lsof -iTCP:3001 -sTCP:LISTEN   # verify port is free
 ecluse up                       # retry
 ```
 
 Persistent conflict: change `base_port` in the relevant `[[services]]` block, or increase `port_search_range` and run `ecluse validate` to confirm no overlaps.
+
+### Cross-agent port collision (parallel sessions killing each other)
+
+**Symptom:** in parallel sessions on the same repo, services keep dying with `exit 137` / SIGKILL even though no one ran `ecluse down`. Restarting via `task` or `make` lands them on the wrong port. Multiple agents are running `kill` or `lsof -ti | xargs kill` against each other's PIDs.
+
+**Root cause:** an external task runner (`task`, `make`, `npm run`, `bin/dev`) was used as the service entry point instead of `command = "..."` in `.ecluse.toml`. External runners re-read `.env.local` and inherit the spawning shell's env — neither knows about `.env.ecluse`. Under parallel sessions the spawning shell can carry env from a *different* worktree's `source .env.ecluse`, so services bind to the wrong slot's ports. Agents then see "a process on a port adjacent to mine" and kill it, believing it's their own stale leftover.
+
+**Recovery (do this in each affected session):**
+
+```bash
+# 1. Stop all the wrong-slot processes safely
+ecluse down <your-slug> --keep-worktree
+
+# 2. Restart with ecluse spawning the services directly
+ecluse up <your-slug> --reuse-worktree
+
+# 3. Verify ports are correct
+ecluse status <your-slug>
+```
+
+**Prevention:**
+
+1. **Move the actual service commands into `[[services]] command = "..."`** so ecluse spawns them with the correct slot env. This is the only real fix.
+2. **If you must use an external runner**, run `ecluse sync <your-slug>` immediately after starting it so the resulting PIDs are tracked. Then `ecluse down --keep-worktree` will kill them properly.
+3. **Never run `lsof -ti TCP:<port> | xargs kill` blind** — see "Killing services safely". Use `ecluse whose-pid` to verify ownership before any manual kill.
+4. **Consider `slot_stride = 10` in `.ecluse.toml`** for visually distinct adjacent-slot ports (3010, 3020, 3030 instead of 3001, 3002, 3003). Doesn't prevent the root cause but makes mistakes harder.
 
 ### Docker not running
 

@@ -8,9 +8,12 @@ max_slots = 8
 prefix = "ecluse"
 worktree_dir = ".ecluse/worktrees"
 
-# Port collision handling (both optional)
+# Port collision handling (all optional)
 # strict_port = false        # default: search for a free port on collision
-# port_search_range = 10     # how many alternatives to try (bump by max_slots each time)
+# port_search_range = 10     # how many alternatives to try (bump by max_slots × slot_stride each time)
+# slot_stride = 1            # spacing between adjacent slots' ports.
+#                            # = 1 (default): slots 1/2/3 → base+1, base+2, base+3
+#                            # = 10:          slots 1/2/3 → base+10, base+20, base+30
 
 # One [[services]] block per service. port = base_port + slot.
 # Native services run on the host; docker services run in containers.
@@ -55,6 +58,7 @@ pre_down = "npx prisma migrate reset --force"
 | `worktree_dir` | string | `".ecluse/worktrees"` | Directory for git worktrees |
 | `strict_port` | bool | `false` | Fail immediately on port collision instead of searching |
 | `port_search_range` | integer | `10` | How many alternatives to try on collision |
+| `slot_stride` | integer | `1` | Spacing between adjacent slots' ports. With `slot_stride = 10`, slots 1/2/3 get `base+10`, `base+20`, `base+30` instead of `base+1`, `base+2`, `base+3`. Wider stride makes adjacent-slot ports visually distinct in `lsof` output and reduces the chance of misidentifying them. |
 | `app_label` | string | `"ecluse.role"` | Docker Compose label key used to identify app vs data services in hybrid mode |
 | `app_label_value` | string | `"app"` | Value of `app_label` that marks a service as the app (not a data service) |
 | `inherit_env` | array | `[".env", ".env.local"]` | Files to symlink from the repo root into each new worktree at `ecluse up` time. Symlinks keep worktrees in sync with root changes automatically. Set to `[]` to opt out. |

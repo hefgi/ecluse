@@ -13,10 +13,10 @@ Ecluse pre-allocates a consistent, non-overlapping port set for the entire sessi
 Each service gets a port derived from the slot:
 
 ```
-port = base_port + slot
+port = base_port + slot × slot_stride
 ```
 
-With `base_port = 3000` and `max_slots = 8`:
+With `base_port = 3000`, `max_slots = 8`, and the default `slot_stride = 1`:
 
 | Slot | PORT |
 |---|---|
@@ -26,15 +26,34 @@ With `base_port = 3000` and `max_slots = 8`:
 | … | … |
 | 8 | 3008 |
 
+### Spacing slots further apart with `slot_stride`
+
+When parallel agents work on the same repo, adjacent-slot ports (`3001` and `3002`) are easy to confuse — an agent might see "a process on the port next to mine" and assume it's a stale leftover when it actually belongs to another worktree. Set `slot_stride` in `.ecluse.toml` to widen the gap:
+
+```toml
+slot_stride = 10
+```
+
+With `slot_stride = 10`:
+
+| Slot | PORT |
+|---|---|
+| 1 | 3010 |
+| 2 | 3020 |
+| 3 | 3030 |
+| … | … |
+
+Wider stride doesn't prevent every confusion — the canonical fix for "the wrong process is on my port" is still `ecluse down --keep-worktree` + `ecluse up --reuse-worktree` (see the [Agent workflow](agent-workflow.md) page) — but it makes adjacent-slot ports visually distinct in `lsof` output and gives `extra_ports` more room to coexist with primary service ports.
+
 ## Collision handling
 
 By default, ecluse searches for a free port if the nominal one is taken, trying:
 
 ```
-nominal + i × max_slots
+nominal + i × max_slots × slot_stride
 ```
 
-This keeps search candidates out of other slots' territory. For example, if slot 1's nominal port 3001 is taken, it tries 3009, 3017, …
+This keeps search candidates out of other slots' territory. For example, with `slot_stride = 1` and `max_slots = 8`, if slot 1's nominal port 3001 is taken, ecluse tries 3009, 3017, …
 
 Set `strict_port = true` in `.ecluse.toml` to fail immediately instead of searching.
 

@@ -12,6 +12,7 @@ ecluse shell    [<slug>]
 ecluse env      [<slug>]
 ecluse validate [--ports] [--quiet]
 ecluse status   [<slug>] [--json] [--quiet]
+ecluse whose-pid <pid> [--json]
 ```
 
 ## ecluse init
@@ -180,3 +181,33 @@ The last column and the session header adapt to the process manager:
 |---|---|
 | `--json` | Output as JSON (implies `--quiet`) |
 | `--quiet` | Suppress table output — only the exit code is set |
+
+## ecluse whose-pid
+
+Resolves a PID to the ecluse session that owns it. Use this before any manual `kill` of a process on an ecluse-allocated port to avoid killing another agent's working service.
+
+```bash
+$ ecluse whose-pid 97469
+PID 97469 is owned by session 'feat-payment' (slot 2, service 'api', port 3002)
+
+$ ecluse whose-pid 12345
+PID 12345 is not owned by any ecluse session
+```
+
+Lookup checks `.ecluse/pids/<slug>/*.pid` files and walks descendants up to 5 levels deep, so processes spawned by `task`, `make`, `npm run`, or any other launcher that's been registered via `ecluse sync` will resolve to the right session. For tmux-managed sessions it also checks pane PIDs and their subtrees.
+
+| Flag | Description |
+|---|---|
+| `--json` | Output as JSON |
+
+**Exit codes:** `0` if the PID is owned by a tracked ecluse session, `1` if not. This makes the command suitable for scripting:
+
+```bash
+if ecluse whose-pid "$PID" --json >/dev/null; then
+  echo "PID $PID belongs to another agent — do not kill"
+else
+  kill "$PID"   # confirmed unowned
+fi
+```
+
+See the [Agent workflow](agent-workflow.md) page for the canonical "killing services safely" policy.
