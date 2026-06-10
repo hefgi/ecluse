@@ -257,8 +257,8 @@ impl super::ModeHandler for ContainerMode {
         }
 
         if !no_inherit_env && !config.inherit_env.is_empty() {
-            log.step("Symlinking inherited env files...");
-            crate::worktree::symlink_env_files(root, &worktree_path, &config.inherit_env, log)?;
+            log.step("Inheriting env files...");
+            crate::worktree::inherit_env_files(root, &worktree_path, &config.inherit_env, log)?;
         }
 
         log.step("Writing .env.ecluse...");

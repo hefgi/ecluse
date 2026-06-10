@@ -55,6 +55,114 @@ impl std::fmt::Display for ServiceRun {
     }
 }
 
+/// How an `inherit_env` entry is materialized in each worktree.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum InheritEnvMode {
+    /// File in the worktree is a symlink to the root file. Edits propagate both ways.
+    #[default]
+    Symlink,
+    /// File is copied from root once. Worktree edits stay local; root edits don't propagate.
+    Copy,
+}
+
+/// A single `inherit_env` entry: which file to inherit, and how.
+///
+/// In TOML, accepts either a bare string (defaults to `symlink`) or an object form:
+/// ```toml
+/// inherit_env = [
+///   ".env",                                  # symlink (default)
+///   { file = ".env.local", mode = "copy" },  # copied once, then independent
+/// ]
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InheritEnvEntry {
+    pub file: String,
+    pub mode: InheritEnvMode,
+}
+
+impl InheritEnvEntry {
+    pub fn symlink<S: Into<String>>(file: S) -> Self {
+        Self {
+            file: file.into(),
+            mode: InheritEnvMode::Symlink,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn copy<S: Into<String>>(file: S) -> Self {
+        Self {
+            file: file.into(),
+            mode: InheritEnvMode::Copy,
+        }
+    }
+}
+
+impl Serialize for InheritEnvEntry {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Bare-string form when mode is the default (symlink), so default configs
+        // round-trip as the simple list form. Object form otherwise.
+        if self.mode == InheritEnvMode::Symlink {
+            serializer.serialize_str(&self.file)
+        } else {
+            use serde::ser::SerializeStruct;
+            let mut s = serializer.serialize_struct("InheritEnvEntry", 2)?;
+            s.serialize_field("file", &self.file)?;
+            s.serialize_field("mode", &self.mode)?;
+            s.end()
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for InheritEnvEntry {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        struct EntryVisitor;
+
+        impl<'de> Visitor<'de> for EntryVisitor {
+            type Value = InheritEnvEntry;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(
+                    f,
+                    "a filename string or {{ file = \"...\", mode = \"symlink\" | \"copy\" }}"
+                )
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<InheritEnvEntry, E> {
+                Ok(InheritEnvEntry::symlink(v))
+            }
+
+            fn visit_string<E: de::Error>(self, v: String) -> Result<InheritEnvEntry, E> {
+                Ok(InheritEnvEntry::symlink(v))
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<InheritEnvEntry, A::Error> {
+                let mut file: Option<String> = None;
+                let mut mode: Option<InheritEnvMode> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "file" => file = Some(map.next_value()?),
+                        "mode" => mode = Some(map.next_value()?),
+                        other => {
+                            return Err(de::Error::unknown_field(other, &["file", "mode"]));
+                        }
+                    }
+                }
+                let file = file.ok_or_else(|| de::Error::missing_field("file"))?;
+                Ok(InheritEnvEntry {
+                    file,
+                    mode: mode.unwrap_or_default(),
+                })
+            }
+        }
+
+        deserializer.deserialize_any(EntryVisitor)
+    }
+}
+
 /// A secondary port allocation on a service: allocated as `base_port + slot` on the host,
 /// injected into the process environment under `port_env`.
 ///
@@ -245,10 +353,17 @@ pub struct Config {
     pub services: Vec<ServiceConfig>,
     #[serde(default, skip_serializing_if = "HookConfig::is_empty")]
     pub hooks: HookConfig,
-    /// Files to symlink from the main worktree root into each new worktree at `ecluse up` time.
-    /// Defaults to [".env", ".env.local"]. Set to [] to opt out entirely.
+    /// Files to inherit from the main worktree root into each new worktree at `ecluse up` time.
+    /// Each entry is either a bare string (defaults to `mode = "symlink"`) or an object
+    /// `{ file = "...", mode = "symlink" | "copy" }`. Defaults to symlinking
+    /// `.env` and `.env.local`. Set to `[]` to opt out entirely.
+    ///
+    /// - `symlink` (default): file in the worktree is a symlink to root; edits to either
+    ///   side affect both. Good for shared secrets that should stay in sync.
+    /// - `copy`: file is copied from root once on first `ecluse up`; future edits in the
+    ///   worktree stay local. Good for per-worktree feature flags / overrides.
     #[serde(default = "default_inherit_env", skip_serializing_if = "Vec::is_empty")]
-    pub inherit_env: Vec<String>,
+    pub inherit_env: Vec<InheritEnvEntry>,
 }
 
 impl Config {
@@ -353,8 +468,11 @@ fn default_slot_stride() -> u8 {
 fn is_default_slot_stride(v: &u8) -> bool {
     *v == 1
 }
-fn default_inherit_env() -> Vec<String> {
-    vec![".env".into(), ".env.local".into()]
+fn default_inherit_env() -> Vec<InheritEnvEntry> {
+    vec![
+        InheritEnvEntry::symlink(".env"),
+        InheritEnvEntry::symlink(".env.local"),
+    ]
 }
 fn is_false(v: &bool) -> bool {
     !v
@@ -991,5 +1109,124 @@ base_port = 3000
         write_toml(&dir, "mode = \"host\"\n");
         let config = Config::load(dir.path()).unwrap();
         assert_eq!(config.slot_stride, 1);
+    }
+
+    // ── inherit_env ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn inherit_env_default_is_symlinked_env_and_env_local() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(
+            config.inherit_env,
+            vec![
+                InheritEnvEntry::symlink(".env"),
+                InheritEnvEntry::symlink(".env.local"),
+            ]
+        );
+    }
+
+    #[test]
+    fn inherit_env_bare_string_defaults_to_symlink() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\ninherit_env = [\".env\"]\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.inherit_env, vec![InheritEnvEntry::symlink(".env")]);
+    }
+
+    #[test]
+    fn inherit_env_object_form_loads_correctly() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"host\"\ninherit_env = [{ file = \".env.local\", mode = \"copy\" }]\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(
+            config.inherit_env,
+            vec![InheritEnvEntry::copy(".env.local")]
+        );
+    }
+
+    #[test]
+    fn inherit_env_mixed_forms_load_correctly() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"host\"\ninherit_env = [\".env\", { file = \".env.local\", mode = \"copy\" }]\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(
+            config.inherit_env,
+            vec![
+                InheritEnvEntry::symlink(".env"),
+                InheritEnvEntry::copy(".env.local"),
+            ]
+        );
+    }
+
+    #[test]
+    fn inherit_env_object_without_mode_defaults_to_symlink() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"host\"\ninherit_env = [{ file = \".env\" }]\n",
+        );
+        let config = Config::load(dir.path()).unwrap();
+        assert_eq!(config.inherit_env, vec![InheritEnvEntry::symlink(".env")]);
+    }
+
+    #[test]
+    fn inherit_env_invalid_mode_returns_error() {
+        let dir = TempDir::new().unwrap();
+        write_toml(
+            &dir,
+            "mode = \"host\"\ninherit_env = [{ file = \".env\", mode = \"hardlink\" }]\n",
+        );
+        assert!(Config::load(dir.path()).is_err());
+    }
+
+    #[test]
+    fn inherit_env_empty_list_opts_out() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\ninherit_env = []\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert!(config.inherit_env.is_empty());
+    }
+
+    #[test]
+    fn inherit_env_symlink_entry_serializes_as_bare_string() {
+        let entry = InheritEnvEntry::symlink(".env");
+        let s = toml::to_string(&entry).unwrap_or_else(|_| {
+            // Direct serialization of a single entry isn't directly representable;
+            // verify the round-trip through a Config instead.
+            String::new()
+        });
+        // Round-trip: a Config with default inherit_env serializes the entries
+        // as bare strings (since they're all symlink mode).
+        let config = Config {
+            mode: Mode::Host,
+            max_slots: 8,
+            prefix: "ecluse".into(),
+            worktree_dir: ".ecluse/worktrees".into(),
+            app_label: "ecluse.role".into(),
+            app_label_value: "app".into(),
+            strict_port: false,
+            port_search_range: 10,
+            slot_stride: 1,
+            services: vec![],
+            hooks: HookConfig::default(),
+            inherit_env: vec![
+                InheritEnvEntry::symlink(".env"),
+                InheritEnvEntry::copy(".env.local"),
+            ],
+        };
+        let toml_str = toml::to_string(&config).unwrap();
+        // Symlink entry: bare string.
+        assert!(toml_str.contains("\".env\""));
+        // Copy entry: object form with explicit mode.
+        assert!(toml_str.contains("mode = \"copy\""));
+        let _ = s; // silence unused warning if alternative path didn't populate it
     }
 }

@@ -192,7 +192,10 @@ fn cmd_init(args: cli::InitArgs) -> Result<()> {
         slot_stride: 1,
         services: vec![],
         hooks: config::HookConfig::default(),
-        inherit_env: vec![".env".into(), ".env.local".into()],
+        inherit_env: vec![
+            config::InheritEnvEntry::symlink(".env"),
+            config::InheritEnvEntry::symlink(".env.local"),
+        ],
     };
     cfg.save(&root)?;
     log.detail(&format!("mode: {mode}, max_slots: {}", args.max_slots));

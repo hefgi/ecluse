@@ -161,39 +161,72 @@ pub fn is_inside_git_worktree(cwd: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Symlink each file in `files` from `root` into `worktree_path`.
+/// Materialize each `inherit_env` entry from `root` into `worktree_path`.
 /// Files absent in root are silently skipped.
-/// If the destination is already a symlink pointing to the right source, skip silently.
-/// If the destination is a real file (not a symlink), skip silently — never clobber user files.
-/// If the destination is a broken symlink, replace it.
-pub fn symlink_env_files(
+///
+/// Per entry mode:
+/// - `Symlink`: the worktree file is a symlink to root. Idempotent: correct symlinks
+///   are left alone, stale/broken symlinks are replaced, real files are never clobbered.
+/// - `Copy`: the worktree file is a real file copied from root, but only when no entry
+///   currently exists at the destination. Once a copy exists (or the user has placed a
+///   real file there), `ecluse up` re-runs leave it untouched so per-worktree edits stick.
+///   Stale symlinks left over from a previous `symlink` configuration are replaced with
+///   a fresh copy (treated as first-time init).
+pub fn inherit_env_files(
     root: &Path,
     worktree_path: &Path,
-    files: &[String],
+    entries: &[crate::config::InheritEnvEntry],
     log: &crate::log::StepLogger,
 ) -> anyhow::Result<()> {
-    for name in files {
+    use crate::config::InheritEnvMode;
+
+    for entry in entries {
+        let name = &entry.file;
         let src = root.join(name);
         if !src.exists() {
             continue;
         }
         let dst = worktree_path.join(name);
-        if let Ok(target) = std::fs::read_link(&dst) {
-            if target == src {
-                // Already a correct symlink — nothing to do.
-                continue;
+
+        match entry.mode {
+            InheritEnvMode::Symlink => {
+                if let Ok(target) = std::fs::read_link(&dst) {
+                    if target == src {
+                        // Already a correct symlink — nothing to do.
+                        continue;
+                    }
+                    // Broken or stale symlink — replace it.
+                    std::fs::remove_file(&dst).with_context(|| {
+                        format!("failed to remove stale symlink {}", dst.display())
+                    })?;
+                } else if dst.exists() {
+                    // Real file owned by the user — leave it alone.
+                    log.detail(&format!("skipped {} (real file exists in worktree)", name));
+                    continue;
+                }
+                std::os::unix::fs::symlink(&src, &dst)
+                    .with_context(|| format!("failed to symlink {} into worktree", name))?;
+                log.detail(&format!("symlinked {}", name));
             }
-            // Broken or stale symlink — replace it.
-            std::fs::remove_file(&dst)
-                .with_context(|| format!("failed to remove stale symlink {}", dst.display()))?;
-        } else if dst.exists() {
-            // Real file owned by the user — leave it alone.
-            log.detail(&format!("skipped {} (real file exists in worktree)", name));
-            continue;
+            InheritEnvMode::Copy => {
+                // If a real file exists, preserve the user's per-worktree edits.
+                let is_symlink = std::fs::symlink_metadata(&dst)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false);
+                if is_symlink {
+                    // Previously symlinked under an older config — replace with a fresh copy.
+                    std::fs::remove_file(&dst).with_context(|| {
+                        format!("failed to remove stale symlink {}", dst.display())
+                    })?;
+                } else if dst.exists() {
+                    log.detail(&format!("skipped {} (already in worktree)", name));
+                    continue;
+                }
+                std::fs::copy(&src, &dst)
+                    .with_context(|| format!("failed to copy {} into worktree", name))?;
+                log.detail(&format!("copied {}", name));
+            }
         }
-        std::os::unix::fs::symlink(&src, &dst)
-            .with_context(|| format!("failed to symlink {} into worktree", name))?;
-        log.detail(&format!("symlinked {}", name));
     }
     Ok(())
 }
@@ -404,9 +437,11 @@ mod tests {
         wt.remove(&path).unwrap();
     }
 
-    // ── symlink_env_files ─────────────────────────────────────────────────────
+    // ── inherit_env_files ─────────────────────────────────────────────────────
 
-    fn setup_symlink_test(name: &str) -> (TempDir, std::path::PathBuf) {
+    use crate::config::InheritEnvEntry;
+
+    fn setup_inherit_test(name: &str) -> (TempDir, std::path::PathBuf) {
         let dir = TempDir::new().unwrap();
         let wt_path = dir.path().join("worktree");
         std::fs::create_dir_all(&wt_path).unwrap();
@@ -414,12 +449,20 @@ mod tests {
         (dir, wt_path)
     }
 
+    // ── symlink mode ──────────────────────────────────────────────────────────
+
     // Fresh worktree (ecluse-created or user-created): file absent → create symlink.
     #[test]
-    fn symlink_env_files_creates_symlink_when_dst_missing() {
-        let (dir, wt_path) = setup_symlink_test(".env");
+    fn inherit_env_files_creates_symlink_when_dst_missing() {
+        let (dir, wt_path) = setup_inherit_test(".env");
         let log = crate::log::StepLogger::new(true);
-        symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
+        inherit_env_files(
+            dir.path(),
+            &wt_path,
+            &[InheritEnvEntry::symlink(".env")],
+            &log,
+        )
+        .unwrap();
 
         let dst = wt_path.join(".env");
         assert!(dst.symlink_metadata().is_ok(), "symlink should exist");
@@ -433,29 +476,39 @@ mod tests {
 
     // Idempotent: already the correct symlink → leave unchanged, no error.
     #[test]
-    fn symlink_env_files_skips_when_correct_symlink_exists() {
-        let (dir, wt_path) = setup_symlink_test(".env");
+    fn inherit_env_files_skips_when_correct_symlink_exists() {
+        let (dir, wt_path) = setup_inherit_test(".env");
         let src = dir.path().join(".env");
         let dst = wt_path.join(".env");
         std::os::unix::fs::symlink(&src, &dst).unwrap();
 
         let log = crate::log::StepLogger::new(true);
-        symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
+        inherit_env_files(
+            dir.path(),
+            &wt_path,
+            &[InheritEnvEntry::symlink(".env")],
+            &log,
+        )
+        .unwrap();
 
-        // Still a symlink pointing to the same source.
         assert_eq!(std::fs::read_link(&dst).unwrap(), src);
     }
 
     // Restart / reuse: stale symlink pointing elsewhere → replaced with correct symlink.
     #[test]
-    fn symlink_env_files_replaces_stale_symlink() {
-        let (dir, wt_path) = setup_symlink_test(".env");
+    fn inherit_env_files_replaces_stale_symlink() {
+        let (dir, wt_path) = setup_inherit_test(".env");
         let dst = wt_path.join(".env");
-        // Point to a non-existent path (broken / stale).
         std::os::unix::fs::symlink("/tmp/does-not-exist-ecluse-test", &dst).unwrap();
 
         let log = crate::log::StepLogger::new(true);
-        symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
+        inherit_env_files(
+            dir.path(),
+            &wt_path,
+            &[InheritEnvEntry::symlink(".env")],
+            &log,
+        )
+        .unwrap();
 
         assert_eq!(
             std::fs::read_link(&dst).unwrap(),
@@ -466,15 +519,20 @@ mod tests {
 
     // User-owned worktree: real file present → leave it alone, no clobber.
     #[test]
-    fn symlink_env_files_skips_real_file_in_worktree() {
-        let (dir, wt_path) = setup_symlink_test(".env");
+    fn inherit_env_files_symlink_skips_real_file_in_worktree() {
+        let (dir, wt_path) = setup_inherit_test(".env");
         let dst = wt_path.join(".env");
-        std::fs::write(&dst, "USER=custom\n").unwrap(); // real file, not a symlink
+        std::fs::write(&dst, "USER=custom\n").unwrap();
 
         let log = crate::log::StepLogger::new(true);
-        symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
+        inherit_env_files(
+            dir.path(),
+            &wt_path,
+            &[InheritEnvEntry::symlink(".env")],
+            &log,
+        )
+        .unwrap();
 
-        // Must still be a regular file with original content.
         assert!(
             std::fs::read_link(&dst).is_err(),
             "must not be converted to symlink"
@@ -484,14 +542,19 @@ mod tests {
 
     // Source absent in root → no symlink created (file simply doesn't exist yet).
     #[test]
-    fn symlink_env_files_skips_missing_src() {
+    fn inherit_env_files_skips_missing_src() {
         let dir = TempDir::new().unwrap();
         let wt_path = dir.path().join("worktree");
         std::fs::create_dir_all(&wt_path).unwrap();
-        // .env does NOT exist in root
 
         let log = crate::log::StepLogger::new(true);
-        symlink_env_files(dir.path(), &wt_path, &[".env".into()], &log).unwrap();
+        inherit_env_files(
+            dir.path(),
+            &wt_path,
+            &[InheritEnvEntry::symlink(".env")],
+            &log,
+        )
+        .unwrap();
 
         assert!(
             !wt_path.join(".env").exists(),
@@ -499,9 +562,9 @@ mod tests {
         );
     }
 
-    // Multiple files: each handled independently.
+    // Multiple symlink-mode files: each handled independently.
     #[test]
-    fn symlink_env_files_handles_multiple_files_independently() {
+    fn inherit_env_files_handles_multiple_files_independently() {
         let dir = TempDir::new().unwrap();
         let wt_path = dir.path().join("worktree");
         std::fs::create_dir_all(&wt_path).unwrap();
@@ -512,21 +575,164 @@ mod tests {
         std::fs::write(wt_path.join(".env.local"), "USER=local\n").unwrap();
 
         let log = crate::log::StepLogger::new(true);
-        symlink_env_files(
+        inherit_env_files(
             dir.path(),
             &wt_path,
-            &[".env".into(), ".env.local".into()],
+            &[
+                InheritEnvEntry::symlink(".env"),
+                InheritEnvEntry::symlink(".env.local"),
+            ],
             &log,
         )
         .unwrap();
 
-        // .env: missing → symlinked
         assert!(std::fs::read_link(wt_path.join(".env")).is_ok());
-        // .env.local: real file → untouched
         assert!(std::fs::read_link(wt_path.join(".env.local")).is_err());
         assert_eq!(
             std::fs::read_to_string(wt_path.join(".env.local")).unwrap(),
             "USER=local\n"
+        );
+    }
+
+    // ── copy mode ─────────────────────────────────────────────────────────────
+
+    // Fresh worktree: file absent → copy from root, real file (not a symlink).
+    #[test]
+    fn inherit_env_files_copies_when_dst_missing() {
+        let (dir, wt_path) = setup_inherit_test(".env.local");
+        let log = crate::log::StepLogger::new(true);
+        inherit_env_files(
+            dir.path(),
+            &wt_path,
+            &[InheritEnvEntry::copy(".env.local")],
+            &log,
+        )
+        .unwrap();
+
+        let dst = wt_path.join(".env.local");
+        assert!(dst.exists(), "copy should exist");
+        assert!(
+            std::fs::read_link(&dst).is_err(),
+            "copy must not be a symlink"
+        );
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "ROOT=1\n");
+    }
+
+    // Per-worktree edits are preserved: existing real file at dst → never re-copy.
+    #[test]
+    fn inherit_env_files_copy_skips_when_dst_exists() {
+        let (dir, wt_path) = setup_inherit_test(".env.local");
+        let dst = wt_path.join(".env.local");
+        std::fs::write(&dst, "AUTH_ENABLED=false\n").unwrap();
+
+        let log = crate::log::StepLogger::new(true);
+        inherit_env_files(
+            dir.path(),
+            &wt_path,
+            &[InheritEnvEntry::copy(".env.local")],
+            &log,
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&dst).unwrap(),
+            "AUTH_ENABLED=false\n",
+            "per-worktree edits must be preserved"
+        );
+    }
+
+    // Mode migration: was symlinked under an older config; now configured as copy.
+    // The stale symlink is replaced with a fresh copy (real file).
+    #[test]
+    fn inherit_env_files_copy_replaces_existing_symlink() {
+        let (dir, wt_path) = setup_inherit_test(".env.local");
+        let src = dir.path().join(".env.local");
+        let dst = wt_path.join(".env.local");
+        std::os::unix::fs::symlink(&src, &dst).unwrap();
+
+        let log = crate::log::StepLogger::new(true);
+        inherit_env_files(
+            dir.path(),
+            &wt_path,
+            &[InheritEnvEntry::copy(".env.local")],
+            &log,
+        )
+        .unwrap();
+
+        assert!(
+            std::fs::read_link(&dst).is_err(),
+            "symlink should have been replaced with a copy"
+        );
+        assert_eq!(std::fs::read_to_string(&dst).unwrap(), "ROOT=1\n");
+    }
+
+    // Edits to root after copy do NOT propagate to existing worktree copies.
+    #[test]
+    fn inherit_env_files_copy_isolates_root_edits() {
+        let (dir, wt_path) = setup_inherit_test(".env.local");
+        let log = crate::log::StepLogger::new(true);
+
+        // First ecluse up: copy created.
+        inherit_env_files(
+            dir.path(),
+            &wt_path,
+            &[InheritEnvEntry::copy(".env.local")],
+            &log,
+        )
+        .unwrap();
+
+        // Root file is edited later.
+        std::fs::write(dir.path().join(".env.local"), "ROOT=2\n").unwrap();
+
+        // Second ecluse up: copy must remain untouched (still ROOT=1).
+        inherit_env_files(
+            dir.path(),
+            &wt_path,
+            &[InheritEnvEntry::copy(".env.local")],
+            &log,
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(wt_path.join(".env.local")).unwrap(),
+            "ROOT=1\n",
+            "worktree copy must be isolated from root edits"
+        );
+    }
+
+    // Mixed modes in a single call: symlink and copy entries handled independently.
+    #[test]
+    fn inherit_env_files_mixed_modes_handled_independently() {
+        let dir = TempDir::new().unwrap();
+        let wt_path = dir.path().join("worktree");
+        std::fs::create_dir_all(&wt_path).unwrap();
+
+        std::fs::write(dir.path().join(".env"), "SHARED=secret\n").unwrap();
+        std::fs::write(dir.path().join(".env.local"), "AUTH=true\n").unwrap();
+
+        let log = crate::log::StepLogger::new(true);
+        inherit_env_files(
+            dir.path(),
+            &wt_path,
+            &[
+                InheritEnvEntry::symlink(".env"),
+                InheritEnvEntry::copy(".env.local"),
+            ],
+            &log,
+        )
+        .unwrap();
+
+        // .env is a symlink to root.
+        assert!(std::fs::read_link(wt_path.join(".env")).is_ok());
+        assert_eq!(
+            std::fs::read_to_string(wt_path.join(".env")).unwrap(),
+            "SHARED=secret\n"
+        );
+        // .env.local is a real file (copy).
+        assert!(std::fs::read_link(wt_path.join(".env.local")).is_err());
+        assert_eq!(
+            std::fs::read_to_string(wt_path.join(".env.local")).unwrap(),
+            "AUTH=true\n"
         );
     }
 
