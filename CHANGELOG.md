@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.2.17] — 2026-06-10
 
 ### Added
 - `inherit_env` entries now support a per-file `mode` (`symlink` or `copy`). The default remains symlink — existing configs are unchanged — but each entry may opt into the object form `{ file = "...", mode = "copy" }` to get a one-time copy from the root file. Copy mode lets a worktree edit its own `.env.local` (e.g. flip `AUTH_ENABLED=false`) without affecting the root file or other parallel worktrees. On subsequent `ecluse up` runs, copied files are preserved verbatim — never re-copied — so per-worktree edits stick. Stale symlinks left over from a prior `symlink` configuration are replaced with a fresh copy.
