@@ -1075,7 +1075,7 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         args.delete_worktree,
     )?;
 
-    let handler = modes::get_handler(&config);
+    let handler = modes::get_handler_for_mode(&session.mode);
     handler.bring_down(
         &session,
         &config,
@@ -1126,12 +1126,12 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
 
     let sessions: Vec<state::Session> = guard.state.sessions.clone();
     let total = sessions.len();
-    let handler = modes::get_handler(&config);
     let mut failed: Vec<String> = Vec::new();
 
     for session in sessions {
         log.step(&format!("Tearing down '{}'...", session.slug));
         log.detail(&format!("slot {}, mode: {}", session.slot, session.mode));
+        let handler = modes::get_handler_for_mode(&session.mode);
 
         let keep_wt = match resolve_worktree_keep(
             std::path::Path::new(&session.worktree_path),
@@ -1737,9 +1737,9 @@ fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
                 "Tearing down {} known session(s)...",
                 sessions.len()
             ));
-            let handler = modes::get_handler(&config);
             for session in sessions {
                 log.detail(&format!("  down '{}'", session.slug));
+                let handler = modes::get_handler_for_mode(&session.mode);
                 if let Err(e) = handler.bring_down(&session, &config, &root, false, false, &log) {
                     log.warn(&format!(
                         "  '{}' teardown failed: {e} (continuing)",
