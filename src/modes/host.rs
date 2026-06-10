@@ -222,6 +222,7 @@ impl super::ModeHandler for HostMode {
             log.step(&format!("Killing native services ({pm})..."));
             process::kill_services(pm, &session.spawn_result());
         }
+        process::remove_env_preamble(std::path::Path::new(&session.worktree_path), &session.slug);
 
         if !keep_worktree {
             log.step("Removing worktree...");
