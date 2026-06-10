@@ -38,9 +38,13 @@ base_port = 5432             # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 
 # extra_ports = [{ base_port = 11533, port_env = "PGPORT" }]
 #   slot 1 → PGPORT=11534 (injected into compose env so compose files can interpolate ${PGPORT})
 
-# Env file inheritance — files symlinked from repo root into each worktree
-# Default: [".env", ".env.local"]. Set to [] to opt out.
+# Env file inheritance — files materialized from repo root into each worktree
+# Default: [".env", ".env.local"] (both symlinked). Set to [] to opt out.
+# Each entry is either a bare string (mode = "symlink") or { file = "...", mode = "symlink" | "copy" }
+# - symlink (default): edits propagate between root and worktree. Use for shared secrets.
+# - copy:              copied once on first ecluse up; per-worktree edits stay local. Use for feature flags.
 # inherit_env = [".env", ".env.local"]
+# inherit_env = [".env", { file = ".env.local", mode = "copy" }]
 
 # Optional: lifecycle hooks (see Hooks page for full details)
 [hooks]
@@ -61,7 +65,7 @@ pre_down = "npx prisma migrate reset --force"
 | `slot_stride` | integer | `1` | Spacing between adjacent slots' ports. With `slot_stride = 10`, slots 1/2/3 get `base+10`, `base+20`, `base+30` instead of `base+1`, `base+2`, `base+3`. Wider stride makes adjacent-slot ports visually distinct in `lsof` output and reduces the chance of misidentifying them. |
 | `app_label` | string | `"ecluse.role"` | Docker Compose label key used to identify app vs data services in hybrid mode |
 | `app_label_value` | string | `"app"` | Value of `app_label` that marks a service as the app (not a data service) |
-| `inherit_env` | array | `[".env", ".env.local"]` | Files to symlink from the repo root into each new worktree at `ecluse up` time. Symlinks keep worktrees in sync with root changes automatically. Set to `[]` to opt out. |
+| `inherit_env` | array | `[".env", ".env.local"]` | Files to materialize from the repo root into each new worktree at `ecluse up` time. Each entry is either a bare string (defaults to `mode = "symlink"`) or an object `{ file = "...", mode = "symlink" \| "copy" }`. Symlink keeps worktrees in sync with root changes both ways. Copy initializes the file once and never re-copies, so per-worktree edits stay isolated — use for feature flags. Set to `[]` to opt out entirely. |
 
 ## `[[services]]`
 

@@ -192,8 +192,10 @@ max_slots = 8
 prefix = "ecluse"
 worktree_dir = ".ecluse/worktrees"
 
-# Env file inheritance — symlinked from repo root into each worktree (default: both)
+# Env file inheritance — materialized from repo root into each worktree (default: both symlinked)
 # inherit_env = [".env", ".env.local"]   # set to [] to opt out
+# inherit_env = [".env", { file = ".env.local", mode = "copy" }]  # .env.local copied once,
+#                                                                  # per-worktree edits stay local
 
 # Port collision handling (both optional)
 # strict_port = false        # default: search for a free port on collision

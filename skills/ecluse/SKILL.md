@@ -83,7 +83,7 @@ Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Us
 **New session:**
 1. Allocates a slot (integer 1–N)
 2. Creates a git worktree at `.ecluse/worktrees/<slug>` on the given branch (branch name preserved; slug is the sanitized form used for paths and Docker names)
-3. Symlinks `.env` and `.env.local` from the repo root into the worktree **by default — no config needed**. To opt out entirely set `inherit_env = []` in `.ecluse.toml`, or pass `--no-inherit-env` to skip for a single run. To symlink a different set of files: `inherit_env = [".env", ".env.staging"]`.
+3. Symlinks `.env` and `.env.local` from the repo root into the worktree **by default — no config needed**. To opt out entirely set `inherit_env = []` in `.ecluse.toml`, or pass `--no-inherit-env` to skip for a single run. To symlink a different set of files: `inherit_env = [".env", ".env.staging"]`. To make a file a per-worktree copy instead of a symlink (so edits in the worktree don't leak back to the root): `inherit_env = [".env", { file = ".env.local", mode = "copy" }]` — copy entries are initialized once and never re-copied on subsequent `ecluse up` runs.
 4. Depending on mode: starts containers, writes `.env.ecluse`, runs `pre_up` then `post_up` hooks if configured
 5. `post_up` runs in the worktree with all env vars set — use it for migrations, seeding, etc.
 
@@ -641,6 +641,26 @@ For frameworks that need explicit loading, two options:
 
 Note: `ECLUSE_*` vars and `PORT` from `.env.ecluse` are always injected into the spawned process environment by ecluse — those never need explicit loading.
 
+### Per-worktree .env override is being clobbered (or shared across worktrees)
+
+**Symptom:** the user edits `.env.local` inside a worktree to set, say, `AUTH_ENABLED=false`, but every other worktree (and the repo root) now sees the same flip — or running `ecluse up` again restores the original value.
+
+**Cause:** by default `inherit_env` uses `mode = "symlink"`, so each worktree's `.env.local` is a symlink back to the root file. Editing it edits the shared root file, and every other worktree sees the change through its own symlink. This is correct for shared secrets (DB passwords, API keys) but wrong for per-worktree feature flags.
+
+**Fix:** mark the file as `mode = "copy"` in `.ecluse.toml`. Copy entries are initialized from the root file once on first `ecluse up`, then left alone forever after — worktree edits stay local, root edits don't propagate, and parallel worktrees each get their own independent file.
+
+```toml
+# .ecluse.toml
+inherit_env = [
+  ".env",                                  # shared secrets — keep symlinked
+  { file = ".env.local", mode = "copy" },  # per-worktree overrides — independent
+]
+```
+
+After the change: existing symlinks for `.env.local` in already-created worktrees are replaced with a fresh copy on the next `ecluse up`. If a worktree already has a real `.env.local` (not a symlink), it is preserved as-is — `ecluse up` never re-copies on top of a non-symlinked file.
+
+To skip inheritance entirely for a single run (CI, ephemeral agent sessions): `ecluse up <slug> --no-inherit-env`.
+
 ### Not inside a git repository
 
 ```bash
@@ -705,11 +725,19 @@ worktree_dir = ".ecluse/worktrees"
 # app_label = "ecluse.role"  # compose label key that marks the app service in hybrid mode
 # app_label_value = "app"    # value to match on that label
 
-# Env file inheritance — symlinked from repo root into each new worktree at ecluse up time.
+# Env file inheritance — materialized from repo root into each new worktree at ecluse up time.
 # Default: [".env", ".env.local"] — active with no config needed, opt out with [].
+# Each entry is either a bare string (mode = "symlink" by default) or an object
+# { file = "...", mode = "symlink" | "copy" }.
+#   - symlink (default): worktree file points to the root; edits propagate both ways.
+#                        Good for shared secrets that should stay in sync.
+#   - copy:              file is copied once on first ecluse up, then independent.
+#                        Per-worktree edits stay local — never re-copied on subsequent ups.
+#                        Use for feature flags / per-worktree overrides.
 # inherit_env = [".env", ".env.local"]   # default — no need to set this explicitly
 # inherit_env = []                       # opt out entirely
 # inherit_env = [".env", ".env.staging"] # custom list for other env files
+# inherit_env = [".env", { file = ".env.local", mode = "copy" }]  # mixed modes
 
 # Port collision handling (all optional)
 # strict_port = false        # default: search for a free port on collision

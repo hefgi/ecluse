@@ -49,7 +49,7 @@ command = "bundle exec rails s -p $PORT"
 
 ## `.env` / `.env.local` are symlinked but not auto-loaded by every framework
 
-ecluse symlinks `.env` and `.env.local` from the repo root into each worktree at `ecluse up` time (configurable via `inherit_env`). The symlinks mean the files are present at the expected path inside the worktree, but **whether they are actually read depends on your framework**:
+ecluse materializes `.env` and `.env.local` from the repo root into each worktree at `ecluse up` time (configurable via `inherit_env`). By default they are symlinks, but each entry may opt into `mode = "copy"` for per-worktree independence (see next section). Either way, the files are present at the expected path inside the worktree, but **whether they are actually read depends on your framework**:
 
 - **Auto-load** (no action needed): Next.js, Vite, Create React App, docker-compose — these discover and load `.env` / `.env.local` automatically.
 - **Explicit-load required**: Node.js without dotenv, Rails, Django, Go, Rust binaries — the app must call `dotenv.config()` / `Dotenv::dotenv()` etc. at startup.
@@ -64,6 +64,32 @@ post_up = "set -a && source .env && set +a && your-start-command"
 ```
 
 Or configure your app's dotenv library to load the file explicitly.
+
+## Per-worktree env overrides require `mode = "copy"`
+
+By default, `inherit_env` symlinks `.env` and `.env.local` from the repo root into each worktree. This is correct for **shared secrets** that should stay in sync everywhere (DB passwords, API keys), but it breaks isolation when the user wants to flip a value in one worktree only.
+
+**Concrete example.** The user has `AUTH_ENABLED=true` in the root `.env.local`. Inside worktree `feat-foo` they want to test with `AUTH_ENABLED=false`. They edit `.ecluse/worktrees/feat-foo/.env.local` and flip the value — but since the file is a symlink, they actually edited the shared root file. Worktrees `feat-bar`, `feat-baz`, and the root project now all see `AUTH_ENABLED=false` too.
+
+**Fix.** Set `mode = "copy"` on the file in `.ecluse.toml`:
+
+```toml
+inherit_env = [
+  ".env",                                  # shared secrets — symlinked
+  { file = ".env.local", mode = "copy" },  # per-worktree overrides — copied once
+]
+```
+
+With copy mode:
+
+- On the first `ecluse up` for a worktree, ecluse copies the root file into the worktree as a real file (not a symlink).
+- Edits in the worktree's copy stay local — never propagate to the root.
+- Edits in the root's file do not propagate to existing worktree copies on subsequent `ecluse up` runs. The copy is initialized once and then frozen.
+- Each new worktree gets a fresh copy from the current state of the root file at the time of its creation.
+- If a worktree already has a real (non-symlink) file at that path, ecluse leaves it untouched — never clobbers user files.
+- Stale symlinks left over from a prior `symlink` configuration are replaced with a fresh copy on the next `ecluse up`.
+
+To skip inheritance entirely for a single run: `ecluse up <slug> --no-inherit-env`.
 
 ## Mode is set at init time
 
