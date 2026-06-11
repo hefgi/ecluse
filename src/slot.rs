@@ -37,6 +37,7 @@ mod tests {
                     slot,
                     branch: format!("branch-{}", slot),
                     worktree_path: format!("/tmp/wt-{}", slot),
+                    status: crate::state::SessionStatus::Active,
                     compose_project: None,
                     overlay_file: None,
                     overlay_files: vec![],

@@ -29,6 +29,25 @@ fn default_version() -> u8 {
     1
 }
 
+/// Lifecycle state of a session entry.
+///
+/// `Pending` reserves the slug + slot while an `up`/`down` runs *without*
+/// holding the state lock — provisioning can take minutes (image pulls,
+/// hooks) and must not block every other ecluse command. A `Pending` entry
+/// that never transitions back means the operation crashed; `ecluse down
+/// <slug>` cleans it up.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionStatus {
+    #[default]
+    Active,
+    Pending,
+}
+
+fn is_active(status: &SessionStatus) -> bool {
+    *status == SessionStatus::Active
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Session {
     pub slug: String,
@@ -36,6 +55,10 @@ pub struct Session {
     pub slot: u8,
     pub branch: String,
     pub worktree_path: String,
+    /// Active, or Pending while an up/down is in flight. Defaults to Active
+    /// so state.json files written by older versions load unchanged.
+    #[serde(default, skip_serializing_if = "is_active")]
+    pub status: SessionStatus,
     pub compose_project: Option<String>,
     pub overlay_file: Option<String>,
     /// Additional overlay files when multiple compose files are involved (monorepo).
@@ -243,6 +266,7 @@ mod tests {
             slot,
             branch: format!("branch/{}", slug),
             worktree_path: format!("/tmp/{}", slug),
+            status: SessionStatus::Active,
             compose_project: None,
             overlay_file: None,
             overlay_files: vec![],
@@ -421,6 +445,7 @@ mod tests {
                 slot: 1,
                 branch: "branch/pm-sess".into(),
                 worktree_path: "/tmp/pm-sess".into(),
+                status: SessionStatus::Active,
                 compose_project: None,
                 overlay_file: None,
                 overlay_files: vec![],
@@ -455,6 +480,7 @@ mod tests {
                 slot: 2,
                 branch: "branch/nohup-sess".into(),
                 worktree_path: "/tmp/nohup-sess".into(),
+                status: SessionStatus::Active,
                 compose_project: None,
                 overlay_file: None,
                 overlay_files: vec![],
@@ -486,6 +512,7 @@ mod tests {
                 slot: 1,
                 branch: "branch/compose-sess".into(),
                 worktree_path: "/tmp/wt".into(),
+                status: SessionStatus::Active,
                 compose_project: Some("ecluse_compose-sess".into()),
                 overlay_file: Some("/tmp/overlay.yml".into()),
                 overlay_files: vec![],
@@ -529,5 +556,44 @@ mod tests {
         let s = make_session("no-sub", 1);
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("services_subset"), "got: {json}");
+    }
+
+    // ── SessionStatus ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn active_status_not_serialized() {
+        // Keeps state.json byte-compatible with older versions for active sessions.
+        let s = make_session("plain", 1);
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("status"), "got: {json}");
+    }
+
+    #[test]
+    fn pending_status_roundtrips() {
+        let mut s = make_session("busy", 1);
+        s.status = SessionStatus::Pending;
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("pending"), "got: {json}");
+        let back: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.status, SessionStatus::Pending);
+    }
+
+    #[test]
+    fn session_without_status_field_defaults_to_active() {
+        // state.json written by an older ecluse has no status field.
+        let s = make_session("old", 1);
+        let mut json: serde_json::Value = serde_json::to_value(&s).unwrap();
+        json.as_object_mut().unwrap().remove("status");
+        let back: Session = serde_json::from_value(json).unwrap();
+        assert_eq!(back.status, SessionStatus::Active);
+    }
+
+    #[test]
+    fn pending_sessions_still_reserve_slots() {
+        let mut state = State::default();
+        let mut s = make_session("busy", 3);
+        s.status = SessionStatus::Pending;
+        state.add_session(s);
+        assert!(state.used_slots().contains(&3));
     }
 }

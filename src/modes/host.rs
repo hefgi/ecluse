@@ -162,6 +162,7 @@ impl super::ModeHandler for HostMode {
             slot,
             branch: branch.to_string(),
             worktree_path: worktree_path.display().to_string(),
+            status: crate::state::SessionStatus::Active,
             compose_project: None,
             overlay_file: None,
             overlay_files: vec![],

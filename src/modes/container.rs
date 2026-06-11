@@ -319,6 +319,7 @@ impl super::ModeHandler for ContainerMode {
             slot,
             branch: branch.to_string(),
             worktree_path: worktree_path.display().to_string(),
+            status: crate::state::SessionStatus::Active,
             compose_project: Some(project),
             overlay_file: primary_overlay,
             overlay_files: extra_overlays,
