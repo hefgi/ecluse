@@ -810,7 +810,7 @@ fn cmd_up_resume(
     if args.force {
         // Kill all non-skipped services.
         log.step("--force: killing services on allocated ports...");
-        force_kill_session_services(&existing, &config, &explicit_skip, &log);
+        force_kill_session_services(&existing, &config, &root, &explicit_skip, &log);
     } else {
         // Auto-detect already-running services and add them to skip set.
         log.step("Checking service health...");
@@ -932,13 +932,64 @@ fn cmd_up_resume(
 }
 
 /// Kill all non-skipped services for a session.
-/// Native: kill by PID files, then by port (lsof). Docker: docker stop by container name.
+/// Native: kill by port (lsof) for PIDs this session owns, then by PID files.
+/// Docker: docker stop by container name.
 fn force_kill_session_services(
     session: &state::Session,
     config: &config::Config,
+    root: &std::path::Path,
     skip: &std::collections::HashSet<String>,
     log: &log::StepLogger,
 ) {
+    // Kill by port first, while the session's pid files still exist — they
+    // are how ownership is established. Docker services are stopped via
+    // docker stop — never kill their host port by PID, as the listening
+    // process may be the container runtime itself (e.g. OrbStack) rather
+    // than the container.
+    let docker_svc_names: std::collections::HashSet<&str> = config
+        .services
+        .iter()
+        .filter(|s| s.run == config::ServiceRun::Docker)
+        .map(|s| s.name.as_str())
+        .collect();
+    for (svc_name, port) in &session.port_overrides {
+        if skip.contains(svc_name) {
+            log.detail(&format!("{}: skipped (--skip)", svc_name));
+            continue;
+        }
+        if docker_svc_names.contains(svc_name.as_str()) {
+            continue;
+        }
+        let output = std::process::Command::new("lsof")
+            .args(["-ti", &format!("TCP:{}", port), "-sTCP:LISTEN"])
+            .output();
+        if let Ok(out) = output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            for pid_str in stdout.split_whitespace() {
+                let Ok(pid) = pid_str.trim().parse::<u32>() else {
+                    continue;
+                };
+                // The recorded port may be stale — another session's
+                // auto-bumped service or an unrelated app could hold it by
+                // now. Only kill PIDs that resolve to THIS session.
+                let owned = whose_pid::resolve(root, std::slice::from_ref(session), pid)
+                    .is_some_and(|o| o.slug == session.slug);
+                if !owned {
+                    log.warn(&format!(
+                        "port {} is held by PID {} which is not owned by session '{}'; skipping — kill it manually if intended",
+                        port, pid, session.slug
+                    ));
+                    continue;
+                }
+                log.detail(&format!(
+                    "killing process {} on port {} ({})",
+                    pid, port, svc_name
+                ));
+                terminate_with_grace(pid);
+            }
+        }
+    }
+
     // Kill native via existing PID files.
     if let Some(pm) = &session.process_manager {
         let result = session.spawn_result();
@@ -959,44 +1010,6 @@ fn force_kill_session_services(
         process::kill_services(pm, &filtered_result);
     }
 
-    // Kill by port for residual native processes only.
-    // Docker services are stopped via docker stop — never kill their host port
-    // by PID, as the listening process may be the container runtime itself
-    // (e.g. OrbStack) rather than the container.
-    let docker_svc_names: std::collections::HashSet<&str> = config
-        .services
-        .iter()
-        .filter(|s| s.run == config::ServiceRun::Docker)
-        .map(|s| s.name.as_str())
-        .collect();
-    for (svc_name, port) in &session.port_overrides {
-        if skip.contains(svc_name) {
-            log.detail(&format!("{}: skipped (--skip)", svc_name));
-            continue;
-        }
-        if docker_svc_names.contains(svc_name.as_str()) {
-            continue;
-        }
-        // lsof -ti TCP:<port> returns PIDs; kill -9 each
-        let output = std::process::Command::new("lsof")
-            .args(["-ti", &format!("TCP:{}", port), "-sTCP:LISTEN"])
-            .output();
-        if let Ok(out) = output {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            for pid_str in stdout.split_whitespace() {
-                if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                    log.detail(&format!(
-                        "killed process {} on port {} ({})",
-                        pid, port, svc_name
-                    ));
-                    let _ = std::process::Command::new("kill")
-                        .args(["-9", pid_str.trim()])
-                        .status();
-                }
-            }
-        }
-    }
-
     // Stop docker containers for non-skipped docker services.
     let docker_svcs: Vec<_> = config
         .services
@@ -1009,6 +1022,23 @@ fn force_kill_session_services(
         let _ = docker::docker_cmd()
             .args(["stop", &container_name])
             .status();
+    }
+}
+
+/// SIGTERM, escalating to SIGKILL after a short grace period if still alive.
+fn terminate_with_grace(pid: u32) {
+    let _ = std::process::Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while process::pid_alive(pid) {
+        if std::time::Instant::now() >= deadline {
+            let _ = std::process::Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .status();
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
@@ -1047,12 +1077,8 @@ fn print_up_summary(session: &state::Session, _config: &config::Config, log: &lo
 fn print_up_json(session: &state::Session, _root: &std::path::Path) -> Result<()> {
     let env_file = std::path::Path::new(&session.worktree_path).join(".env.ecluse");
     let mut env_vars: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-    if env_file.exists() {
-        for line in std::fs::read_to_string(&env_file)?.lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                env_vars.insert(k.to_string(), serde_json::Value::String(v.to_string()));
-            }
-        }
+    for (k, v) in env::parse_env_file(&env_file) {
+        env_vars.insert(k, serde_json::Value::String(v));
     }
     let out = serde_json::json!({
         "slug": session.slug,
@@ -1268,7 +1294,11 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
                 ports,
                 tmux: s.tmux_session.clone().unwrap_or_default(),
                 branch: s.branch.clone(),
-                started: s.started_at[..16].replace('T', " "),
+                started: s
+                    .started_at
+                    .get(..16)
+                    .unwrap_or(&s.started_at)
+                    .replace('T', " "),
             }
         })
         .collect();
@@ -1319,23 +1349,7 @@ fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
 
     let worktree = std::path::Path::new(&session.worktree_path);
     let env_file = worktree.join(".env.ecluse");
-
-    let env_vars: Vec<(String, String)> = if env_file.exists() {
-        std::fs::read_to_string(&env_file)
-            .context("failed to read .env.ecluse")?
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    return None;
-                }
-                let (k, v) = line.split_once('=')?;
-                Some((k.to_string(), v.to_string()))
-            })
-            .collect()
-    } else {
-        vec![]
-    };
+    let env_vars: Vec<(String, String)> = env::parse_env_file(&env_file);
 
     if let Some(tmux_session) = &session.tmux_session {
         println!(
@@ -1448,12 +1462,8 @@ fn cmd_env(args: cli::EnvArgs) -> Result<()> {
     let env_file = std::path::Path::new(&session.worktree_path).join(".env.ecluse");
 
     let mut env_vars: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
-    if env_file.exists() {
-        for line in std::fs::read_to_string(&env_file)?.lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                env_vars.insert(k.to_string(), serde_json::Value::String(v.to_string()));
-            }
-        }
+    for (k, v) in env::parse_env_file(&env_file) {
+        env_vars.insert(k, serde_json::Value::String(v));
     }
 
     let out = serde_json::json!({
@@ -1498,10 +1508,17 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
             let path = if canonical.exists() {
                 canonical
             } else {
+                // Fall back to the cwd only when it really is a linked git
+                // worktree of this repo — never on path-string coincidences.
                 let cwd =
                     std::env::current_dir().context("could not determine current directory")?;
-                if cwd.starts_with(&root) || cwd.to_str().is_some_and(|c| c.contains(s.as_str())) {
-                    cwd
+                let belongs = worktree::is_inside_git_worktree(&cwd)
+                    && worktree::WorktreeManager::main_worktree_root(&cwd)
+                        .ok()
+                        .and_then(|r| std::fs::canonicalize(r).ok())
+                        == std::fs::canonicalize(&root).ok();
+                if belongs {
+                    worktree::git_worktree_root(&cwd)?
                 } else {
                     return Err(error::EcluseError::WorktreeNotFound { slug: s.clone() }.into());
                 }

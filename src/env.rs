@@ -509,6 +509,67 @@ mod tests {
         assert_eq!(env["ECLUSE_POSTGRES_PORT"], "11533");
         assert_eq!(env["PGPORT"], "11533"); // extra_port: 11532 + 1
     }
+
+    // ── parse_env_file ────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_env_file_skips_comments_and_blanks() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env.ecluse");
+        std::fs::write(&path, "# comment=ignored\n\nPORT=3001\n  # indented\n").unwrap();
+        let pairs = parse_env_file(&path);
+        assert_eq!(pairs, vec![("PORT".to_string(), "3001".to_string())]);
+    }
+
+    #[test]
+    fn parse_env_file_splits_on_first_equals() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env.ecluse");
+        std::fs::write(&path, "DATABASE_URL=postgres://x:5433/db?a=b\n").unwrap();
+        let pairs = parse_env_file(&path);
+        assert_eq!(pairs[0].1, "postgres://x:5433/db?a=b");
+    }
+
+    #[test]
+    fn parse_env_file_missing_file_is_empty() {
+        assert!(parse_env_file(Path::new("/nonexistent/.env.ecluse")).is_empty());
+    }
+
+    #[test]
+    fn parse_env_file_preserves_file_order() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env.ecluse");
+        std::fs::write(&path, "B=2\nA=1\n").unwrap();
+        let keys: Vec<String> = parse_env_file(&path).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys, vec!["B", "A"]);
+    }
+}
+
+/// Parse a .env-style file into key/value pairs, in file order.
+/// Blank lines and `#` comments are skipped; each line splits on the first
+/// `=`; keys are trimmed, values taken as-is. Missing file → empty.
+///
+/// The single parser for `.env.ecluse` — `shell`, `env`, `up --json`, and
+/// process spawning must all read the file the same way.
+pub fn parse_env_file(path: &Path) -> Vec<(String, String)> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return vec![];
+    };
+    content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (k, v) = line.split_once('=')?;
+            let k = k.trim();
+            if k.is_empty() {
+                return None;
+            }
+            Some((k.to_string(), v.to_string()))
+        })
+        .collect()
 }
 
 pub fn write_env_file(worktree: &Path, env: &HashMap<String, String>) -> Result<()> {
