@@ -756,20 +756,24 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
     };
 
     let handler = modes::get_handler(&config);
+    let no_skip = std::collections::HashSet::new();
+    let no_existing = std::collections::HashMap::new();
     let result = handler.bring_up(
-        &slug,
-        slot,
-        &branch,
+        &modes::BringUpRequest {
+            slug: &slug,
+            slot,
+            branch: &branch,
+            watch: args.watch,
+            reuse_worktree: args.reuse_worktree || implicit_reuse,
+            no_inherit_env: args.no_inherit_env,
+            worktree_override,
+            port_overrides: &port_overrides,
+            service_filter: service_filter.as_ref(),
+            skip_services: &no_skip,
+            existing_port_overrides: &no_existing,
+        },
         &config,
         &root,
-        args.watch,
-        args.reuse_worktree || implicit_reuse,
-        args.no_inherit_env,
-        worktree_override,
-        &port_overrides,
-        service_filter.as_ref(),
-        &std::collections::HashSet::new(),
-        &std::collections::HashMap::new(),
         &log,
     );
 
@@ -1005,23 +1009,25 @@ fn resume_provision(
     let service_filter = parse_service_filter(&args.services, config)?;
 
     let updated_session = handler.bring_up(
-        &existing.slug,
-        existing.slot,
-        &existing.branch,
+        &modes::BringUpRequest {
+            slug: &existing.slug,
+            slot: existing.slot,
+            branch: &existing.branch,
+            watch: args.watch,
+            reuse_worktree: true, // always reuse-worktree on resume
+            no_inherit_env: args.no_inherit_env,
+            // Honor the worktree path recorded in state.json. Without this, bring_up
+            // recomputes the default `<root>/<worktree_dir>/<slug>` location and breaks
+            // sessions whose worktree lives outside `.ecluse/worktrees/` — e.g. those
+            // auto-registered from a sibling git worktree directory.
+            worktree_override: Some(std::path::PathBuf::from(&existing.worktree_path)),
+            port_overrides: &port_overrides,
+            service_filter: service_filter.as_ref(),
+            skip_services: &skip_services,
+            existing_port_overrides: &existing.port_overrides,
+        },
         config,
         root,
-        args.watch,
-        true, // always reuse-worktree on resume
-        args.no_inherit_env,
-        // Honor the worktree path recorded in state.json. Without this, bring_up
-        // recomputes the default `<root>/<worktree_dir>/<slug>` location and breaks
-        // sessions whose worktree lives outside `.ecluse/worktrees/` — e.g. those
-        // auto-registered from a sibling git worktree directory.
-        Some(std::path::PathBuf::from(&existing.worktree_path)),
-        &port_overrides,
-        service_filter.as_ref(),
-        &skip_services,
-        &existing.port_overrides,
         log,
     )?;
 
