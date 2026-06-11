@@ -456,6 +456,70 @@ fn namespace_volume(vol: &serde_yaml::Value, suffix: &str) -> serde_yaml::Value 
     }
 }
 
+/// Extract host-side port for a service (first port mapping, after offset)
+pub fn service_host_port(svc: &Service, offset: u16) -> Option<u16> {
+    for port in &svc.ports {
+        let base = match port {
+            serde_yaml::Value::String(s) => {
+                let parts: Vec<&str> = s.split(':').collect();
+                match parts.len() {
+                    2 => parts[0].parse::<u16>().ok(),
+                    3 => parts[1].parse::<u16>().ok(),
+                    1 => parts[0].parse::<u16>().ok(),
+                    _ => None,
+                }
+            }
+            serde_yaml::Value::Number(n) => n.as_u64().map(|p| p as u16),
+            _ => None,
+        };
+        if let Some(p) = base {
+            return Some(p + offset);
+        }
+    }
+    None
+}
+
+/// Resolve the compose file for a docker service.
+/// If the service has an explicit `compose` path, resolve it relative to `root`.
+/// Otherwise fall back to `find_compose_file(root)`.
+pub fn resolve_service_compose(
+    root: &Path,
+    svc: &crate::config::ServiceConfig,
+) -> Option<std::path::PathBuf> {
+    if let Some(ref rel) = svc.compose {
+        let p = root.join(rel);
+        // Reject paths that escape the repo root via ../ or symlinks
+        let canonical_p = p.canonicalize().ok()?;
+        let canonical_root = root.canonicalize().ok()?;
+        if !canonical_p.starts_with(&canonical_root) {
+            return None;
+        }
+        if canonical_p.exists() {
+            Some(canonical_p)
+        } else {
+            None
+        }
+    } else {
+        find_compose_file(root)
+    }
+}
+
+/// Find the compose file — checks docker-compose.yml, compose.yaml, compose.yml
+pub fn find_compose_file(root: &Path) -> Option<std::path::PathBuf> {
+    for name in &[
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "compose.yaml",
+        "compose.yml",
+    ] {
+        let p = root.join(name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1110,68 +1174,4 @@ mod tests {
         assert!(yaml.contains("5433:5432"), "got: {}", yaml);
         assert_eq!(yaml.matches("->").count(), 0); // no extra port lines
     }
-}
-
-/// Extract host-side port for a service (first port mapping, after offset)
-pub fn service_host_port(svc: &Service, offset: u16) -> Option<u16> {
-    for port in &svc.ports {
-        let base = match port {
-            serde_yaml::Value::String(s) => {
-                let parts: Vec<&str> = s.split(':').collect();
-                match parts.len() {
-                    2 => parts[0].parse::<u16>().ok(),
-                    3 => parts[1].parse::<u16>().ok(),
-                    1 => parts[0].parse::<u16>().ok(),
-                    _ => None,
-                }
-            }
-            serde_yaml::Value::Number(n) => n.as_u64().map(|p| p as u16),
-            _ => None,
-        };
-        if let Some(p) = base {
-            return Some(p + offset);
-        }
-    }
-    None
-}
-
-/// Resolve the compose file for a docker service.
-/// If the service has an explicit `compose` path, resolve it relative to `root`.
-/// Otherwise fall back to `find_compose_file(root)`.
-pub fn resolve_service_compose(
-    root: &Path,
-    svc: &crate::config::ServiceConfig,
-) -> Option<std::path::PathBuf> {
-    if let Some(ref rel) = svc.compose {
-        let p = root.join(rel);
-        // Reject paths that escape the repo root via ../ or symlinks
-        let canonical_p = p.canonicalize().ok()?;
-        let canonical_root = root.canonicalize().ok()?;
-        if !canonical_p.starts_with(&canonical_root) {
-            return None;
-        }
-        if canonical_p.exists() {
-            Some(canonical_p)
-        } else {
-            None
-        }
-    } else {
-        find_compose_file(root)
-    }
-}
-
-/// Find the compose file — checks docker-compose.yml, compose.yaml, compose.yml
-pub fn find_compose_file(root: &Path) -> Option<std::path::PathBuf> {
-    for name in &[
-        "docker-compose.yml",
-        "docker-compose.yaml",
-        "compose.yaml",
-        "compose.yml",
-    ] {
-        let p = root.join(name);
-        if p.exists() {
-            return Some(p);
-        }
-    }
-    None
 }

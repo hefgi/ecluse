@@ -380,6 +380,48 @@ fn probe_postgres_5432() -> bool {
     .is_ok()
 }
 
+pub fn print_detection_result(result: &DetectionResult) {
+    println!("\nMode detection results:\n");
+    println!("  Signals found:");
+    for sig in &result.signals {
+        let parts: Vec<String> = [
+            if sig.container_delta != 0 {
+                format!("{:+} container", sig.container_delta)
+            } else {
+                String::new()
+            },
+            if sig.host_delta != 0 {
+                format!("{:+} host", sig.host_delta)
+            } else {
+                String::new()
+            },
+            if sig.hybrid_delta != 0 {
+                format!("{:+} hybrid", sig.hybrid_delta)
+            } else {
+                String::new()
+            },
+        ]
+        .iter()
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .collect();
+        println!("    + {}  [{}]", sig.description, parts.join(", "));
+    }
+
+    println!();
+    println!("  Scores:");
+    println!("    container: {}", result.scores.container);
+    println!("    host:      {}", result.scores.host);
+    println!("    hybrid:    {}", result.scores.hybrid);
+    println!();
+
+    match &result.recommended {
+        None => println!("  No mode recommended — all scores ≤ 0. Use --mode to specify."),
+        Some(mode) => println!("  Recommended: {} ({})", mode, result.confidence,),
+    }
+    println!();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -412,9 +454,7 @@ mod tests {
 
     #[test]
     fn readme_hybrid_pattern_no_match_when_too_far_apart() {
-        let far_apart = std::iter::repeat("some line\n")
-            .take(15)
-            .collect::<String>();
+        let far_apart = "some line\n".repeat(15);
         let content = format!("docker compose up\n{}bin/dev\n", far_apart);
         assert!(!readme_has_hybrid_pattern(&content));
     }
@@ -825,46 +865,4 @@ mod tests {
         let result = detect(dir.path());
         assert!(result.unsupported_reason.is_none());
     }
-}
-
-pub fn print_detection_result(result: &DetectionResult) {
-    println!("\nMode detection results:\n");
-    println!("  Signals found:");
-    for sig in &result.signals {
-        let parts: Vec<String> = [
-            if sig.container_delta != 0 {
-                format!("{:+} container", sig.container_delta)
-            } else {
-                String::new()
-            },
-            if sig.host_delta != 0 {
-                format!("{:+} host", sig.host_delta)
-            } else {
-                String::new()
-            },
-            if sig.hybrid_delta != 0 {
-                format!("{:+} hybrid", sig.hybrid_delta)
-            } else {
-                String::new()
-            },
-        ]
-        .iter()
-        .filter(|s| !s.is_empty())
-        .cloned()
-        .collect();
-        println!("    + {}  [{}]", sig.description, parts.join(", "));
-    }
-
-    println!();
-    println!("  Scores:");
-    println!("    container: {}", result.scores.container);
-    println!("    host:      {}", result.scores.host);
-    println!("    hybrid:    {}", result.scores.hybrid);
-    println!();
-
-    match &result.recommended {
-        None => println!("  No mode recommended — all scores ≤ 0. Use --mode to specify."),
-        Some(mode) => println!("  Recommended: {} ({})", mode, result.confidence,),
-    }
-    println!();
 }
