@@ -533,6 +533,18 @@ fn resolve_slug_and_branch(
     Ok((slug, branch, false, None))
 }
 
+/// Error when the session is mid-operation — its env and services are in flux.
+fn ensure_session_settled(session: &state::Session) -> Result<()> {
+    if session.status == state::SessionStatus::Pending {
+        return Err(anyhow::anyhow!(
+            "session '{}' has an up/down operation in progress; retry when it finishes, or run `ecluse down {}` if it crashed",
+            session.slug,
+            session.slug
+        ));
+    }
+    Ok(())
+}
+
 fn resolve_slug_from_args(
     arg: Option<&str>,
     guard: &state::StateGuard,
@@ -661,53 +673,90 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
     let global = process::load_global_config()?;
     validate::validate_process_manager(&global.process_manager)?;
 
-    let mut guard = state::StateGuard::acquire(&root)?;
-
-    // Resolve slug + branch: from arg, ecluse worktree state, non-ecluse worktree, or prompt.
-    let (slug, branch, implicit_reuse, worktree_override) =
-        resolve_slug_and_branch(&args.slug, &guard, &root)?;
-    validate_branch(&branch)?;
-
-    // Resume path: session already exists — restart/skip services idempotently.
-    if let Some(existing) = guard.state.find_session(&slug).cloned() {
-        // Slugs are sanitized branch names (feat/foo → feat-foo), so two
-        // different branches can collide on one slug. Addressing the session
-        // by its slug or by its exact branch resumes it; anything else would
-        // silently resume the wrong branch.
-        if let Some(requested) = args.slug.as_deref() {
-            if requested != existing.slug && existing.branch != branch {
-                return Err(anyhow::anyhow!(
-                    "slug '{}' is already used by branch '{}' (requested branch '{}'); run `ecluse down {}` first or pick a different branch name",
-                    slug,
-                    existing.branch,
-                    branch,
-                    slug
-                ));
-            }
-        }
-        log.step("Looking for existing session...");
-        log.detail(&format!(
-            "found session '{}' (slot {}) — reusing worktree",
-            slug, existing.slot
-        ));
-        return cmd_up_resume(existing, args, config, root, guard, log);
-    }
-
-    // New session path.
-    log.step("Allocating slot...");
-    let allocator = slot::SlotAllocator::new(&config, &guard.state);
-    let slot = allocator.allocate_next()?;
-    log.detail(&format!("slot {slot}"));
-
-    let handler = modes::get_handler(&config);
-
     let port_overrides: std::collections::HashMap<String, u16> =
         args.port_overrides.iter().cloned().collect();
-
     let service_filter: Option<std::collections::HashSet<String>> =
         parse_service_filter(&args.services, &config)?;
 
-    let session = handler.bring_up(
+    // Resolve slug + branch from a read-only snapshot. Resolution can prompt
+    // for a branch name; neither the prompt nor the provisioning below may
+    // run under the exclusive lock, or every other ecluse command in this
+    // repo blocks on us until it times out.
+    let (slug, branch, implicit_reuse, worktree_override) = {
+        let guard = state::StateGuard::acquire_shared(&root)?;
+        resolve_slug_and_branch(&args.slug, &guard, &root)?
+    };
+    validate_branch(&branch)?;
+
+    // Short exclusive section: route to resume, or reserve the slot with a
+    // pending session, then release the lock for the slow provisioning work.
+    let slot = {
+        let mut guard = state::StateGuard::acquire(&root)?;
+
+        if let Some(existing) = guard.state.find_session(&slug).cloned() {
+            if existing.status == state::SessionStatus::Pending {
+                return Err(anyhow::anyhow!(
+                    "session '{slug}' has an operation in progress (started {}); wait for it to finish, or run `ecluse down {slug}` if it crashed",
+                    existing.started_at
+                ));
+            }
+            // Slugs are sanitized branch names (feat/foo → feat-foo), so two
+            // different branches can collide on one slug. Addressing the
+            // session by its slug or by its exact branch resumes it; anything
+            // else would silently resume the wrong branch.
+            if let Some(requested) = args.slug.as_deref() {
+                if requested != existing.slug && existing.branch != branch {
+                    return Err(anyhow::anyhow!(
+                        "slug '{}' is already used by branch '{}' (requested branch '{}'); run `ecluse down {}` first or pick a different branch name",
+                        slug,
+                        existing.branch,
+                        branch,
+                        slug
+                    ));
+                }
+            }
+            log.step("Looking for existing session...");
+            log.detail(&format!(
+                "found session '{}' (slot {}) — reusing worktree",
+                slug, existing.slot
+            ));
+            return cmd_up_resume(existing, args, config, root, guard, log);
+        }
+
+        log.step("Allocating slot...");
+        let allocator = slot::SlotAllocator::new(&config, &guard.state);
+        let slot = allocator.allocate_next()?;
+        log.detail(&format!("slot {slot}"));
+
+        let planned_worktree = worktree_override.clone().unwrap_or_else(|| {
+            worktree::WorktreeManager::new(root.clone()).worktree_path(&config, &slug)
+        });
+        guard.state.add_session(state::Session {
+            slug: slug.clone(),
+            mode: config.mode.clone(),
+            slot,
+            branch: branch.clone(),
+            worktree_path: planned_worktree.display().to_string(),
+            status: state::SessionStatus::Pending,
+            compose_project: None,
+            overlay_file: None,
+            overlay_files: vec![],
+            compose_overlays: vec![],
+            app_port: None,
+            started_at: chrono::Utc::now().to_rfc3339(),
+            port_overrides: std::collections::HashMap::new(),
+            process_manager: None,
+            tmux_session: None,
+            pid_files: vec![],
+            log_dir: None,
+            services_subset: None,
+        });
+        guard.commit()?;
+        slot
+    };
+
+    let handler = modes::get_handler(&config);
+    let result = handler.bring_up(
         &slug,
         slot,
         &branch,
@@ -722,18 +771,28 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         &std::collections::HashSet::new(),
         &std::collections::HashMap::new(),
         &log,
-    )?;
+    );
 
-    if args.json {
-        print_up_json(&session, &root)?;
-    } else {
-        print_up_summary(&session, &config, &log);
+    // Re-acquire to finalize: replace the pending reservation with the real
+    // session, or drop it when provisioning failed (bring_up rolled back).
+    let mut guard = state::StateGuard::acquire(&root)?;
+    guard.state.remove_session(&slug);
+    match result {
+        Ok(session) => {
+            if args.json {
+                print_up_json(&session, &root)?;
+            } else {
+                print_up_summary(&session, &config, &log);
+            }
+            guard.state.add_session(session);
+            guard.commit()?;
+            Ok(())
+        }
+        Err(e) => {
+            guard.commit()?;
+            Err(e)
+        }
     }
-
-    guard.state.add_session(session);
-    guard.commit()?;
-
-    Ok(())
 }
 
 /// Validate --services names and build the filter set.
@@ -768,6 +827,9 @@ fn parse_service_filter(
 
 /// Resume an existing session: restart downed services, skip healthy ones.
 /// With --force: kill everything first, then start all (minus --skip).
+///
+/// The session is marked Pending and the lock released while services are
+/// health-checked and started; the entry is restored or replaced when done.
 fn cmd_up_resume(
     existing: state::Session,
     args: cli::UpArgs,
@@ -776,10 +838,7 @@ fn cmd_up_resume(
     mut guard: state::StateGuard,
     log: log::StepLogger,
 ) -> Result<()> {
-    let worktree = std::path::Path::new(&existing.worktree_path);
-    let handler = modes::get_handler(&config);
-
-    // Build explicit --skip set.
+    // Build and validate the explicit --skip set before touching state.
     let explicit_skip: std::collections::HashSet<String> = args
         .skip
         .as_deref()
@@ -787,8 +846,6 @@ fn cmd_up_resume(
         .iter()
         .cloned()
         .collect();
-
-    // Validate --skip names.
     for name in &explicit_skip {
         if !config.services.iter().any(|s| &s.name == name) {
             let list = config
@@ -806,12 +863,77 @@ fn cmd_up_resume(
         }
     }
 
+    // Mark pending and release the lock for the health checks + startup.
+    let mut marked = existing.clone();
+    marked.status = state::SessionStatus::Pending;
+    guard.state.remove_session(&existing.slug);
+    guard.state.add_session(marked);
+    guard.commit()?;
+    drop(guard);
+
+    let outcome = resume_provision(&existing, &args, &config, &root, &explicit_skip, &log);
+
+    // Re-acquire to finalize: replace with the refreshed session, or restore
+    // the original (still-active) entry when nothing changed or on failure.
+    let mut guard = state::StateGuard::acquire(&root)?;
+    guard.state.remove_session(&existing.slug);
+    match outcome {
+        Ok(Some((updated, started, skipped))) => {
+            if !args.quiet && !args.json {
+                println!();
+                log.success(&format!(
+                    "{} service{} started, {} skipped",
+                    started,
+                    if started == 1 { "" } else { "s" },
+                    skipped
+                ));
+            }
+            if args.json {
+                print_up_json(&updated, &root)?;
+            }
+            guard.state.add_session(updated);
+            guard.commit()?;
+            Ok(())
+        }
+        Ok(None) => {
+            guard.state.add_session(existing.clone());
+            guard.commit()?;
+            log.step("All services already running — nothing to do.");
+            if args.json {
+                print_up_json(&existing, &root)?;
+            } else {
+                print_up_summary(&existing, &config, &log);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            guard.state.add_session(existing);
+            guard.commit()?;
+            Err(e)
+        }
+    }
+}
+
+/// Health-check and start services for a resumed session. Runs without the
+/// state lock. Returns None when everything is already running, otherwise
+/// the refreshed session plus (started, skipped) counts.
+fn resume_provision(
+    existing: &state::Session,
+    args: &cli::UpArgs,
+    config: &config::Config,
+    root: &std::path::Path,
+    explicit_skip: &std::collections::HashSet<String>,
+    log: &log::StepLogger,
+) -> Result<Option<(state::Session, usize, usize)>> {
+    let worktree = std::path::Path::new(&existing.worktree_path);
+    let handler = modes::get_handler(config);
+
     let mut skip_services: std::collections::HashSet<String> = explicit_skip.clone();
 
     if args.force {
         // Kill all non-skipped services.
         log.step("--force: killing services on allocated ports...");
-        force_kill_session_services(&existing, &config, &root, &explicit_skip, &log);
+        force_kill_session_services(existing, config, root, explicit_skip, log);
     } else {
         // Auto-detect already-running services and add them to skip set.
         log.step("Checking service health...");
@@ -875,25 +997,19 @@ fn cmd_up_resume(
     let to_start = total.saturating_sub(skipped_count);
 
     if to_start == 0 && !args.force {
-        log.step("All services already running — nothing to do.");
-        if args.json {
-            print_up_json(&existing, &root)?;
-        } else {
-            print_up_summary(&existing, &config, &log);
-        }
-        return Ok(());
+        return Ok(None);
     }
 
     let port_overrides: std::collections::HashMap<String, u16> =
         args.port_overrides.iter().cloned().collect();
-    let service_filter = parse_service_filter(&args.services, &config)?;
+    let service_filter = parse_service_filter(&args.services, config)?;
 
     let updated_session = handler.bring_up(
         &existing.slug,
         existing.slot,
         &existing.branch,
-        &config,
-        &root,
+        config,
+        root,
         args.watch,
         true, // always reuse-worktree on resume
         args.no_inherit_env,
@@ -906,30 +1022,10 @@ fn cmd_up_resume(
         service_filter.as_ref(),
         &skip_services,
         &existing.port_overrides,
-        &log,
+        log,
     )?;
 
-    if !args.quiet && !args.json {
-        let started = to_start;
-        println!();
-        log.success(&format!(
-            "{} service{} started, {} skipped",
-            started,
-            if started == 1 { "" } else { "s" },
-            skipped_count
-        ));
-    }
-
-    if args.json {
-        print_up_json(&updated_session, &root)?;
-    }
-
-    // Replace session in state with refreshed version.
-    guard.state.remove_session(&existing.slug);
-    guard.state.add_session(updated_session);
-    guard.commit()?;
-
-    Ok(())
+    Ok(Some((updated_session, to_start, skipped_count)))
 }
 
 /// Kill all non-skipped services for a session.
@@ -1102,35 +1198,71 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     log.step("Loading config...");
     let (config, root) = config::Config::find_and_load()?;
 
-    let mut guard = state::StateGuard::acquire(&root)?;
+    // Resolve the target from a read-only snapshot; the interactive worktree
+    // prompt below must never run while holding the exclusive lock.
+    let slug = {
+        let guard = state::StateGuard::acquire_shared(&root)?;
+        resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse down <slug>")?
+    };
 
-    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse down <slug>")?;
-
+    // Short exclusive section: re-verify the session and mark it pending so
+    // the slug + slot stay reserved while teardown runs without the lock.
     log.step(&format!("Loading session '{slug}'..."));
-    let session = guard
-        .state
-        .find_session(&slug)
-        .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
-        .clone();
+    let session = {
+        let mut guard = state::StateGuard::acquire(&root)?;
+        let current = guard
+            .state
+            .find_session(&slug)
+            .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
+            .clone();
+        if current.status == state::SessionStatus::Pending {
+            log.warn(&format!(
+                "session '{slug}' has an operation in progress (started {}); tearing it down anyway",
+                current.started_at
+            ));
+        }
+        let mut marked = current.clone();
+        marked.status = state::SessionStatus::Pending;
+        guard.state.remove_session(&slug);
+        guard.state.add_session(marked);
+        guard.commit()?;
+        current
+    };
     log.detail(&format!("slot {}, mode: {}", session.slot, session.mode));
 
-    let keep_worktree = resolve_worktree_keep(
+    let keep_worktree = match resolve_worktree_keep(
         std::path::Path::new(&session.worktree_path),
         args.keep_worktree,
         args.delete_worktree,
-    )?;
+    ) {
+        Ok(k) => k,
+        Err(e) => {
+            // Aborted at the prompt — restore the session before bailing out.
+            restore_session(&root, &session)?;
+            return Err(e);
+        }
+    };
 
     let handler = modes::get_handler_for_mode(&session.mode);
-    handler.bring_down(
+    let result = handler.bring_down(
         &session,
         &config,
         &root,
         args.keep_volumes,
         keep_worktree,
         &log,
-    )?;
+    );
 
+    let mut guard = state::StateGuard::acquire(&root)?;
     guard.state.remove_session(&slug);
+    if let Err(e) = result {
+        // Teardown failed — keep the session visible so it can be retried.
+        let mut restored = session;
+        restored.status = state::SessionStatus::Active;
+        guard.state.add_session(restored);
+        guard.commit()?;
+        return Err(e);
+    }
     guard.commit()?;
 
     if args.keep_branch {
@@ -1154,6 +1286,17 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     Ok(())
 }
 
+/// Put a session back into state with Active status (used when an operation
+/// that marked it Pending aborts or fails without changing anything durable).
+fn restore_session(root: &std::path::Path, session: &state::Session) -> Result<()> {
+    let mut guard = state::StateGuard::acquire(root)?;
+    guard.state.remove_session(&session.slug);
+    let mut restored = session.clone();
+    restored.status = state::SessionStatus::Active;
+    guard.state.add_session(restored);
+    guard.commit()
+}
+
 // ── shutdown ──────────────────────────────────────────────────────────────────
 
 fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
@@ -1162,14 +1305,18 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
     log.step("Loading config...");
     let (config, root) = config::Config::find_and_load()?;
 
-    let mut guard = state::StateGuard::acquire(&root)?;
+    // Work from a snapshot; each session is marked pending under a short
+    // exclusive section so prompts and teardown never hold the lock.
+    let sessions: Vec<state::Session> = {
+        let guard = state::StateGuard::acquire_shared(&root)?;
+        guard.state.sessions.clone()
+    };
 
-    if guard.state.sessions.is_empty() {
+    if sessions.is_empty() {
         println!("no active sessions");
         return Ok(());
     }
 
-    let sessions: Vec<state::Session> = guard.state.sessions.clone();
     let total = sessions.len();
     let mut failed: Vec<String> = Vec::new();
 
@@ -1191,14 +1338,36 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
             }
         };
 
-        match handler.bring_down(&session, &config, &root, args.keep_volumes, keep_wt, &log) {
+        // Re-verify under the lock (another command may have removed it) and
+        // mark pending for the unlocked teardown.
+        let current = {
+            let mut guard = state::StateGuard::acquire(&root)?;
+            match guard.state.find_session(&session.slug).cloned() {
+                None => {
+                    log.detail("already removed — skipped");
+                    continue;
+                }
+                Some(current) => {
+                    let mut marked = current.clone();
+                    marked.status = state::SessionStatus::Pending;
+                    guard.state.remove_session(&session.slug);
+                    guard.state.add_session(marked);
+                    guard.commit()?;
+                    current
+                }
+            }
+        };
+
+        match handler.bring_down(&current, &config, &root, args.keep_volumes, keep_wt, &log) {
             Ok(()) => {
-                guard.state.remove_session(&session.slug);
+                let mut guard = state::StateGuard::acquire(&root)?;
+                guard.state.remove_session(&current.slug);
                 guard.commit()?;
             }
             Err(e) => {
-                log.warn(&format!("'{}' failed: {}", session.slug, e));
-                failed.push(session.slug.clone());
+                log.warn(&format!("'{}' failed: {}", current.slug, e));
+                failed.push(current.slug.clone());
+                restore_session(&root, &current)?;
             }
         }
     }
@@ -1289,7 +1458,11 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
                 pairs.join(" ")
             };
             SessionRow {
-                slug: s.slug.clone(),
+                slug: if s.status == state::SessionStatus::Pending {
+                    format!("{} (pending)", s.slug)
+                } else {
+                    s.slug.clone()
+                },
                 mode: s.mode.to_string(),
                 slot: s.slot,
                 ports,
@@ -1347,6 +1520,7 @@ fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
         .find_session(&slug)
         .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
         .clone();
+    ensure_session_settled(&session)?;
 
     let worktree = std::path::Path::new(&session.worktree_path);
     let env_file = worktree.join(".env.ecluse");
@@ -1459,6 +1633,7 @@ fn cmd_env(args: cli::EnvArgs) -> Result<()> {
         .find_session(&slug)
         .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
         .clone();
+    ensure_session_settled(&session)?;
 
     let env_file = std::path::Path::new(&session.worktree_path).join(".env.ecluse");
 
@@ -1677,6 +1852,7 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
         slot,
         branch,
         worktree_path: worktree_path.display().to_string(),
+        status: state::SessionStatus::Active,
         app_port,
         port_overrides,
         process_manager: Some(process::ProcessManager::Nohup),
@@ -1935,6 +2111,7 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
         .find_session(&slug)
         .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
         .clone();
+    ensure_session_settled(&session)?;
 
     let worktree = std::path::Path::new(&session.worktree_path);
 

@@ -487,3 +487,154 @@ fn sync_rejects_repo_root_as_worktree() {
     assert!(!out.status.success());
     assert!(stderr(&out).contains("ghost-slug"), "got: {}", stderr(&out));
 }
+
+// ── pending sessions: lock is not held during provisioning ────────────────────
+
+#[test]
+fn ls_works_while_up_is_provisioning() {
+    let repo = tmp_repo();
+    ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
+    // A slow post_up hook simulates image pulls / migrations.
+    std::fs::write(
+        repo.path().join(".ecluse.toml"),
+        r#"mode = "host"
+max_slots = 8
+prefix = "ecluse"
+worktree_dir = ".ecluse/worktrees"
+inherit_env = []
+
+[hooks]
+post_up = "sleep 3"
+"#,
+    )
+    .unwrap();
+
+    let mut slow_up = Command::new(ecluse_bin())
+        .args(["up", "slow-sess"])
+        .current_dir(repo.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Wait until the pending reservation is committed.
+    let state_path = repo.path().join(".ecluse/state.json");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if state_path.exists()
+            && std::fs::read_to_string(&state_path)
+                .unwrap_or_default()
+                .contains("slow-sess")
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "pending session never appeared in state.json"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // While `up` sleeps in its post_up hook, read commands must not block
+    // on the lock — this timed out after 10s before pending sessions.
+    let start = std::time::Instant::now();
+    let out = ecluse(repo.path(), &["ls"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(5),
+        "ls blocked while up was provisioning"
+    );
+    assert!(
+        stdout(&out).contains("slow-sess") && stdout(&out).contains("(pending)"),
+        "got: {}",
+        stdout(&out)
+    );
+
+    let status = slow_up.wait().unwrap();
+    assert!(status.success());
+
+    // After up finishes, the session is active — no pending marker.
+    let out = ecluse(repo.path(), &["ls"]);
+    assert!(stdout(&out).contains("slow-sess"));
+    assert!(!stdout(&out).contains("(pending)"), "got: {}", stdout(&out));
+
+    ecluse(repo.path(), &["down", "--delete-worktree", "slow-sess"]);
+}
+
+#[test]
+fn up_on_pending_session_errors_actionably() {
+    let repo = tmp_repo();
+    ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
+    std::fs::write(
+        repo.path().join(".ecluse.toml"),
+        r#"mode = "host"
+max_slots = 8
+prefix = "ecluse"
+worktree_dir = ".ecluse/worktrees"
+inherit_env = []
+
+[hooks]
+post_up = "sleep 3"
+"#,
+    )
+    .unwrap();
+
+    let mut slow_up = Command::new(ecluse_bin())
+        .args(["up", "busy-sess"])
+        .current_dir(repo.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let state_path = repo.path().join(".ecluse/state.json");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !std::fs::read_to_string(&state_path)
+        .unwrap_or_default()
+        .contains("busy-sess")
+    {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let out = ecluse(repo.path(), &["up", "busy-sess"]);
+    assert!(!out.status.success(), "second up must not race the first");
+    assert!(
+        stderr(&out).contains("operation in progress"),
+        "got: {}",
+        stderr(&out)
+    );
+
+    slow_up.wait().unwrap();
+    ecluse(repo.path(), &["down", "--delete-worktree", "busy-sess"]);
+}
+
+#[test]
+fn failed_up_removes_pending_reservation() {
+    let repo = tmp_repo();
+    ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
+    std::fs::write(
+        repo.path().join(".ecluse.toml"),
+        r#"mode = "host"
+max_slots = 8
+prefix = "ecluse"
+worktree_dir = ".ecluse/worktrees"
+inherit_env = []
+
+[hooks]
+post_up = "false"
+"#,
+    )
+    .unwrap();
+
+    let out = ecluse(repo.path(), &["up", "doomed"]);
+    assert!(!out.status.success());
+
+    // The pending reservation must be gone: slot freed, ls empty.
+    let out = ecluse(repo.path(), &["ls"]);
+    assert!(
+        stdout(&out).contains("no active sessions"),
+        "got: {}",
+        stdout(&out)
+    );
+}
