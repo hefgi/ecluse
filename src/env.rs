@@ -10,18 +10,18 @@ use crate::config::ServiceConfig;
 /// `native_ports` maps service name → host port for native services.
 /// The first entry also sets `PORT` (primary service alias for framework compatibility).
 /// `docker_ports` maps service name → host port for docker services (ECLUSE_<NAME>_PORT only).
-/// `native_configs` is used to apply `port_env` aliases and `extra_ports` for native services.
-/// `docker_configs` is used to apply `extra_ports` (and `port_env`) for docker services.
+/// `service_configs` supplies `port_env` aliases and `extra_ports` for any
+/// service appearing in either port list (names are unique across kinds).
 ///
 /// `ECLUSE_SLOT`, `ECLUSE_SLUG`, `ECLUSE_MODE` are always present.
 pub fn build_env(
     slot: u8,
+    slot_stride: u8,
     slug: &str,
     mode: &str,
     native_ports: &IndexMap<String, u16>,
     docker_ports: &[(String, u16)],
-    native_configs: &[&ServiceConfig],
-    docker_configs: &[&ServiceConfig],
+    service_configs: &[&ServiceConfig],
 ) -> HashMap<String, String> {
     let mut env = HashMap::new();
     env.insert("ECLUSE_SLOT".into(), slot.to_string());
@@ -40,14 +40,14 @@ pub fn build_env(
         }
 
         // port_env aliases: set each declared var name to this service's port
-        if let Some(svc) = native_configs.iter().find(|s| s.name == *name) {
+        if let Some(svc) = service_configs.iter().find(|s| s.name == *name) {
             for alias in &svc.port_env {
                 env.insert(alias.clone(), port.to_string());
             }
 
-            // extra_ports (and legacy debug_port): emit each as port_env = base_port + slot
+            // extra_ports (and legacy debug_port): same per-slot spacing as primaries
             for (base, env_key) in svc.all_extra_ports() {
-                let port = base.saturating_add(slot as u16);
+                let port = ServiceConfig::extra_port_for_slot(base, slot, slot_stride);
                 env.insert(env_key, port.to_string());
             }
         }
@@ -58,13 +58,13 @@ pub fn build_env(
         let key = service_env_key(name);
         env.insert(format!("ECLUSE_{}_PORT", key), port.to_string());
 
-        if let Some(svc) = docker_configs.iter().find(|s| s.name == *name) {
+        if let Some(svc) = service_configs.iter().find(|s| s.name == *name) {
             for alias in &svc.port_env {
                 env.insert(alias.clone(), port.to_string());
             }
 
             for (base, env_key) in svc.all_extra_ports() {
-                let extra_port = base.saturating_add(slot as u16);
+                let extra_port = ServiceConfig::extra_port_for_slot(base, slot, slot_stride);
                 env.insert(env_key, extra_port.to_string());
             }
         }
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn basic_env_vars_always_present() {
-        let env = build_env(2, "my-task", "host", &IndexMap::new(), &[], &[], &[]);
+        let env = build_env(2, 1, "my-task", "host", &IndexMap::new(), &[], &[]);
         assert_eq!(env["ECLUSE_SLOT"], "2");
         assert_eq!(env["ECLUSE_SLUG"], "my-task");
         assert_eq!(env["ECLUSE_MODE"], "host");
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn first_native_port_sets_port_alias() {
         let np = ports(&[("api", 8001), ("worker", 8002)]);
-        let env = build_env(1, "feat", "host", &np, &[], &[], &[]);
+        let env = build_env(1, 1, "feat", "host", &np, &[], &[]);
         assert_eq!(env["PORT"], "8001");
         assert_eq!(env["ECLUSE_API_PORT"], "8001");
         assert_eq!(env["ECLUSE_WORKER_PORT"], "8002");
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn no_port_when_no_native_ports() {
-        let env = build_env(1, "feat", "container", &IndexMap::new(), &[], &[], &[]);
+        let env = build_env(1, 1, "feat", "container", &IndexMap::new(), &[], &[]);
         assert!(!env.contains_key("PORT"));
     }
 
@@ -113,11 +113,11 @@ mod tests {
     fn docker_ports_set_port_vars_no_port_alias() {
         let env = build_env(
             1,
+            1,
             "feat",
             "hybrid",
             &IndexMap::new(),
             &[("postgres".into(), 5433), ("redis".into(), 6380)],
-            &[],
             &[],
         );
         assert_eq!(env["ECLUSE_POSTGRES_PORT"], "5433");
@@ -130,11 +130,11 @@ mod tests {
         let np = ports(&[("api", 8001)]);
         let env = build_env(
             1,
+            1,
             "feat",
             "hybrid",
             &np,
             &[("postgres".into(), 5433)],
-            &[],
             &[],
         );
         assert_eq!(env["PORT"], "8001");
@@ -153,7 +153,7 @@ mod tests {
     fn write_env_file_creates_sorted_file() {
         let dir = tempfile::TempDir::new().unwrap();
         let np = ports(&[("api", 8001)]);
-        let env = build_env(1, "feat", "host", &np, &[], &[], &[]);
+        let env = build_env(1, 1, "feat", "host", &np, &[], &[]);
         write_env_file(dir.path(), &env).unwrap();
         let content = std::fs::read_to_string(dir.path().join(".env.ecluse")).unwrap();
         let lines: Vec<&str> = content.lines().collect();
@@ -169,7 +169,7 @@ mod tests {
     fn fallback_app_service_port() {
         // Simulate fallback: single "app" service at 3000 + slot
         let np = ports(&[("app", 3001)]);
-        let env = build_env(1, "feat", "host", &np, &[], &[], &[]);
+        let env = build_env(1, 1, "feat", "host", &np, &[], &[]);
         assert_eq!(env["PORT"], "3001");
         assert_eq!(env["ECLUSE_APP_PORT"], "3001");
     }
@@ -180,13 +180,13 @@ mod tests {
         np.insert("api".into(), 8001);
         np.insert("worker".into(), 8002);
         np.insert("frontend".into(), 3001);
-        let env = build_env(1, "s", "host", &np, &[], &[], &[]);
+        let env = build_env(1, 1, "s", "host", &np, &[], &[]);
         assert_eq!(env["PORT"], "8001");
     }
 
     #[test]
     fn build_env_slot_zero_and_empty_slug() {
-        let env = build_env(0, "", "host", &IndexMap::new(), &[], &[], &[]);
+        let env = build_env(0, 1, "", "host", &IndexMap::new(), &[], &[]);
         assert_eq!(env["ECLUSE_SLOT"], "0");
         assert_eq!(env["ECLUSE_SLUG"], "");
     }
@@ -194,9 +194,9 @@ mod tests {
     #[test]
     fn write_env_file_overwrites_existing() {
         let dir = tempfile::TempDir::new().unwrap();
-        let env1 = build_env(1, "a", "host", &IndexMap::new(), &[], &[], &[]);
+        let env1 = build_env(1, 1, "a", "host", &IndexMap::new(), &[], &[]);
         write_env_file(dir.path(), &env1).unwrap();
-        let env2 = build_env(2, "b", "container", &IndexMap::new(), &[], &[], &[]);
+        let env2 = build_env(2, 1, "b", "container", &IndexMap::new(), &[], &[]);
         write_env_file(dir.path(), &env2).unwrap();
         let content = std::fs::read_to_string(dir.path().join(".env.ecluse")).unwrap();
         assert!(content.contains("ECLUSE_SLUG=b"));
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn write_env_file_ends_with_newline() {
         let dir = tempfile::TempDir::new().unwrap();
-        let env = build_env(1, "x", "host", &IndexMap::new(), &[], &[], &[]);
+        let env = build_env(1, 1, "x", "host", &IndexMap::new(), &[], &[]);
         write_env_file(dir.path(), &env).unwrap();
         let content = std::fs::read_to_string(dir.path().join(".env.ecluse")).unwrap();
         assert!(content.ends_with('\n'));
@@ -216,11 +216,11 @@ mod tests {
     fn service_env_key_mixed_separators() {
         let env = build_env(
             1,
+            1,
             "s",
             "hybrid",
             &IndexMap::new(),
             &[("my-db.local".into(), 5432)],
-            &[],
             &[],
         );
         assert_eq!(env["ECLUSE_MY_DB_LOCAL_PORT"], "5432");
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn no_offset_env_var() {
-        let env = build_env(1, "feat", "host", &IndexMap::new(), &[], &[], &[]);
+        let env = build_env(1, 1, "feat", "host", &IndexMap::new(), &[], &[]);
         assert!(!env.contains_key("ECLUSE_OFFSET"));
     }
 
@@ -244,10 +244,11 @@ mod tests {
             port_env: vec!["DJANGO_PORT".into()],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         let np = ports(&[("api", 3001)]);
-        let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
+        let env = build_env(1, 1, "s", "host", &np, &[], &[&svc]);
         assert_eq!(env["DJANGO_PORT"], "3001");
         assert_eq!(env["ECLUSE_API_PORT"], "3001");
     }
@@ -264,10 +265,11 @@ mod tests {
             port_env: vec!["DJANGO_PORT".into(), "APP_PORT".into()],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         let np = ports(&[("api", 3001)]);
-        let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
+        let env = build_env(1, 1, "s", "host", &np, &[], &[&svc]);
         assert_eq!(env["DJANGO_PORT"], "3001");
         assert_eq!(env["APP_PORT"], "3001");
     }
@@ -284,10 +286,11 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         let np = ports(&[("api", 3001)]);
-        let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
+        let env = build_env(1, 1, "s", "host", &np, &[], &[&svc]);
         assert_eq!(env.get("ECLUSE_API_PORT").map(|s| s.as_str()), Some("3001"));
         assert!(!env.contains_key("DJANGO_PORT"));
     }
@@ -296,11 +299,11 @@ mod tests {
     fn per_service_base_port_slot_arithmetic() {
         // api base_port=8000, slot=1 → 8001; slot=2 → 8002
         let np1 = ports(&[("api", 8001)]);
-        let env1 = build_env(1, "s1", "host", &np1, &[], &[], &[]);
+        let env1 = build_env(1, 1, "s1", "host", &np1, &[], &[]);
         assert_eq!(env1["ECLUSE_API_PORT"], "8001");
 
         let np2 = ports(&[("api", 8002)]);
-        let env2 = build_env(2, "s2", "host", &np2, &[], &[], &[]);
+        let env2 = build_env(2, 1, "s2", "host", &np2, &[], &[]);
         assert_eq!(env2["ECLUSE_API_PORT"], "8002");
     }
 
@@ -316,10 +319,11 @@ mod tests {
             port_env: vec![],
             debug_port: Some(9229),
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         let np = ports(&[("app", 7101)]);
-        let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
+        let env = build_env(1, 1, "s", "host", &np, &[], &[&svc]);
         assert_eq!(env["ECLUSE_APP_DEBUG_PORT"], "9230");
     }
 
@@ -335,10 +339,11 @@ mod tests {
             port_env: vec![],
             debug_port: Some(9229),
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         let np2 = ports(&[("app", 7102)]);
-        let env2 = build_env(2, "s2", "host", &np2, &[], &[&svc], &[]);
+        let env2 = build_env(2, 1, "s2", "host", &np2, &[], &[&svc]);
         assert_eq!(env2["ECLUSE_APP_DEBUG_PORT"], "9231");
     }
 
@@ -365,10 +370,11 @@ mod tests {
                     container_port: None,
                 },
             ],
+            publish_primary: None,
             host_port: None,
         };
         let np = ports(&[("api", 3001)]);
-        let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
+        let env = build_env(1, 1, "s", "host", &np, &[], &[&svc]);
         assert_eq!(env["NODE_INSPECT_PORT"], "9230"); // 9229 + 1
         assert_eq!(env["PGPORT"], "11534"); // 11533 + 1
     }
@@ -389,10 +395,11 @@ mod tests {
                 port_env: "AUX_PORT".into(),
                 container_port: None,
             }],
+            publish_primary: None,
             host_port: None,
         };
         let np = ports(&[("api", 3001)]);
-        let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
+        let env = build_env(1, 1, "s", "host", &np, &[], &[&svc]);
         assert_eq!(env["ECLUSE_API_DEBUG_PORT"], "9230");
         assert_eq!(env["AUX_PORT"], "5556");
     }
@@ -409,10 +416,11 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         let np = ports(&[("api", 4445)]);
-        let env = build_env(1, "s", "host", &np, &[], &[&svc], &[]);
+        let env = build_env(1, 1, "s", "host", &np, &[], &[&svc]);
         assert!(!env.contains_key("ECLUSE_API_DEBUG_PORT"));
     }
 
@@ -432,16 +440,17 @@ mod tests {
                 port_env: "PGPORT".into(),
                 container_port: None,
             }],
+            publish_primary: None,
             host_port: None,
         };
         // slot 1: ECLUSE_POSTGRES_PORT = 5433 (primary), PGPORT = 11533 (extra)
         let env = build_env(
             1,
+            1,
             "s",
             "hybrid",
             &IndexMap::new(),
             &[("postgres".into(), 5433)],
-            &[],
             &[&svc],
         );
         assert_eq!(env["ECLUSE_POSTGRES_PORT"], "5433");
@@ -460,15 +469,16 @@ mod tests {
             port_env: vec!["DOLT_PORT".into()],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         let env = build_env(
+            1,
             1,
             "s",
             "hybrid",
             &IndexMap::new(),
             &[("dolt".into(), 3307)],
-            &[],
             &[&svc],
         );
         assert_eq!(env["ECLUSE_DOLT_PORT"], "3307");
@@ -493,17 +503,18 @@ mod tests {
                 port_env: "PGPORT".into(),
                 container_port: Some(5432),
             }],
+            publish_primary: None,
             host_port: None,
         };
         // suppress_primary_publish=true: caller tracks extra port as primary
         // build_env receives extra port host value (11533) as the docker_ports entry
         let env = build_env(
             1,
+            1,
             "s",
             "hybrid",
             &IndexMap::new(),
             &[("postgres".into(), 11533)],
-            &[],
             &[&svc],
         );
         assert_eq!(env["ECLUSE_POSTGRES_PORT"], "11533");
@@ -578,4 +589,35 @@ pub fn write_env_file(worktree: &Path, env: &HashMap<String, String>) -> Result<
     let content = lines.join("\n") + "\n";
     std::fs::write(worktree.join(".env.ecluse"), content)
         .with_context(|| format!("failed to write .env.ecluse in {}", worktree.display()))
+}
+
+#[cfg(test)]
+mod stride_tests {
+    use super::*;
+    use crate::config::{ExtraPort, ServiceConfig, ServiceRun};
+
+    #[test]
+    fn extra_ports_in_env_honor_slot_stride() {
+        let svc = ServiceConfig {
+            name: "api".into(),
+            base_port: 3000,
+            run: ServiceRun::Native,
+            compose: None,
+            command: None,
+            port_env: vec![],
+            debug_port: None,
+            extra_ports: vec![ExtraPort {
+                base_port: 9200,
+                port_env: "DEBUG_PORT".into(),
+                container_port: None,
+            }],
+            publish_primary: None,
+            host_port: None,
+        };
+        let mut np = IndexMap::new();
+        np.insert("api".to_string(), 3020u16);
+        // stride 10, slot 2 → extra port 9200 + 20, matching primary spacing
+        let env = build_env(2, 10, "s", "host", &np, &[], &[&svc]);
+        assert_eq!(env["DEBUG_PORT"], "9220");
+    }
 }

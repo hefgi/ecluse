@@ -65,6 +65,16 @@ fn port_in_use_by_docker(port: u16) -> bool {
         .any(|line| line.contains(&format!(":{port}->")))
 }
 
+/// Best-effort: PID of the process listening on `port`, if any (lsof).
+pub fn port_listener(port: u16) -> Option<u32> {
+    port_listener_pid(port)
+}
+
+/// Best-effort: whether anything (host process or docker container) holds `port`.
+pub fn port_occupied(port: u16) -> bool {
+    port_listener_pid(port).is_some() || port_in_use_by_docker(port)
+}
+
 /// Find a free port for a service on a given slot.
 ///
 /// Tries: `nominal`, `nominal + max_slots`, `nominal + 2*max_slots`, …
@@ -241,6 +251,15 @@ pub fn validate_config(config: &Config) -> Result<Vec<String>> {
             ));
         }
 
+        if svc.publish_primary.is_none()
+            && svc.extra_ports.iter().any(|ep| ep.container_port.is_some())
+        {
+            warnings.push(format!(
+                "service '{}': primary port publication is implicitly suppressed because an extra_port sets container_port; set `publish_primary = false` explicitly (the implicit rule is deprecated)",
+                svc.name
+            ));
+        }
+
         if svc.host_port.is_some() && svc.extra_ports.iter().any(|ep| ep.container_port.is_some()) {
             warnings.push(format!(
                 "service '{}': host_port and extra_ports[].container_port are both set; \
@@ -377,6 +396,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         }
     }
@@ -391,6 +411,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         }
     }
@@ -612,6 +633,7 @@ mod tests {
                 port_env: vec![],
                 debug_port: None,
                 extra_ports: vec![],
+                publish_primary: None,
                 host_port: None,
             }],
         );
@@ -635,6 +657,7 @@ mod tests {
                 port_env: vec![],
                 debug_port: None,
                 extra_ports: vec![],
+                publish_primary: None,
                 host_port: None,
             }],
         );
@@ -657,6 +680,7 @@ mod tests {
                 port_env: vec![],
                 debug_port: None,
                 extra_ports: vec![],
+                publish_primary: None,
                 host_port: None,
             }],
         );

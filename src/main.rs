@@ -1895,16 +1895,19 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
             native_ports.insert(m.service_name.clone(), port);
         }
     }
-    let docker_svcs = config.docker_services();
-    let docker_svcs_ref: Vec<&config::ServiceConfig> = docker_svcs.to_vec();
+    let all_svc_configs: Vec<&config::ServiceConfig> = native_svcs
+        .iter()
+        .chain(config.docker_services().iter())
+        .copied()
+        .collect();
     let env_map = env::build_env(
         slot,
+        config.slot_stride,
         &slug,
         &config.mode.to_string(),
         &native_ports,
         &docker_matches,
-        &native_svcs,
-        &docker_svcs_ref,
+        &all_svc_configs,
     );
     env::write_env_file(&worktree_path, &env_map)?;
 

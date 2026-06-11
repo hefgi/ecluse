@@ -420,6 +420,7 @@ pub(crate) fn make_native_svc(name: &str, base_port: u16, command: &str) -> Serv
         port_env: vec![],
         debug_port: None,
         extra_ports: vec![],
+        publish_primary: None,
         host_port: None,
     }
 }
@@ -435,6 +436,7 @@ pub(crate) fn make_docker_svc(name: &str, base_port: u16) -> ServiceConfig {
         port_env: vec![],
         debug_port: None,
         extra_ports: vec![],
+        publish_primary: None,
         host_port: None,
     }
 }

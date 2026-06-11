@@ -786,6 +786,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         let result = spawn_services(
@@ -857,6 +858,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         let result = spawn_services(
@@ -941,6 +943,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         }
     }
@@ -1115,6 +1118,7 @@ mod tmux_tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         }
     }

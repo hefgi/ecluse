@@ -85,6 +85,41 @@ pub(crate) fn filtered_docker_services<'c>(
         .collect()
 }
 
+/// Probe the extra_ports of non-skipped services. Primary ports auto-bump on
+/// collision, but extra ports are deterministic — an occupied one would
+/// surface as a raw bind failure from the service or container. strict_port
+/// makes it a hard error; otherwise it is warned about up front.
+pub(crate) fn check_extra_ports(
+    config: &Config,
+    svcs: &[&ServiceConfig],
+    skip: &HashSet<String>,
+    slot: u8,
+    log: &StepLogger,
+) -> Result<()> {
+    for svc in svcs {
+        if skip.contains(&svc.name) {
+            continue;
+        }
+        for (base, env_key) in svc.all_extra_ports() {
+            let port = ServiceConfig::extra_port_for_slot(base, slot, config.slot_stride);
+            if crate::validate::port_occupied(port) {
+                if config.strict_port {
+                    return Err(crate::error::EcluseError::PortInUse {
+                        port,
+                        pid: crate::validate::port_listener(port).unwrap_or(0),
+                    }
+                    .into());
+                }
+                log.warn(&format!(
+                    "extra port {} ({}) for service '{}' is already in use; the service may fail to bind",
+                    port, env_key, svc.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// What `start_docker_services` brought up (or copied from the existing session).
 #[derive(Default)]
 pub(crate) struct DockerStartup {
@@ -137,6 +172,7 @@ pub(crate) fn start_docker_services(
 
     let groups = group_by_compose(root, &docker_svcs_to_start)?;
     for (compose_path, svcs) in &groups {
+        check_extra_ports(config, svcs, &HashSet::new(), req.slot, log)?;
         let svc_names: Vec<String> = svcs.iter().map(|s| s.name.clone()).collect();
         log.step(&format!(
             "Starting docker services: {}...",
@@ -153,7 +189,11 @@ pub(crate) fn start_docker_services(
             if s.suppress_primary_publish() {
                 // Track the first extra_port host port as the "primary" for state/ls.
                 if let Some(ep) = s.extra_ports.first() {
-                    let hp = ep.base_port.saturating_add(req.slot as u16);
+                    let hp = ServiceConfig::extra_port_for_slot(
+                        ep.base_port,
+                        req.slot,
+                        config.slot_stride,
+                    );
                     out.allocated_ports.push((s.name.clone(), hp));
                     log.detail(&format!("{}: {hp} (via extra_ports)", s.name));
                 }
@@ -179,7 +219,16 @@ pub(crate) fn start_docker_services(
                 let extras: Vec<(u16, u16)> = s
                     .extra_port_mappings()
                     .into_iter()
-                    .map(|(host_base, cport)| (host_base.saturating_add(req.slot as u16), cport))
+                    .map(|(host_base, cport)| {
+                        (
+                            ServiceConfig::extra_port_for_slot(
+                                host_base,
+                                req.slot,
+                                config.slot_stride,
+                            ),
+                            cport,
+                        )
+                    })
                     .collect();
                 if extras.is_empty() {
                     None
@@ -196,7 +245,8 @@ pub(crate) fn start_docker_services(
             .collect();
         for svc in svcs {
             for ep in &svc.extra_ports {
-                let host_port = ep.base_port.saturating_add(req.slot as u16);
+                let host_port =
+                    ServiceConfig::extra_port_for_slot(ep.base_port, req.slot, config.slot_stride);
                 compose_env.insert(ep.port_env.clone(), host_port.to_string());
             }
         }
@@ -337,6 +387,7 @@ pub(crate) fn native_ports_for_slot(
                 port_env: vec![],
                 debug_port: None,
                 extra_ports: vec![],
+                publish_primary: None,
                 host_port: None,
             };
             crate::validate::find_free_port(config, &fallback, slot)?
@@ -526,6 +577,7 @@ mod tests {
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         }
     }
@@ -691,5 +743,88 @@ mod tests {
         let result = compose_file_for_overlay(dir.path(), &overlay);
         assert!(result.is_some());
         assert!(result.unwrap().ends_with("worker/docker-compose.yml"));
+    }
+}
+
+#[cfg(test)]
+mod extra_port_tests {
+    use super::*;
+    use crate::config::{ExtraPort, HookConfig, ServiceRun};
+
+    fn config_with(strict: bool, stride: u8, svc: ServiceConfig) -> Config {
+        Config {
+            mode: Mode::Host,
+            max_slots: 8,
+            prefix: "ecluse".into(),
+            worktree_dir: ".ecluse/worktrees".into(),
+            app_label: "ecluse.role".into(),
+            app_label_value: "app".into(),
+            strict_port: strict,
+            port_search_range: 10,
+            slot_stride: stride,
+            services: vec![svc],
+            hooks: HookConfig::default(),
+            inherit_env: vec![],
+        }
+    }
+
+    fn svc_with_extra(base: u16) -> ServiceConfig {
+        ServiceConfig {
+            name: "api".into(),
+            base_port: 3000,
+            run: ServiceRun::Native,
+            compose: None,
+            command: Some("sleep 1".into()),
+            port_env: vec![],
+            debug_port: None,
+            extra_ports: vec![ExtraPort {
+                base_port: base,
+                port_env: "DBG".into(),
+                container_port: None,
+            }],
+            publish_primary: None,
+            host_port: None,
+        }
+    }
+
+    // Occupy a real port, point an extra_port at it: strict errors, lax warns.
+    #[test]
+    fn occupied_extra_port_errors_in_strict_mode() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        if !crate::validate::port_occupied(port) {
+            // Port probing is best-effort (lsof); in environments where it
+            // cannot observe sockets the production check is a no-op too.
+            return;
+        }
+        // slot 1, stride 1 → extra port = base + 1 = port
+        let svc = svc_with_extra(port - 1);
+        let config = config_with(true, 1, svc.clone());
+        let log = crate::log::StepLogger::new(true);
+        let err = check_extra_ports(&config, &[&svc], &HashSet::new(), 1, &log).unwrap_err();
+        assert!(err.to_string().contains(&port.to_string()), "got: {}", err);
+    }
+
+    #[test]
+    fn occupied_extra_port_warns_but_passes_in_lax_mode() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let svc = svc_with_extra(port - 1);
+        let config = config_with(false, 1, svc.clone());
+        let log = crate::log::StepLogger::new(true);
+        check_extra_ports(&config, &[&svc], &HashSet::new(), 1, &log).unwrap();
+    }
+
+    #[test]
+    fn skipped_services_are_not_probed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let svc = svc_with_extra(port - 1);
+        let config = config_with(true, 1, svc.clone());
+        let log = crate::log::StepLogger::new(true);
+        let mut skip = HashSet::new();
+        skip.insert("api".to_string());
+        // The occupied port belongs to the already-running service itself.
+        check_extra_ports(&config, &[&svc], &skip, 1, &log).unwrap();
     }
 }

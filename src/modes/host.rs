@@ -65,12 +65,12 @@ impl super::ModeHandler for HostMode {
         log.step("Writing .env.ecluse...");
         let env_map = env::build_env(
             req.slot,
+            config.slot_stride,
             req.slug,
             "host",
             &native_ports,
             &[],
             &native_svcs,
-            &[],
         );
         env::write_env_file(&worktree_path, &env_map)?;
 
@@ -80,6 +80,8 @@ impl super::ModeHandler for HostMode {
             log.detail(cmd);
             hooks::run(cmd, &worktree_path, &env_map)?;
         }
+
+        super::check_extra_ports(config, &native_svcs, req.skip_services, req.slot, log)?;
 
         let (spawn, used_pm) = super::spawn_native_services(
             req,
@@ -157,12 +159,12 @@ impl super::ModeHandler for HostMode {
         let native_svcs = config.native_services();
         let env_map = env::build_env(
             session.slot,
+            config.slot_stride,
             &session.slug,
             "host",
             &native_ports,
             &[],
             &native_svcs,
-            &[],
         );
 
         // pre_down: before services are killed — app can drain/flush.

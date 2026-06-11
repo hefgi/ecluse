@@ -132,11 +132,11 @@ impl super::ModeHandler for ContainerMode {
         log.step("Writing .env.ecluse...");
         let env_map = env::build_env(
             req.slot,
+            config.slot_stride,
             req.slug,
             "container",
             &indexmap::IndexMap::new(),
             &docker.allocated_ports,
-            &[],
             &docker_svcs_config,
         );
         env::write_env_file(&worktree_path, &env_map)?;
@@ -210,11 +210,11 @@ impl super::ModeHandler for ContainerMode {
         let docker_svcs_ref: Vec<&crate::config::ServiceConfig> = docker_svcs.to_vec();
         let env_map = env::build_env(
             session.slot,
+            config.slot_stride,
             &session.slug,
             "container",
             &indexmap::IndexMap::new(),
             &allocated_ports,
-            &[],
             &docker_svcs_ref,
         );
 

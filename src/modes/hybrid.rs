@@ -161,14 +161,19 @@ impl super::ModeHandler for HybridMode {
         }
 
         log.step("Writing .env.ecluse...");
+        let all_svc_configs: Vec<&crate::config::ServiceConfig> = native_svcs
+            .iter()
+            .chain(docker_svcs_config.iter())
+            .copied()
+            .collect();
         let env_map = env::build_env(
             req.slot,
+            config.slot_stride,
             req.slug,
             "hybrid",
             &native_ports,
             &docker.allocated_ports,
-            &native_svcs,
-            &docker_svcs_config,
+            &all_svc_configs,
         );
         env::write_env_file(&worktree_path, &env_map)?;
 
@@ -178,6 +183,8 @@ impl super::ModeHandler for HybridMode {
             log.detail(cmd);
             hooks::run(cmd, &worktree_path, &env_map)?;
         }
+
+        super::check_extra_ports(config, &native_svcs, req.skip_services, req.slot, log)?;
 
         let (spawn, used_pm) = super::spawn_native_services(
             req,
@@ -278,16 +285,19 @@ impl super::ModeHandler for HybridMode {
             .filter(|(k, _)| !native_names.contains(k.as_str()) && k.as_str() != "app")
             .map(|(k, v)| (k.clone(), *v))
             .collect();
-        let docker_svcs = config.docker_services();
-        let docker_svcs_ref: Vec<&crate::config::ServiceConfig> = docker_svcs.to_vec();
+        let all_svc_configs: Vec<&crate::config::ServiceConfig> = native
+            .iter()
+            .chain(config.docker_services().iter())
+            .copied()
+            .collect();
         let env_map = env::build_env(
             session.slot,
+            config.slot_stride,
             &session.slug,
             "hybrid",
             &native_ports,
             &allocated_docker_ports,
-            &native,
-            &docker_svcs_ref,
+            &all_svc_configs,
         );
 
         // pre_down: before services are killed — app can drain/flush.
