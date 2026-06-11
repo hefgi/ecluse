@@ -10,6 +10,7 @@ use crate::env;
 use crate::hooks;
 use crate::log::StepLogger;
 use crate::process;
+use crate::rollback::Rollback;
 use crate::state::Session;
 use crate::validate;
 use crate::worktree::WorktreeManager;
@@ -50,6 +51,13 @@ impl super::ModeHandler for HybridMode {
             log.detail(cmd);
             hooks::run(cmd, root, &std::collections::HashMap::new())?;
         }
+
+        // Every step below registers its undo; any early return tears down
+        // exactly what was created so far, in reverse order.
+        let mut rollback = Rollback::new();
+        // Only delete volumes the rollback created: on resume the session's
+        // existing data volumes must survive a failed re-up.
+        let rollback_volumes = !reuse_worktree;
 
         let docker_svcs_config: Vec<_> = config
             .docker_services()
@@ -162,27 +170,30 @@ impl super::ModeHandler for HybridMode {
                         slot,
                     )?;
                     std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
+                    {
+                        let overlay = overlay_path.clone();
+                        rollback.push(move || {
+                            let _ = std::fs::remove_file(&overlay);
+                        });
+                    }
 
                     let compose_str = compose_path.to_string_lossy().to_string();
                     let overlay_str = overlay_path.to_string_lossy().to_string();
                     let svc_refs: Vec<&str> = svc_names.iter().map(|s| s.as_str()).collect();
 
-                    if let Err(e) = docker::compose_up_services(
+                    docker::compose_up_services(
                         &project,
                         &compose_str,
                         Some(&overlay_str),
                         &svc_refs,
                         watch,
                         &compose_env,
-                    ) {
-                        for ov in &written_overlays {
-                            let _ = std::fs::remove_file(ov);
-                        }
-                        let _ = std::fs::remove_file(&overlay_path);
-                        if !reuse_worktree {
-                            let _ = wt.remove(&worktree_path);
-                        }
-                        return Err(e);
+                    )?;
+                    {
+                        let (p, c, o) = (project.clone(), compose_str, overlay_str.clone());
+                        rollback.push(move || {
+                            let _ = docker::compose_down(&p, &c, Some(&o), rollback_volumes);
+                        });
                     }
 
                     written_overlays.push(overlay_str);
@@ -221,24 +232,30 @@ impl super::ModeHandler for HybridMode {
                 slot,
             )?;
             std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
+            {
+                let overlay = overlay_path.clone();
+                rollback.push(move || {
+                    let _ = std::fs::remove_file(&overlay);
+                });
+            }
 
             let compose_str = compose_path.to_string_lossy().to_string();
             let overlay_str = overlay_path.to_string_lossy().to_string();
             let data_refs: Vec<&str> = data_svcs.iter().map(|s| s.as_str()).collect();
 
-            if let Err(e) = docker::compose_up_services(
+            docker::compose_up_services(
                 &project,
                 &compose_str,
                 Some(&overlay_str),
                 &data_refs,
                 watch,
                 &std::collections::HashMap::new(),
-            ) {
-                let _ = std::fs::remove_file(&overlay_path);
-                if !reuse_worktree {
-                    let _ = wt.remove(&worktree_path);
-                }
-                return Err(e);
+            )?;
+            {
+                let (p, c, o) = (project.clone(), compose_str, overlay_str.clone());
+                rollback.push(move || {
+                    let _ = docker::compose_down(&p, &c, Some(&o), rollback_volumes);
+                });
             }
 
             for (name, svc) in &compose_data.services {
@@ -265,12 +282,13 @@ impl super::ModeHandler for HybridMode {
         } else {
             log.step(&format!("Creating worktree (branch: {branch})..."));
             log.detail(&worktree_path.display().to_string());
-            if let Err(e) = wt.create(&worktree_path, branch) {
-                tear_down_all_overlays(&project, root, &written_overlays, true);
-                for ov in &written_overlays {
-                    let _ = std::fs::remove_file(ov);
-                }
-                return Err(e);
+            wt.create(&worktree_path, branch)?;
+            {
+                let root_owned = root.to_owned();
+                let wt_path = worktree_path.clone();
+                rollback.push(move || {
+                    let _ = WorktreeManager::new(root_owned).remove(&wt_path);
+                });
             }
         }
 
@@ -359,7 +377,7 @@ impl super::ModeHandler for HybridMode {
             .copied()
             .collect();
 
-        let spawn = if native_svcs_to_spawn.iter().any(|s| s.command.is_some()) {
+        if native_svcs_to_spawn.iter().any(|s| s.command.is_some()) {
             log.step(&format!(
                 "Spawning native services ({})...",
                 global.process_manager
@@ -370,46 +388,28 @@ impl super::ModeHandler for HybridMode {
                     log.detail(&format!("{} on port {} — {}", svc.name, port, cmd));
                 }
             }
-            process::spawn_services(
-                &global.process_manager,
-                slug,
-                &native_svcs_to_spawn,
-                &worktree_path,
-                &env_map,
-            )?
-        } else {
-            process::spawn_services(
-                &global.process_manager,
-                slug,
-                &native_svcs_to_spawn,
-                &worktree_path,
-                &env_map,
-            )?
-        };
+        }
+        let spawn = process::spawn_services(
+            &global.process_manager,
+            slug,
+            &native_svcs_to_spawn,
+            &worktree_path,
+            &env_map,
+        )?;
+        if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
+            let manager = global.process_manager.clone();
+            let spawned = spawn.clone();
+            rollback.push(move || process::kill_services(&manager, &spawned));
+        }
 
         // post_up: all services up and spawned, full env available
         if let Some(cmd) = &config.hooks.post_up {
             log.step("Running post_up hook...");
             log.detail(cmd);
-            if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
-                let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
-                    Some(&global.process_manager)
-                } else {
-                    None
-                };
-                if let Some(pm) = pm {
-                    process::kill_services(pm, &spawn);
-                }
-                tear_down_all_overlays(&project, root, &written_overlays, true);
-                if !reuse_worktree {
-                    let _ = wt.remove(&worktree_path);
-                }
-                for ov in &written_overlays {
-                    let _ = std::fs::remove_file(ov);
-                }
-                return Err(e);
-            }
+            hooks::run(cmd, &worktree_path, &env_map)?;
         }
+
+        rollback.disarm();
 
         let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
             Some(global.process_manager)
