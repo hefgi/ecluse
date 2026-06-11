@@ -380,7 +380,11 @@ pub struct Config {
     ///   side affect both. Good for shared secrets that should stay in sync.
     /// - `copy`: file is copied from root once on first `ecluse up`; future edits in the
     ///   worktree stay local. Good for per-worktree feature flags / overrides.
-    #[serde(default = "default_inherit_env", skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized: an explicit `[]` opt-out must survive a save/load
+    /// round-trip — skipping empty on write would deserialize back to the
+    /// default and silently undo the opt-out.
+    #[serde(default = "default_inherit_env")]
     pub inherit_env: Vec<InheritEnvEntry>,
 }
 
@@ -1134,6 +1138,25 @@ base_port = 3000
         write_toml(&dir, "mode = \"host\"\n");
         let config = Config::load(dir.path()).unwrap();
         assert_eq!(config.slot_stride, 1);
+    }
+
+    // ── inherit_env round-trip ────────────────────────────────────────────────
+
+    // An explicit opt-out must survive save → load; skipping the empty vec on
+    // write made it deserialize back to the default.
+    #[test]
+    fn inherit_env_empty_opt_out_survives_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\ninherit_env = []\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert!(config.inherit_env.is_empty());
+
+        config.save(dir.path()).unwrap();
+        let reloaded = Config::load(dir.path()).unwrap();
+        assert!(
+            reloaded.inherit_env.is_empty(),
+            "explicit [] opt-out must not come back as the default"
+        );
     }
 
     // ── extra ports & publish_primary ─────────────────────────────────────────
