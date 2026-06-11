@@ -11,7 +11,9 @@ fn setup_repo(dir: &std::path::Path) {
         .current_dir(dir)
         .output()
         .unwrap();
+    // Disable signing: fixture commits must work without any signing setup.
     Command::new("git")
+        .args(["-c", "commit.gpgsign=false"])
         .args(["commit", "--allow-empty", "-m", "init"])
         .current_dir(dir)
         .env("GIT_AUTHOR_NAME", "test")
@@ -447,4 +449,30 @@ fn up_without_init_errors() {
         "got: {}",
         stderr(&out)
     );
+}
+
+#[test]
+fn up_with_colliding_branch_name_errors() {
+    let repo = tmp_repo();
+    ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
+
+    // Session created from branch 'feat-foo' (slug feat-foo).
+    let out = ecluse(repo.path(), &["up", "feat-foo"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    // 'feat/foo' sanitizes to the same slug but is a different branch —
+    // resuming silently would put the caller on the wrong branch.
+    let out = ecluse(repo.path(), &["up", "feat/foo"]);
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("already used by branch"),
+        "got: {}",
+        stderr(&out)
+    );
+
+    // Addressing the session by its slug still resumes normally.
+    let out = ecluse(repo.path(), &["up", "feat-foo"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    ecluse(repo.path(), &["down", "--delete-worktree", "feat-foo"]);
 }

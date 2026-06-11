@@ -666,6 +666,21 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
 
     // Resume path: session already exists — restart/skip services idempotently.
     if let Some(existing) = guard.state.find_session(&slug).cloned() {
+        // Slugs are sanitized branch names (feat/foo → feat-foo), so two
+        // different branches can collide on one slug. Addressing the session
+        // by its slug or by its exact branch resumes it; anything else would
+        // silently resume the wrong branch.
+        if let Some(requested) = args.slug.as_deref() {
+            if requested != existing.slug && existing.branch != branch {
+                return Err(anyhow::anyhow!(
+                    "slug '{}' is already used by branch '{}' (requested branch '{}'); run `ecluse down {}` first or pick a different branch name",
+                    slug,
+                    existing.branch,
+                    branch,
+                    slug
+                ));
+            }
+        }
         log.step("Looking for existing session...");
         log.detail(&format!(
             "found session '{}' (slot {}) — reusing worktree",
