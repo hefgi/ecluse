@@ -9,8 +9,46 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::OnceLock;
 
 const TEST_IMAGE: &str = "public.ecr.aws/docker/library/alpine:3.20";
+
+/// Pull the test image exactly once for the whole suite. Tests run in
+/// parallel; four concurrent pulls trip the registry's per-IP rate limit on
+/// shared CI runners, so the first caller pulls (with retries) and the rest
+/// wait on the OnceLock. An unobtainable image is treated like an absent
+/// daemon: skip loudly rather than fail on registry weather.
+fn test_image_ready() -> bool {
+    static IMAGE_READY: OnceLock<bool> = OnceLock::new();
+    *IMAGE_READY.get_or_init(|| {
+        let present = Command::new("docker")
+            .args(["image", "inspect", TEST_IMAGE])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if present {
+            return true;
+        }
+        for attempt in 0..3 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+            }
+            let ok = Command::new("docker")
+                .args(["pull", TEST_IMAGE])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            if ok {
+                return true;
+            }
+        }
+        eprintln!(
+            "skipping docker e2e: cannot pull {} (registry rate limit?)",
+            TEST_IMAGE
+        );
+        false
+    })
+}
 
 fn ecluse_bin() -> PathBuf {
     env!("CARGO_BIN_EXE_ecluse").into()
@@ -121,8 +159,8 @@ fn write_compose(dir: &std::path::Path, rel: &str, services: &[&str]) {
 
 #[test]
 fn hybrid_lifecycle_starts_and_stops_containers() {
-    if !docker_available() {
-        eprintln!("skipping: docker unavailable");
+    if !docker_available() || !test_image_ready() {
+        eprintln!("skipping: docker or test image unavailable");
         return;
     }
     let repo = tempfile::tempdir().unwrap();
@@ -180,8 +218,8 @@ base_port = 5480
 
 #[test]
 fn failed_post_up_rolls_back_containers() {
-    if !docker_available() {
-        eprintln!("skipping: docker unavailable");
+    if !docker_available() || !test_image_ready() {
+        eprintln!("skipping: docker or test image unavailable");
         return;
     }
     let repo = tempfile::tempdir().unwrap();
@@ -229,8 +267,8 @@ post_up = "false"
 // the recorded pairs, not filename parsing.
 #[test]
 fn hyphenated_slug_multi_compose_teardown() {
-    if !docker_available() {
-        eprintln!("skipping: docker unavailable");
+    if !docker_available() || !test_image_ready() {
+        eprintln!("skipping: docker or test image unavailable");
         return;
     }
     let repo = tempfile::tempdir().unwrap();
@@ -276,8 +314,8 @@ compose = "worker/docker-compose.yml"
 
 #[test]
 fn container_mode_runs_whole_compose_file() {
-    if !docker_available() {
-        eprintln!("skipping: docker unavailable");
+    if !docker_available() || !test_image_ready() {
+        eprintln!("skipping: docker or test image unavailable");
         return;
     }
     let repo = tempfile::tempdir().unwrap();
