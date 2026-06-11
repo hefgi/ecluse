@@ -21,6 +21,10 @@ ecluse shutdown   # tear down ALL active sessions (--keep-worktrees to leave wor
 ecluse ls         # list active sessions
 ecluse env        # print session env vars as JSON
 ecluse shell      # drop into worktree with env loaded (interactive use only)
+ecluse status     # per-service health for a session
+ecluse sync       # register externally-started processes as a session
+ecluse whose-pid  # reverse-map a PID to the owning session
+ecluse flush      # hard-reset: tear down everything ecluse knows about
 ecluse validate   # validate .ecluse.toml port ranges and service gaps
 ```
 
@@ -66,7 +70,7 @@ Not every change touches all five — a slot-allocation bug fix probably touches
 
 ```
 src/
-├── main.rs       command handlers (init/up/down/ls/shell/env)
+├── main.rs       command handlers
 ├── cli.rs        clap CLI definitions
 ├── config.rs     .ecluse.toml parsing, Config struct, Mode enum
 ├── slot.rs       slot allocation (first free in 1..max_slots)
@@ -75,7 +79,12 @@ src/
 ├── error.rs      EcluseError variants with actionable messages
 ├── detect.rs     mode auto-detection via signal scoring
 ├── worktree.rs   git worktree create/remove wrappers
-├── hooks.rs      on_up/on_down lifecycle hook execution
+├── hooks.rs      lifecycle hook execution (pre_up/pre_spawn/post_up/pre_down/post_down)
+├── process.rs    native service spawning (tmux/nohup) + global config
+├── sync.rs       discovery of externally-started processes/containers
+├── validate.rs   config validation + free-port probing
+├── whose_pid.rs  PID → owning session reverse lookup
+├── log.rs        step/detail/warn console output
 ├── compose.rs    docker-compose.yml parsing + overlay generation
 ├── docker.rs     Docker CLI wrappers
 └── modes/        ModeHandler trait + container/host/hybrid impls
