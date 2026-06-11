@@ -9,6 +9,7 @@ mod hooks;
 mod log;
 mod modes;
 mod process;
+mod rollback;
 mod slot;
 mod state;
 mod sync;

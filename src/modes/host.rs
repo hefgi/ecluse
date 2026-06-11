@@ -8,6 +8,7 @@ use crate::env;
 use crate::hooks;
 use crate::log::StepLogger;
 use crate::process;
+use crate::rollback::Rollback;
 use crate::state::Session;
 use crate::validate;
 use crate::worktree::WorktreeManager;
@@ -59,6 +60,10 @@ impl super::ModeHandler for HostMode {
             log.detail(&format!("{name}: {port}"));
         }
 
+        // Every step below registers its undo; any early return tears down
+        // exactly what was created so far, in reverse order.
+        let mut rollback = Rollback::new();
+
         if reuse_worktree {
             if !worktree_path.exists() {
                 return Err(anyhow::anyhow!(
@@ -72,6 +77,13 @@ impl super::ModeHandler for HostMode {
             log.step(&format!("Creating worktree (branch: {branch})..."));
             log.detail(&worktree_path.display().to_string());
             wt.create(&worktree_path, branch)?;
+            {
+                let root_owned = root.to_owned();
+                let wt_path = worktree_path.clone();
+                rollback.push(move || {
+                    let _ = WorktreeManager::new(root_owned).remove(&wt_path);
+                });
+            }
         }
 
         if !no_inherit_env && !config.inherit_env.is_empty() {
@@ -98,7 +110,7 @@ impl super::ModeHandler for HostMode {
             .copied()
             .collect();
 
-        let spawn = if svcs_to_spawn.iter().any(|s| s.command.is_some()) {
+        if svcs_to_spawn.iter().any(|s| s.command.is_some()) {
             log.step(&format!(
                 "Spawning native services ({})...",
                 global.process_manager
@@ -109,42 +121,28 @@ impl super::ModeHandler for HostMode {
                     log.detail(&format!("{} on port {} — {}", svc.name, port, cmd));
                 }
             }
-            process::spawn_services(
-                &global.process_manager,
-                slug,
-                &svcs_to_spawn,
-                &worktree_path,
-                &env_map,
-            )?
-        } else {
-            process::spawn_services(
-                &global.process_manager,
-                slug,
-                &svcs_to_spawn,
-                &worktree_path,
-                &env_map,
-            )?
-        };
+        }
+        let spawn = process::spawn_services(
+            &global.process_manager,
+            slug,
+            &svcs_to_spawn,
+            &worktree_path,
+            &env_map,
+        )?;
+        if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
+            let manager = global.process_manager.clone();
+            let spawned = spawn.clone();
+            rollback.push(move || process::kill_services(&manager, &spawned));
+        }
 
         // post_up: all services spawned, full env available
         if let Some(cmd) = &config.hooks.post_up {
             log.step("Running post_up hook...");
             log.detail(cmd);
-            if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
-                let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
-                    Some(&global.process_manager)
-                } else {
-                    None
-                };
-                if let Some(pm) = pm {
-                    process::kill_services(pm, &spawn);
-                }
-                if !reuse_worktree {
-                    let _ = wt.remove(&worktree_path);
-                }
-                return Err(e);
-            }
+            hooks::run(cmd, &worktree_path, &env_map)?;
         }
+
+        rollback.disarm();
 
         let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
             Some(global.process_manager)
@@ -297,5 +295,131 @@ fn native_ports_for_slot(
                 Ok((s.name.clone(), port))
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{HookConfig, Mode};
+    use crate::modes::ModeHandler;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn setup_git_repo(dir: &Path) {
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@test.com")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .output()
+            .unwrap();
+    }
+
+    fn make_config() -> Config {
+        Config {
+            mode: Mode::Host,
+            max_slots: 8,
+            prefix: "ecluse".into(),
+            worktree_dir: ".ecluse/worktrees".into(),
+            app_label: "ecluse.role".into(),
+            app_label_value: "app".into(),
+            strict_port: false,
+            port_search_range: 10,
+            slot_stride: 1,
+            services: vec![],
+            hooks: HookConfig::default(),
+            inherit_env: vec![],
+        }
+    }
+
+    fn bring_up(config: &Config, root: &Path, slug: &str, reuse: bool) -> Result<Session> {
+        let log = crate::log::StepLogger::new(true);
+        HostMode.bring_up(
+            slug,
+            1,
+            slug,
+            config,
+            root,
+            false,
+            reuse,
+            true,
+            None,
+            &std::collections::HashMap::new(),
+            None,
+            &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
+            &log,
+        )
+    }
+
+    #[test]
+    fn failed_post_up_hook_rolls_back_fresh_worktree() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+        let mut config = make_config();
+        config.hooks.post_up = Some("false".into());
+
+        let result = bring_up(&config, dir.path(), "rb-post", false);
+        assert!(result.is_err());
+        assert!(
+            !dir.path().join(".ecluse/worktrees/rb-post").exists(),
+            "fresh worktree must be removed when post_up fails"
+        );
+    }
+
+    // pre_spawn failure previously left the worktree behind (no manual cleanup
+    // at that site) — the rollback guard must cover it like every other step.
+    #[test]
+    fn failed_pre_spawn_hook_rolls_back_fresh_worktree() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+        let mut config = make_config();
+        config.hooks.pre_spawn = Some("false".into());
+
+        let result = bring_up(&config, dir.path(), "rb-spawn", false);
+        assert!(result.is_err());
+        assert!(
+            !dir.path().join(".ecluse/worktrees/rb-spawn").exists(),
+            "fresh worktree must be removed when pre_spawn fails"
+        );
+    }
+
+    #[test]
+    fn failed_post_up_hook_keeps_reused_worktree() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+        let wt = WorktreeManager::new(dir.path().to_owned());
+        let path = dir.path().join(".ecluse/worktrees/rb-reuse");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        wt.create(&path, "rb-reuse").unwrap();
+
+        let mut config = make_config();
+        config.hooks.post_up = Some("false".into());
+
+        let result = bring_up(&config, dir.path(), "rb-reuse", true);
+        assert!(result.is_err());
+        assert!(path.exists(), "reused worktree must survive rollback");
+    }
+
+    #[test]
+    fn successful_bring_up_keeps_worktree() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+        let config = make_config();
+
+        let session = bring_up(&config, dir.path(), "rb-ok", false).unwrap();
+        assert!(
+            dir.path().join(".ecluse/worktrees/rb-ok").exists(),
+            "disarmed rollback must not remove anything"
+        );
+        assert_eq!(session.slug, "rb-ok");
     }
 }

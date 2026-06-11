@@ -8,6 +8,7 @@ use crate::docker;
 use crate::env;
 use crate::hooks;
 use crate::log::StepLogger;
+use crate::rollback::Rollback;
 use crate::state::Session;
 use crate::validate;
 use crate::worktree::WorktreeManager;
@@ -48,6 +49,13 @@ impl super::ModeHandler for ContainerMode {
             log.detail(cmd);
             hooks::run(cmd, root, &std::collections::HashMap::new())?;
         }
+
+        // Every step below registers its undo; any early return tears down
+        // exactly what was created so far, in reverse order.
+        let mut rollback = Rollback::new();
+        // Only delete volumes the rollback created: on resume the session's
+        // existing data volumes must survive a failed re-up.
+        let rollback_volumes = !reuse_worktree;
 
         let docker_svcs_config: Vec<_> = config
             .docker_services()
@@ -158,25 +166,28 @@ impl super::ModeHandler for ContainerMode {
                         slot,
                     )?;
                     std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
+                    {
+                        let overlay = overlay_path.clone();
+                        rollback.push(move || {
+                            let _ = std::fs::remove_file(&overlay);
+                        });
+                    }
 
                     let compose_str = compose_path.to_string_lossy().to_string();
                     let overlay_str = overlay_path.to_string_lossy().to_string();
 
-                    if let Err(e) = docker::compose_up(
+                    docker::compose_up(
                         &project,
                         &compose_str,
                         Some(&overlay_str),
                         watch,
                         &compose_env,
-                    ) {
-                        for ov in &written_overlays {
-                            let _ = std::fs::remove_file(ov);
-                        }
-                        let _ = std::fs::remove_file(&overlay_path);
-                        if !reuse_worktree {
-                            let _ = wt.remove(&worktree_path);
-                        }
-                        return Err(e);
+                    )?;
+                    {
+                        let (p, c, o) = (project.clone(), compose_str.clone(), overlay_str.clone());
+                        rollback.push(move || {
+                            let _ = docker::compose_down(&p, &c, Some(&o), rollback_volumes);
+                        });
                     }
 
                     compose_overlays.push(crate::state::ComposeOverlay {
@@ -208,22 +219,28 @@ impl super::ModeHandler for ContainerMode {
                 slot,
             )?;
             std::fs::write(&overlay_path, &yaml).context("failed to write overlay file")?;
+            {
+                let overlay = overlay_path.clone();
+                rollback.push(move || {
+                    let _ = std::fs::remove_file(&overlay);
+                });
+            }
 
             let compose_str = compose_path.to_string_lossy().to_string();
             let overlay_str = overlay_path.to_string_lossy().to_string();
 
-            if let Err(e) = docker::compose_up(
+            docker::compose_up(
                 &project,
                 &compose_str,
                 Some(&overlay_str),
                 watch,
                 &std::collections::HashMap::new(),
-            ) {
-                let _ = std::fs::remove_file(&overlay_path);
-                if !reuse_worktree {
-                    let _ = wt.remove(&worktree_path);
-                }
-                return Err(e);
+            )?;
+            {
+                let (p, c, o) = (project.clone(), compose_str.clone(), overlay_str.clone());
+                rollback.push(move || {
+                    let _ = docker::compose_down(&p, &c, Some(&o), rollback_volumes);
+                });
             }
 
             compose_overlays.push(crate::state::ComposeOverlay {
@@ -257,12 +274,13 @@ impl super::ModeHandler for ContainerMode {
         } else {
             log.step(&format!("Creating worktree (branch: {branch})..."));
             log.detail(&worktree_path.display().to_string());
-            if let Err(e) = wt.create(&worktree_path, branch) {
-                tear_down_all_overlays(&project, root, &written_overlays, true);
-                for ov in &written_overlays {
-                    let _ = std::fs::remove_file(ov);
-                }
-                return Err(e);
+            wt.create(&worktree_path, branch)?;
+            {
+                let root_owned = root.to_owned();
+                let wt_path = worktree_path.clone();
+                rollback.push(move || {
+                    let _ = WorktreeManager::new(root_owned).remove(&wt_path);
+                });
             }
         }
 
@@ -288,33 +306,17 @@ impl super::ModeHandler for ContainerMode {
         if let Some(cmd) = &config.hooks.pre_spawn {
             log.step("Running pre_spawn hook...");
             log.detail(cmd);
-            if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
-                tear_down_all_overlays(&project, root, &written_overlays, true);
-                if !reuse_worktree {
-                    let _ = wt.remove(&worktree_path);
-                }
-                for ov in &written_overlays {
-                    let _ = std::fs::remove_file(ov);
-                }
-                return Err(e);
-            }
+            hooks::run(cmd, &worktree_path, &env_map)?;
         }
 
         // post_up: all containers up, full env available
         if let Some(cmd) = &config.hooks.post_up {
             log.step("Running post_up hook...");
             log.detail(cmd);
-            if let Err(e) = hooks::run(cmd, &worktree_path, &env_map) {
-                tear_down_all_overlays(&project, root, &written_overlays, true);
-                if !reuse_worktree {
-                    let _ = wt.remove(&worktree_path);
-                }
-                for ov in &written_overlays {
-                    let _ = std::fs::remove_file(ov);
-                }
-                return Err(e);
-            }
+            hooks::run(cmd, &worktree_path, &env_map)?;
         }
+
+        rollback.disarm();
 
         let app_port = allocated_ports.first().map(|(_, p)| *p);
         let stored_port_overrides: std::collections::HashMap<String, u16> =
