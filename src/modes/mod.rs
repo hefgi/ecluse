@@ -97,8 +97,11 @@ pub fn overlay_name_for_compose(slug: &str, compose_path: &Path, root: &Path) ->
     format!("{}-{}.yml", slug, stem)
 }
 
-/// Tear down all (compose, overlay) pairs. For each overlay, reconstruct the
-/// compose file path from the overlay filename, falling back to the root compose.
+/// Legacy teardown for state files that predate `Session.compose_overlays`:
+/// reconstructs each overlay's compose file from the overlay *filename*,
+/// falling back to the root compose. Filename reconstruction is ambiguous for
+/// hyphenated slugs (see `compose_file_for_overlay`) — sessions written by
+/// current versions carry explicit pairs and never go through this path.
 pub fn tear_down_all_overlays(
     project: &str,
     root: &Path,

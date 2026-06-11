@@ -59,6 +59,7 @@ impl super::ModeHandler for HybridMode {
 
         let mut allocated_docker_ports: Vec<(String, u16)> = vec![];
         let mut written_overlays: Vec<String> = vec![];
+        let mut compose_overlays: Vec<crate::state::ComposeOverlay> = vec![];
 
         // Copy ports for skipped docker services from existing session.
         for svc in &docker_svcs_config {
@@ -185,6 +186,10 @@ impl super::ModeHandler for HybridMode {
                         return Err(e);
                     }
 
+                    compose_overlays.push(crate::state::ComposeOverlay {
+                        compose: compose_str,
+                        overlay: overlay_str.clone(),
+                    });
                     written_overlays.push(overlay_str);
                 }
             } // end if !docker_svcs_to_start.is_empty()
@@ -240,6 +245,11 @@ impl super::ModeHandler for HybridMode {
                 }
                 return Err(e);
             }
+
+            compose_overlays.push(crate::state::ComposeOverlay {
+                compose: compose_str,
+                overlay: overlay_str.clone(),
+            });
 
             for (name, svc) in &compose_data.services {
                 if data_svcs.contains(name) {
@@ -437,6 +447,7 @@ impl super::ModeHandler for HybridMode {
             compose_project: Some(project),
             overlay_file: primary_overlay,
             overlay_files: extra_overlays,
+            compose_overlays,
             app_port,
             started_at: Utc::now().to_rfc3339(),
             port_overrides: all_ports,
@@ -518,30 +529,44 @@ impl super::ModeHandler for HybridMode {
         process::remove_env_preamble(std::path::Path::new(&session.worktree_path), &session.slug);
 
         if let Some(project) = &session.compose_project {
-            let all_overlays: Vec<String> = session
-                .overlay_file
-                .iter()
-                .cloned()
-                .chain(session.overlay_files.iter().cloned())
-                .collect();
-
             log.step("Stopping docker services...");
 
-            if all_overlays.is_empty() {
-                // No overlay paths recorded in state — fall back to the root compose file
-                // so containers are always stopped even if state was written without overlays.
-                if let Some(cp) = compose::find_compose_file(root) {
-                    let _ = crate::docker::compose_down(
+            if !session.compose_overlays.is_empty() {
+                for pair in &session.compose_overlays {
+                    let _ = docker::compose_down(
                         project,
-                        &cp.to_string_lossy(),
-                        None,
+                        &pair.compose,
+                        Some(&pair.overlay),
                         !keep_volumes,
                     );
+                    let _ = std::fs::remove_file(&pair.overlay);
                 }
             } else {
-                tear_down_all_overlays(project, root, &all_overlays, !keep_volumes);
-                for ov in &all_overlays {
-                    let _ = std::fs::remove_file(ov);
+                // Legacy state without compose_overlays: reconstruct compose
+                // paths from overlay filenames.
+                let all_overlays: Vec<String> = session
+                    .overlay_file
+                    .iter()
+                    .cloned()
+                    .chain(session.overlay_files.iter().cloned())
+                    .collect();
+
+                if all_overlays.is_empty() {
+                    // No overlay paths recorded in state — fall back to the root compose file
+                    // so containers are always stopped even if state was written without overlays.
+                    if let Some(cp) = compose::find_compose_file(root) {
+                        let _ = crate::docker::compose_down(
+                            project,
+                            &cp.to_string_lossy(),
+                            None,
+                            !keep_volumes,
+                        );
+                    }
+                } else {
+                    tear_down_all_overlays(project, root, &all_overlays, !keep_volumes);
+                    for ov in &all_overlays {
+                        let _ = std::fs::remove_file(ov);
+                    }
                 }
             }
         }

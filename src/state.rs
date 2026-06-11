@@ -29,6 +29,15 @@ fn default_version() -> u8 {
     1
 }
 
+/// A compose file together with the overlay ecluse generated for it.
+/// Persisted as a pair so teardown never has to reconstruct which compose
+/// file an overlay belongs to from its filename.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ComposeOverlay {
+    pub compose: String,
+    pub overlay: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Session {
     pub slug: String,
@@ -37,11 +46,18 @@ pub struct Session {
     pub branch: String,
     pub worktree_path: String,
     pub compose_project: Option<String>,
+    /// Legacy: primary overlay path. Still written for older binaries;
+    /// teardown prefers `compose_overlays`.
     pub overlay_file: Option<String>,
-    /// Additional overlay files when multiple compose files are involved (monorepo).
-    /// Indexed alongside the compose file they override.
+    /// Legacy: extra overlay paths (monorepo). Still written for older
+    /// binaries; teardown prefers `compose_overlays`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overlay_files: Vec<String>,
+    /// (compose, overlay) pairs recorded at bring_up. The authoritative
+    /// source for teardown; empty for sessions written by older versions,
+    /// which fall back to the legacy fields above.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub compose_overlays: Vec<ComposeOverlay>,
     pub app_port: Option<u16>,
     pub started_at: String,
     /// Actual allocated ports (may differ from nominal if auto-bump kicked in).
@@ -232,6 +248,7 @@ mod tests {
             compose_project: None,
             overlay_file: None,
             overlay_files: vec![],
+            compose_overlays: vec![],
             app_port: None,
             started_at: "2026-01-01T00:00:00Z".into(),
             port_overrides: std::collections::HashMap::new(),
@@ -410,6 +427,7 @@ mod tests {
                 compose_project: None,
                 overlay_file: None,
                 overlay_files: vec![],
+                compose_overlays: vec![],
                 app_port: Some(3001),
                 started_at: "2026-01-01T00:00:00Z".into(),
                 port_overrides: std::collections::HashMap::new(),
@@ -444,6 +462,7 @@ mod tests {
                 compose_project: None,
                 overlay_file: None,
                 overlay_files: vec![],
+                compose_overlays: vec![],
                 app_port: None,
                 started_at: "2026-01-01T00:00:00Z".into(),
                 port_overrides: std::collections::HashMap::new(),
@@ -475,6 +494,7 @@ mod tests {
                 compose_project: Some("ecluse_compose-sess".into()),
                 overlay_file: Some("/tmp/overlay.yml".into()),
                 overlay_files: vec![],
+                compose_overlays: vec![],
                 app_port: Some(3001),
                 started_at: "2026-01-01T00:00:00Z".into(),
                 port_overrides: std::collections::HashMap::new(),
@@ -533,5 +553,29 @@ mod tests {
         let guard = StateGuard::acquire_shared(dir.path()).unwrap();
         assert_eq!(guard.state.sessions.len(), 1);
         assert_eq!(guard.state.sessions[0].slug, "survivor");
+    }
+
+    // ── compose_overlays ──────────────────────────────────────────────────────
+
+    #[test]
+    fn compose_overlays_roundtrip() {
+        let mut s = make_session("pairs", 1);
+        s.compose_overlays = vec![ComposeOverlay {
+            compose: "/repo/docker-compose.yml".into(),
+            overlay: "/repo/.ecluse/overlays/pairs.yml".into(),
+        }];
+        let json = serde_json::to_string(&s).unwrap();
+        let back: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.compose_overlays, s.compose_overlays);
+    }
+
+    #[test]
+    fn legacy_state_without_compose_overlays_defaults_to_empty() {
+        // state.json written by an older ecluse has no compose_overlays field.
+        let s = make_session("old", 1);
+        let mut json = serde_json::to_value(&s).unwrap();
+        json.as_object_mut().unwrap().remove("compose_overlays");
+        let back: Session = serde_json::from_value(json).unwrap();
+        assert!(back.compose_overlays.is_empty());
     }
 }
