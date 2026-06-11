@@ -16,7 +16,12 @@ ecluse/
 │   ├── env.rs           .env.ecluse generation
 │   ├── compose.rs       compose parse + overlay generation
 │   ├── docker.rs        docker shell-outs
-│   ├── postgres.rs      psql shell-outs
+│   ├── process.rs       tmux/nohup service spawning
+│   ├── sync.rs          external process/container discovery
+│   ├── hooks.rs         lifecycle hook execution
+│   ├── validate.rs      config validation + port probing
+│   ├── whose_pid.rs     PID → session reverse lookup
+│   ├── log.rs           console step output
 │   ├── detect.rs        mode detection signals
 │   ├── error.rs         EcluseError enum
 │   └── modes/           container / host / hybrid handlers
@@ -36,11 +41,10 @@ The `rust-toolchain.toml` pins to stable. Do not add nightly features.
 
 ## Key invariants — do not break these
 
-- **State is always consistent.** `state.json` is written atomically (write `.json.tmp`, then rename). The lock at `state.lock` is held for the entire duration of `up` and `down`.
+- **State is always consistent.** `state.json` is written atomically (write `.json.tmp`, then rename) and only ever mutated while holding the `state.lock` file lock via `StateGuard`.
 - **Mode is per-repo, not per-session.** Stored in `.ecluse.toml`. `up` never reads `--mode` from CLI.
-- **Rollback on failure.** Every `bring_up` in `modes/*.rs` must roll back any partially-created resources (worktree, containers, database) if it returns an error before `state_guard.commit()`.
+- **Rollback on failure.** Every `bring_up` in `modes/*.rs` must roll back any partially-created resources (worktree, containers, database) if it returns an error before the session is committed to state.
 - **Same CLI surface across all modes.** No mode-specific subcommands or flags. If you find yourself adding `--container-only-flag`, stop and reconsider.
-- **LoC budget: 2500 lines of Rust** (`src/**/*.rs`). Check with `find src -name '*.rs' | xargs wc -l`.
 
 ## Skills are in `skills/`, not `src/`
 

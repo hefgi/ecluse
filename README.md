@@ -217,10 +217,13 @@ name = "postgres"
 run = "docker"
 base_port = 5432             # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
 
-# Optional: lifecycle hooks — run in the worktree with all env vars set
+# Optional: lifecycle hooks — shell commands run in the worktree.
+# Order: pre_up (nothing exists yet, no env) → pre_spawn (env written,
+# services not started) → post_up (everything up) → pre_down (before
+# teardown) → post_down (after teardown).
 [hooks]
-on_up = "npx prisma migrate deploy"
-on_down = "npx prisma migrate reset --force"
+post_up = "npx prisma migrate deploy"        # full ECLUSE_* env available
+pre_down = "npx prisma migrate reset --force"
 ```
 
 `ecluse init` writes `~/.config/ecluse/config.toml` with the detected process manager (`tmux` if installed, otherwise `nohup`). Services with `command` are spawned on `ecluse up` and killed on `ecluse down`. Set `process_manager = "none"` to opt out.
@@ -248,7 +251,7 @@ compose = "services/worker/docker-compose.yml"   # its own compose file
 
 **Port collision handling** — by default ecluse searches for a free port if the nominal one is taken, trying `nominal + i × max_slots` to stay out of other slots' territory. Set `strict_port = true` to fail immediately instead. Run `ecluse validate` to check your config and preview the full port allocation table.
 
-Hooks run as shell commands inside the worktree directory with all `.env.ecluse` variables pre-loaded. Use them for migrations, seeding, or teardown. ecluse doesn't manage databases directly — your app's own tooling handles that via `on_up`.
+Hooks run as shell commands inside the worktree directory with all `.env.ecluse` variables pre-loaded (except `pre_up`, which runs before any env exists). Use them for migrations, seeding, or teardown. ecluse doesn't manage databases directly — your app's own tooling handles that via `post_up`. The old `on_up`/`on_down` names still work as deprecated aliases for `pre_up`/`pre_down`.
 
 ## Known limits
 
