@@ -1814,7 +1814,7 @@ fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
 
     // Step 5: wipe .ecluse subdirs.
     let ecluse_dir = root.join(".ecluse");
-    for subdir in &["pids", "logs", "overlays"] {
+    for subdir in &["pids", "logs", "overlays", "preambles"] {
         let path = ecluse_dir.join(subdir);
         if path.exists() {
             log.detail(&format!("  remove {}", path.display()));

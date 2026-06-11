@@ -228,20 +228,42 @@ fn build_source_preamble(worktree: &Path) -> String {
         .join("; ")
 }
 
-fn write_env_preamble_file(
-    worktree: &Path,
-    env: &std::collections::HashMap<String, String>,
-) -> Option<std::path::PathBuf> {
-    // Write merged env as a sourceable file into .ecluse/ so tmux windows can source it
-    // without sending a multi-KB export string through send-keys (which corrupts for
-    // large envs due to terminal line-length limits and key-event reordering).
-    let ecluse_dir = worktree
+/// Root `.ecluse` directory for a worktree: nearest ancestor containing one,
+/// falling back to the worktree itself (externally-registered worktrees).
+fn ecluse_dir_for(worktree: &Path) -> PathBuf {
+    worktree
         .ancestors()
         .find(|p| p.join(".ecluse").exists())
         .unwrap_or(worktree)
-        .join(".ecluse");
-    let _ = std::fs::create_dir_all(&ecluse_dir);
-    let preamble_path = ecluse_dir.join("env-preamble.sh");
+        .join(".ecluse")
+}
+
+/// Path of the per-session env preamble sourced by tmux windows.
+/// Namespaced by slug — a shared file would be overwritten by the next
+/// session's spawn and leak its ports into manual restarts here.
+pub fn env_preamble_path(worktree: &Path, slug: &str) -> PathBuf {
+    ecluse_dir_for(worktree)
+        .join("preambles")
+        .join(format!("{}.sh", slug))
+}
+
+/// Best-effort removal of a session's env preamble at teardown.
+pub fn remove_env_preamble(worktree: &Path, slug: &str) {
+    let _ = std::fs::remove_file(env_preamble_path(worktree, slug));
+}
+
+fn write_env_preamble_file(
+    worktree: &Path,
+    slug: &str,
+    env: &std::collections::HashMap<String, String>,
+) -> Option<std::path::PathBuf> {
+    // Write merged env as a sourceable file so tmux windows can source it
+    // without sending a multi-KB export string through send-keys (which corrupts for
+    // large envs due to terminal line-length limits and key-event reordering).
+    let preamble_path = env_preamble_path(worktree, slug);
+    if let Some(parent) = preamble_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let mut lines: Vec<String> = env
         .iter()
         .map(|(k, v)| format!("export {}={}", k, shell_escape(v)))
@@ -264,7 +286,7 @@ fn spawn_tmux(
 
     // Write merged env to a file so tmux windows source it rather than receiving
     // a multi-KB export string through send-keys (safe for any env size).
-    let preamble_path = write_env_preamble_file(worktree, &merged_env);
+    let preamble_path = write_env_preamble_file(worktree, slug, &merged_env);
 
     // Build the source preamble: ecluse preamble file first, then the worktree env
     // files (.env → .env.local → .env.ecluse) so manual restarts (↑ Enter) also
@@ -368,58 +390,29 @@ fn spawn_nohup(
     worktree: &Path,
     env: &std::collections::HashMap<String, String>,
 ) -> Result<SpawnResult> {
-    use std::fs::File;
-    use std::os::unix::process::CommandExt;
-
-    let log_dir = worktree
-        .ancestors()
-        .find(|p| p.join(".ecluse").exists())
-        .unwrap_or(worktree)
-        .join(".ecluse")
-        .join("logs")
-        .join(slug);
-    let pid_dir = worktree
-        .ancestors()
-        .find(|p| p.join(".ecluse").exists())
-        .unwrap_or(worktree)
-        .join(".ecluse")
-        .join("pids")
-        .join(slug);
+    let ecluse_dir = ecluse_dir_for(worktree);
+    let log_dir = ecluse_dir.join("logs").join(slug);
+    let pid_dir = ecluse_dir.join("pids").join(slug);
 
     std::fs::create_dir_all(&log_dir)?;
     std::fs::create_dir_all(&pid_dir)?;
 
     let merged_env = merge_worktree_env(worktree, env);
-    let mut pid_files = vec![];
+    let mut pid_files: Vec<PathBuf> = vec![];
 
     for svc in services {
-        let cmd = svc.command.as_deref().unwrap();
-        let log_path = log_dir.join(format!("{}.log", svc.name));
-        let pid_path = pid_dir.join(format!("{}.pid", svc.name));
-
-        let log_file =
-            File::create(&log_path).map_err(|e| crate::error::EcluseError::SpawnFailed {
-                service: svc.name.clone(),
-                reason: format!("could not create log file: {}", e),
-            })?;
-        let log_file2 = log_file.try_clone()?;
-
-        let child = Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .current_dir(worktree)
-            .envs(&merged_env)
-            .stdout(log_file)
-            .stderr(log_file2)
-            .process_group(0)
-            .spawn()
-            .map_err(|e| crate::error::EcluseError::SpawnFailed {
-                service: svc.name.clone(),
-                reason: e.to_string(),
-            })?;
-
-        std::fs::write(&pid_path, child.id().to_string())?;
-        pid_files.push(pid_path);
+        match spawn_one_nohup(svc, worktree, &merged_env, &log_dir, &pid_dir) {
+            Ok(pid_path) => pid_files.push(pid_path),
+            Err(e) => {
+                // A partial spawn must not leave orphans: kill what already started.
+                kill_nohup(&SpawnResult {
+                    tmux_session: None,
+                    pid_files,
+                    log_dir: Some(log_dir.clone()),
+                });
+                return Err(e);
+            }
+        }
     }
 
     Ok(SpawnResult {
@@ -429,19 +422,82 @@ fn spawn_nohup(
     })
 }
 
+fn spawn_one_nohup(
+    svc: &ServiceConfig,
+    worktree: &Path,
+    env: &std::collections::HashMap<String, String>,
+    log_dir: &Path,
+    pid_dir: &Path,
+) -> Result<PathBuf> {
+    use std::fs::File;
+    use std::os::unix::process::CommandExt;
+
+    let cmd = svc.command.as_deref().unwrap();
+    let log_path = log_dir.join(format!("{}.log", svc.name));
+    let pid_path = pid_dir.join(format!("{}.pid", svc.name));
+
+    let log_file = File::create(&log_path).map_err(|e| crate::error::EcluseError::SpawnFailed {
+        service: svc.name.clone(),
+        reason: format!("could not create log file: {}", e),
+    })?;
+    let log_file2 = log_file.try_clone()?;
+
+    let child = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(worktree)
+        .envs(env)
+        .stdout(log_file)
+        .stderr(log_file2)
+        .process_group(0)
+        .spawn()
+        .map_err(|e| crate::error::EcluseError::SpawnFailed {
+            service: svc.name.clone(),
+            reason: e.to_string(),
+        })?;
+
+    std::fs::write(&pid_path, child.id().to_string())?;
+    Ok(pid_path)
+}
+
 fn kill_nohup(result: &SpawnResult) {
     for pid_file in &result.pid_files {
         if let Ok(content) = std::fs::read_to_string(pid_file) {
             if let Ok(pid) = content.trim().parse::<u32>() {
-                Command::new("kill")
-                    .args(["-TERM", &pid.to_string()])
-                    .output()
-                    .ok();
+                kill_process_group(pid);
             }
         }
         // Remove PID file regardless of kill success
         let _ = std::fs::remove_file(pid_file);
     }
+}
+
+/// TERM an entire process group, escalating to KILL if anything survives the
+/// grace period. spawn_nohup runs each service in its own group
+/// (process_group(0), pgid == leader pid); signaling only the leader would
+/// orphan the service's children — the `sh -c` wrapper dies while the actual
+/// server keeps running and holds the port.
+fn kill_process_group(pgid: u32) {
+    let group = format!("-{}", pgid);
+    let _ = Command::new("kill").args(["-TERM", "--", &group]).output();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while process_group_alive(pgid) {
+        if std::time::Instant::now() >= deadline {
+            let _ = Command::new("kill").args(["-KILL", "--", &group]).output();
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// True while any process in the group still exists (kill -0 on the group).
+fn process_group_alive(pgid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", "--", &format!("-{}", pgid)])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -656,5 +712,131 @@ mod tests {
         let base = std::collections::HashMap::new();
         let merged = merge_worktree_env(dir.path(), &base);
         assert_eq!(merged.get("KEY").map(String::as_str), Some("from-local"));
+    }
+
+    fn native_svc(name: &str, command: &str) -> crate::config::ServiceConfig {
+        crate::config::ServiceConfig {
+            name: name.into(),
+            base_port: 3000,
+            run: crate::config::ServiceRun::Native,
+            compose: None,
+            command: Some(command.into()),
+            port_env: vec![],
+            debug_port: None,
+            extra_ports: vec![],
+            host_port: None,
+        }
+    }
+
+    fn wait_until(timeout: std::time::Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        cond()
+    }
+
+    // The service command spawns a child; killing the session must take the
+    // whole process group down, not just the `sh -c` group leader.
+    #[test]
+    fn kill_nohup_kills_whole_process_group() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ecluse")).unwrap();
+        let child_pid_file = dir.path().join("child.pid");
+        let svc = native_svc(
+            "bg",
+            &format!("sleep 30 & echo $! > {}; wait", child_pid_file.display()),
+        );
+        let result = spawn_services(
+            &ProcessManager::Nohup,
+            "pg-test",
+            &[&svc],
+            dir.path(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert!(
+            wait_until(std::time::Duration::from_secs(5), || child_pid_file
+                .exists()),
+            "child pid file never appeared"
+        );
+        let child_pid: u32 = std::fs::read_to_string(&child_pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(pid_alive(child_pid), "background child should be running");
+
+        kill_services(&ProcessManager::Nohup, &result);
+
+        assert!(
+            wait_until(std::time::Duration::from_secs(5), || !pid_alive(child_pid)),
+            "background child must die with the process group"
+        );
+    }
+
+    // Preamble files are per-slug; parallel sessions must never share one.
+    #[test]
+    fn env_preamble_file_is_namespaced_per_slug() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ecluse")).unwrap();
+
+        let mut env_a = std::collections::HashMap::new();
+        env_a.insert("PORT".to_string(), "3001".to_string());
+        let path_a = write_env_preamble_file(dir.path(), "sess-a", &env_a).unwrap();
+
+        let mut env_b = std::collections::HashMap::new();
+        env_b.insert("PORT".to_string(), "3002".to_string());
+        let path_b = write_env_preamble_file(dir.path(), "sess-b", &env_b).unwrap();
+
+        assert_ne!(path_a, path_b);
+        assert!(std::fs::read_to_string(&path_a).unwrap().contains("3001"));
+        assert!(std::fs::read_to_string(&path_b).unwrap().contains("3002"));
+    }
+
+    #[test]
+    fn remove_env_preamble_deletes_only_that_slug() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ecluse")).unwrap();
+        let mut env = std::collections::HashMap::new();
+        env.insert("PORT".to_string(), "3001".to_string());
+        let path_a = write_env_preamble_file(dir.path(), "sess-a", &env).unwrap();
+        let path_b = write_env_preamble_file(dir.path(), "sess-b", &env).unwrap();
+
+        remove_env_preamble(dir.path(), "sess-a");
+        assert!(!path_a.exists());
+        assert!(path_b.exists());
+    }
+
+    // If service N fails to spawn, services 1..N-1 must be killed, not orphaned.
+    #[test]
+    fn spawn_nohup_partial_failure_cleans_up_already_spawned() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ecluse")).unwrap();
+        // Make the second service's log file uncreatable: a directory in its place.
+        std::fs::create_dir_all(dir.path().join(".ecluse/logs/part/two.log")).unwrap();
+
+        let one = native_svc("one", "sleep 30");
+        let two = native_svc("two", "sleep 30");
+        let err = spawn_services(
+            &ProcessManager::Nohup,
+            "part",
+            &[&one, &two],
+            dir.path(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("two"), "got: {}", err);
+
+        // kill_nohup removes pid files after killing — service one must be cleaned up.
+        let one_pid = dir.path().join(".ecluse/pids/part/one.pid");
+        assert!(
+            !one_pid.exists(),
+            "service one's pid file should be removed by partial-spawn cleanup"
+        );
     }
 }

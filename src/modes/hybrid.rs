@@ -515,6 +515,7 @@ impl super::ModeHandler for HybridMode {
             log.step(&format!("Killing native services ({pm})..."));
             process::kill_services(pm, &session.spawn_result());
         }
+        process::remove_env_preamble(std::path::Path::new(&session.worktree_path), &session.slug);
 
         if let Some(project) = &session.compose_project {
             let all_overlays: Vec<String> = session
