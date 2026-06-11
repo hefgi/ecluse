@@ -24,17 +24,8 @@ impl WorktreeManager {
     }
 
     pub fn create(&self, path: &Path, branch: &str) -> Result<()> {
-        // Try to create branch from HEAD; if it exists already, reuse it
-        let branch_exists = Command::new("git")
-            .args(["branch", "--list", branch])
-            .current_dir(&self.project_root)
-            .output()
-            .context("failed to run git branch --list")?
-            .stdout
-            .iter()
-            .any(|&b| b != b'\n');
-
-        let status = if branch_exists {
+        let status = if self.local_branch_exists(branch)? {
+            // Reuse the existing local branch.
             Command::new("git")
                 .args(["worktree", "add"])
                 .arg(path)
@@ -42,7 +33,19 @@ impl WorktreeManager {
                 .current_dir(&self.project_root)
                 .status()
                 .context("failed to run git worktree add")?
+        } else if self.remote_branch_exists(branch) {
+            // The branch exists on origin but not locally — create a tracking
+            // branch from it. Forking a same-named branch off HEAD here would
+            // silently put the session on the wrong base.
+            Command::new("git")
+                .args(["worktree", "add", "--track", "-b", branch])
+                .arg(path)
+                .arg(format!("origin/{}", branch))
+                .current_dir(&self.project_root)
+                .status()
+                .context("failed to run git worktree add --track")?
         } else {
+            // Brand-new branch from HEAD.
             Command::new("git")
                 .args(["worktree", "add", "-b"])
                 .arg(branch)
@@ -59,6 +62,31 @@ impl WorktreeManager {
             ));
         }
         Ok(())
+    }
+
+    fn local_branch_exists(&self, branch: &str) -> Result<bool> {
+        let output = Command::new("git")
+            .args(["branch", "--list", branch])
+            .current_dir(&self.project_root)
+            .output()
+            .context("failed to run git branch --list")?;
+        Ok(!String::from_utf8_lossy(&output.stdout).trim().is_empty())
+    }
+
+    /// True when origin/<branch> exists as a local remote-tracking ref
+    /// (no network access — uses whatever the last fetch brought in).
+    fn remote_branch_exists(&self, branch: &str) -> bool {
+        Command::new("git")
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/remotes/origin/{}", branch),
+            ])
+            .current_dir(&self.project_root)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 
     pub fn remove(&self, path: &Path) -> Result<()> {
@@ -311,7 +339,9 @@ mod tests {
             .current_dir(dir)
             .output()
             .unwrap();
+        // Disable signing: fixture commits must work without any signing setup.
         Command::new("git")
+            .args(["-c", "commit.gpgsign=false"])
             .args(["commit", "--allow-empty", "-m", "init"])
             .current_dir(dir)
             .env("GIT_AUTHOR_NAME", "test")
@@ -466,6 +496,90 @@ mod tests {
             .current_dir(dir.path())
             .output()
             .unwrap();
+        wt.remove(&path).unwrap();
+    }
+
+    /// Run git with signing disabled and a fixed identity; panic on failure
+    /// so fixture problems surface as the real error, not a later assert.
+    fn git_ok(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "test")
+            .env("GIT_AUTHOR_EMAIL", "test@test.com")
+            .env("GIT_COMMITTER_NAME", "test")
+            .env("GIT_COMMITTER_EMAIL", "test@test.com")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    // A branch that exists only on origin must be checked out as a tracking
+    // branch, not forked from HEAD under the same name.
+    #[test]
+    fn create_tracks_remote_only_branch() {
+        let upstream = TempDir::new().unwrap();
+        git_ok(upstream.path(), &["init"]);
+        git_ok(upstream.path(), &["commit", "--allow-empty", "-m", "init"]);
+        // feat-remote points at the initial commit; the default branch then
+        // moves ahead, so the clone's HEAD differs from origin/feat-remote.
+        git_ok(upstream.path(), &["branch", "feat-remote"]);
+        git_ok(
+            upstream.path(),
+            &["commit", "--allow-empty", "-m", "default moves ahead"],
+        );
+
+        let clone_parent = TempDir::new().unwrap();
+        let clone_path = clone_parent.path().join("clone");
+        git_ok(
+            clone_parent.path(),
+            &["clone", upstream.path().to_str().unwrap(), "clone"],
+        );
+
+        // feat-remote exists on origin only — not as a local branch.
+        let wt = WorktreeManager::new(clone_path.clone());
+        assert!(!wt.local_branch_exists("feat-remote").unwrap());
+        assert!(wt.remote_branch_exists("feat-remote"));
+
+        let config = make_config_for_worktree();
+        let path = wt.worktree_path(&config, "feat-remote");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        wt.create(&path, "feat-remote").unwrap();
+
+        // The worktree's branch must track origin/feat-remote and point at
+        // the same commit.
+        let upstream_ref = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "feat-remote@{upstream}"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&upstream_ref.stdout).trim(),
+            "origin/feat-remote"
+        );
+        let local_head = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        let remote_head = Command::new("git")
+            .args(["rev-parse", "origin/feat-remote"])
+            .current_dir(&clone_path)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&local_head.stdout).trim(),
+            String::from_utf8_lossy(&remote_head.stdout).trim(),
+            "worktree must start at the remote branch tip, not at HEAD"
+        );
+
         wt.remove(&path).unwrap();
     }
 
