@@ -43,7 +43,14 @@ pub trait ModeHandler {
 }
 
 pub fn get_handler(config: &Config) -> Box<dyn ModeHandler> {
-    match config.mode {
+    get_handler_for_mode(&config.mode)
+}
+
+/// Dispatch on an explicit mode. Teardown paths must use the mode recorded in
+/// the session, not the config's current mode — `.ecluse.toml` may have changed
+/// since `up` (e.g. hybrid → host would otherwise strand the session's containers).
+pub fn get_handler_for_mode(mode: &Mode) -> Box<dyn ModeHandler> {
+    match mode {
         Mode::Container => Box::new(container::ContainerMode),
         Mode::Host => Box::new(host::HostMode),
         Mode::Hybrid => Box::new(hybrid::HybridMode),
@@ -173,6 +180,13 @@ mod tests {
         let _ = get_handler(&make_config(Mode::Container));
         let _ = get_handler(&make_config(Mode::Host));
         let _ = get_handler(&make_config(Mode::Hybrid));
+    }
+
+    #[test]
+    fn get_handler_for_mode_returns_handler_for_each_mode() {
+        let _ = get_handler_for_mode(&Mode::Container);
+        let _ = get_handler_for_mode(&Mode::Host);
+        let _ = get_handler_for_mode(&Mode::Hybrid);
     }
 
     // ── group_by_compose ──────────────────────────────────────────────────────

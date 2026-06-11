@@ -62,27 +62,32 @@ impl WorktreeManager {
     }
 
     pub fn remove(&self, path: &Path) -> Result<()> {
-        let status = Command::new("git")
+        let output = Command::new("git")
             .args(["worktree", "remove", "--force"])
             .arg(path)
             .current_dir(&self.project_root)
-            .status()
+            .output()
             .context("failed to run git worktree remove")?;
 
-        if !status.success() {
-            let prune_status = Command::new("git")
-                .args(["worktree", "prune"])
-                .current_dir(&self.project_root)
-                .status()
-                .context("failed to run git worktree prune")?;
-            if !prune_status.success() {
-                return Err(anyhow::anyhow!(
-                    "git worktree remove and git worktree prune both failed for {}; \
-                     remove it manually with `git worktree remove --force {}`",
-                    path.display(),
-                    path.display()
-                ));
-            }
+        if output.status.success() {
+            return Ok(());
+        }
+
+        // `remove` fails when the directory was already deleted by hand; prune
+        // cleans up the leftover administrative data. Prune never deletes a
+        // directory that still exists, so verify before reporting success.
+        let _ = Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(&self.project_root)
+            .status();
+
+        if path.exists() {
+            return Err(anyhow::anyhow!(
+                "git worktree remove failed for {}: {}; remove it manually with `git worktree remove --force {}`",
+                path.display(),
+                String::from_utf8_lossy(&output.stderr).trim(),
+                path.display()
+            ));
         }
         Ok(())
     }
@@ -412,6 +417,55 @@ mod tests {
 
         wt.create(&path, "my-existing-branch").unwrap();
         assert!(path.exists());
+        wt.remove(&path).unwrap();
+    }
+
+    // remove(): directory already deleted by hand → prune fallback cleans the
+    // administrative data and remove() reports success.
+    #[test]
+    fn remove_succeeds_when_directory_already_deleted() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+        let wt = WorktreeManager::new(dir.path().to_owned());
+        let config = make_config_for_worktree();
+        let path = wt.worktree_path(&config, "gone");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        wt.create(&path, "ecluse/gone").unwrap();
+
+        std::fs::remove_dir_all(&path).unwrap();
+        wt.remove(&path).unwrap();
+        assert!(!path.exists());
+    }
+
+    // remove(): a locked worktree cannot be removed — must error with the git
+    // stderr, not report success while the directory survives on disk.
+    #[test]
+    fn remove_errors_when_worktree_is_locked() {
+        let dir = TempDir::new().unwrap();
+        setup_git_repo(dir.path());
+        let wt = WorktreeManager::new(dir.path().to_owned());
+        let config = make_config_for_worktree();
+        let path = wt.worktree_path(&config, "locked");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        wt.create(&path, "ecluse/locked").unwrap();
+
+        Command::new("git")
+            .args(["worktree", "lock"])
+            .arg(&path)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let err = wt.remove(&path).unwrap_err();
+        assert!(path.exists(), "locked worktree must not be deleted");
+        assert!(err.to_string().contains("manually"), "got: {}", err);
+
+        Command::new("git")
+            .args(["worktree", "unlock"])
+            .arg(&path)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
         wt.remove(&path).unwrap();
     }
 
