@@ -222,6 +222,12 @@ pub struct ServiceConfig {
     /// ```
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub extra_ports: Vec<ExtraPort>,
+    /// Whether the service's primary port is published to the host.
+    /// Defaults to the legacy implicit rule: published unless any extra_port
+    /// sets `container_port`. Set it explicitly — the implicit rule is
+    /// deprecated (`ecluse validate` warns).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publish_primary: Option<bool>,
     /// Host-side port range base for docker services. When set, the overlay publishes
     /// `(host_port+slot) → base_port` instead of `(base_port+slot) → base_port`.
     /// Defaults to `base_port` when omitted — zero behavior change for existing configs.
@@ -283,6 +289,13 @@ impl ServiceConfig {
             .saturating_add((slot as u16).saturating_mul(stride))
     }
 
+    /// Host port for a secondary (`extra_ports`) allocation — same per-slot
+    /// spacing rule as primary ports so `slot_stride` means one thing.
+    pub fn extra_port_for_slot(base: u16, slot: u8, slot_stride: u8) -> u16 {
+        let stride = slot_stride.max(1) as u16;
+        base.saturating_add((slot as u16).saturating_mul(stride))
+    }
+
     /// Returns all extra port allocations as `(host_base_port, env_var_name)` pairs.
     /// Merges `extra_ports` (new) with `debug_port` (legacy) so all callers go through one path.
     pub fn all_extra_ports(&self) -> Vec<(u16, String)> {
@@ -309,13 +322,18 @@ impl ServiceConfig {
             .collect()
     }
 
-    /// True when any extra_port has an explicit `container_port` set. In that case the
-    /// primary `base_port` of this service should not be published to the host — the
-    /// extra_ports entries are the only host-side publishes.
+    /// True when the primary `base_port` must not be published to the host
+    /// (only the extra_ports entries are). `publish_primary` wins when set;
+    /// otherwise the legacy implicit rule applies: suppressed when any
+    /// extra_port has an explicit `container_port`.
     pub fn suppress_primary_publish(&self) -> bool {
-        self.extra_ports
-            .iter()
-            .any(|ep| ep.container_port.is_some())
+        match self.publish_primary {
+            Some(publish) => !publish,
+            None => self
+                .extra_ports
+                .iter()
+                .any(|ep| ep.container_port.is_some()),
+        }
     }
 }
 
@@ -362,7 +380,11 @@ pub struct Config {
     ///   side affect both. Good for shared secrets that should stay in sync.
     /// - `copy`: file is copied from root once on first `ecluse up`; future edits in the
     ///   worktree stay local. Good for per-worktree feature flags / overrides.
-    #[serde(default = "default_inherit_env", skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized: an explicit `[]` opt-out must survive a save/load
+    /// round-trip — skipping empty on write would deserialize back to the
+    /// default and silently undo the opt-out.
+    #[serde(default = "default_inherit_env")]
     pub inherit_env: Vec<InheritEnvEntry>,
 }
 
@@ -772,6 +794,7 @@ base_port = 5432
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         assert_eq!(svc.port(1, 1), 8001);
@@ -823,6 +846,7 @@ base_port = 5432
                     port_env: vec![],
                     debug_port: None,
                     extra_ports: vec![],
+                    publish_primary: None,
                     host_port: None,
                 },
                 ServiceConfig {
@@ -834,6 +858,7 @@ base_port = 5432
                     port_env: vec![],
                     debug_port: None,
                     extra_ports: vec![],
+                    publish_primary: None,
                     host_port: None,
                 },
             ],
@@ -1035,6 +1060,7 @@ base_port = 3000
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         assert_eq!(svc.host_port_base(), 5432);
@@ -1052,6 +1078,7 @@ base_port = 3000
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: Some(11532),
         };
         assert_eq!(svc.host_port_base(), 11532);
@@ -1070,6 +1097,7 @@ base_port = 3000
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         assert_eq!(svc.port(1, 10), 3010);
@@ -1088,6 +1116,7 @@ base_port = 3000
             port_env: vec![],
             debug_port: None,
             extra_ports: vec![],
+            publish_primary: None,
             host_port: None,
         };
         // Stride of 0 would zero out the slot offset; we clamp to 1 to keep ports unique.
@@ -1109,6 +1138,63 @@ base_port = 3000
         write_toml(&dir, "mode = \"host\"\n");
         let config = Config::load(dir.path()).unwrap();
         assert_eq!(config.slot_stride, 1);
+    }
+
+    // ── inherit_env round-trip ────────────────────────────────────────────────
+
+    // An explicit opt-out must survive save → load; skipping the empty vec on
+    // write made it deserialize back to the default.
+    #[test]
+    fn inherit_env_empty_opt_out_survives_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        write_toml(&dir, "mode = \"host\"\ninherit_env = []\n");
+        let config = Config::load(dir.path()).unwrap();
+        assert!(config.inherit_env.is_empty());
+
+        config.save(dir.path()).unwrap();
+        let reloaded = Config::load(dir.path()).unwrap();
+        assert!(
+            reloaded.inherit_env.is_empty(),
+            "explicit [] opt-out must not come back as the default"
+        );
+    }
+
+    // ── extra ports & publish_primary ─────────────────────────────────────────
+
+    #[test]
+    fn extra_port_for_slot_honors_stride() {
+        assert_eq!(ServiceConfig::extra_port_for_slot(9000, 1, 1), 9001);
+        assert_eq!(ServiceConfig::extra_port_for_slot(9000, 2, 1), 9002);
+        assert_eq!(ServiceConfig::extra_port_for_slot(9000, 1, 10), 9010);
+        assert_eq!(ServiceConfig::extra_port_for_slot(9000, 3, 10), 9030);
+    }
+
+    #[test]
+    fn publish_primary_overrides_implicit_suppression() {
+        let mut svc = ServiceConfig {
+            name: "db".into(),
+            base_port: 5432,
+            run: ServiceRun::Docker,
+            compose: None,
+            command: None,
+            port_env: vec![],
+            debug_port: None,
+            extra_ports: vec![ExtraPort {
+                base_port: 11532,
+                port_env: "PGPORT".into(),
+                container_port: Some(5432),
+            }],
+            publish_primary: None,
+            host_port: None,
+        };
+        // Implicit rule: container_port set → suppressed.
+        assert!(svc.suppress_primary_publish());
+        // Explicit publish_primary wins in both directions.
+        svc.publish_primary = Some(true);
+        assert!(!svc.suppress_primary_publish());
+        svc.publish_primary = Some(false);
+        svc.extra_ports.clear();
+        assert!(svc.suppress_primary_publish());
     }
 
     // ── inherit_env ───────────────────────────────────────────────────────────

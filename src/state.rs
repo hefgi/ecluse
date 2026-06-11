@@ -57,6 +57,27 @@ fn is_active(status: &SessionStatus) -> bool {
     *status == SessionStatus::Active
 }
 
+/// Identity of the in-flight operation that marked a session Pending.
+///
+/// `id` lets the owning command verify nothing took the session over while it
+/// worked without holding the lock — a finalize that has lost ownership must
+/// not write state (it would resurrect an entry another command deleted).
+/// `since` lets `ls` flag entries whose owning operation likely crashed.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct PendingOp {
+    pub id: String,
+    pub since: String,
+}
+
+/// Fresh operation id: unique enough to distinguish two concurrent commands.
+pub fn new_op_id() -> String {
+    format!(
+        "{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+    )
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Session {
     pub slug: String,
@@ -68,6 +89,10 @@ pub struct Session {
     /// so state.json files written by older versions load unchanged.
     #[serde(default, skip_serializing_if = "is_active")]
     pub status: SessionStatus,
+    /// Present iff status == Pending: identifies the operation that owns this
+    /// entry. Maintained by `State::mark_pending` / the finalize paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_op: Option<PendingOp>,
     pub compose_project: Option<String>,
     /// Legacy: primary overlay path. Still written for older binaries;
     /// teardown prefers `compose_overlays`.
@@ -134,6 +159,30 @@ impl State {
 
     pub fn used_slots(&self) -> Vec<u8> {
         self.sessions.iter().map(|s| s.slot).collect()
+    }
+
+    /// Mark `slug` Pending under a fresh operation id, taking ownership of the
+    /// entry (including from a previous operation that crashed mid-flight).
+    /// Returns the session as it was before marking plus the op id the caller
+    /// must present to `still_owned` when finalizing.
+    pub fn mark_pending(&mut self, slug: &str) -> Option<(Session, String)> {
+        let pos = self.sessions.iter().position(|s| s.slug == slug)?;
+        let original = self.sessions[pos].clone();
+        let op_id = new_op_id();
+        self.sessions[pos].status = SessionStatus::Pending;
+        self.sessions[pos].pending_op = Some(PendingOp {
+            id: op_id.clone(),
+            since: chrono::Utc::now().to_rfc3339(),
+        });
+        Some((original, op_id))
+    }
+
+    /// True while the Pending entry written under `op_id` is still in place —
+    /// i.e. no other command removed or took over the session in the meantime.
+    pub fn still_owned(&self, slug: &str, op_id: &str) -> bool {
+        self.find_session(slug)
+            .and_then(|s| s.pending_op.as_ref())
+            .is_some_and(|op| op.id == op_id)
     }
 }
 
@@ -269,6 +318,7 @@ mod tests {
             branch: format!("branch/{}", slug),
             worktree_path: format!("/tmp/{}", slug),
             status: SessionStatus::Active,
+            pending_op: None,
             compose_project: None,
             overlay_file: None,
             overlay_files: vec![],
@@ -449,6 +499,7 @@ mod tests {
                 branch: "branch/pm-sess".into(),
                 worktree_path: "/tmp/pm-sess".into(),
                 status: SessionStatus::Active,
+                pending_op: None,
                 compose_project: None,
                 overlay_file: None,
                 overlay_files: vec![],
@@ -485,6 +536,7 @@ mod tests {
                 branch: "branch/nohup-sess".into(),
                 worktree_path: "/tmp/nohup-sess".into(),
                 status: SessionStatus::Active,
+                pending_op: None,
                 compose_project: None,
                 overlay_file: None,
                 overlay_files: vec![],
@@ -518,6 +570,7 @@ mod tests {
                 branch: "branch/compose-sess".into(),
                 worktree_path: "/tmp/wt".into(),
                 status: SessionStatus::Active,
+                pending_op: None,
                 compose_project: Some("ecluse_compose-sess".into()),
                 overlay_file: Some("/tmp/overlay.yml".into()),
                 overlay_files: vec![],
@@ -634,6 +687,63 @@ mod tests {
         json.as_object_mut().unwrap().remove("status");
         let back: Session = serde_json::from_value(json).unwrap();
         assert_eq!(back.status, SessionStatus::Active);
+    }
+
+    // ── mark_pending / still_owned ────────────────────────────────────────────
+
+    #[test]
+    fn mark_pending_sets_status_and_op() {
+        let mut state = State::default();
+        state.add_session(make_session("busy", 1));
+        let (original, op_id) = state.mark_pending("busy").unwrap();
+        assert_eq!(original.status, SessionStatus::Active);
+        let s = state.find_session("busy").unwrap();
+        assert_eq!(s.status, SessionStatus::Pending);
+        assert_eq!(s.pending_op.as_ref().unwrap().id, op_id);
+        assert!(state.still_owned("busy", &op_id));
+    }
+
+    #[test]
+    fn mark_pending_missing_session_returns_none() {
+        let mut state = State::default();
+        assert!(state.mark_pending("ghost").is_none());
+    }
+
+    // A second mark_pending takes the entry over: the first operation's
+    // finalize must stand down instead of resurrecting a deleted session.
+    #[test]
+    fn second_mark_pending_takes_over_ownership() {
+        let mut state = State::default();
+        state.add_session(make_session("busy", 1));
+        let (_, first_op) = state.mark_pending("busy").unwrap();
+        let (taken_over, second_op) = state.mark_pending("busy").unwrap();
+        assert_eq!(taken_over.status, SessionStatus::Pending);
+        assert!(!state.still_owned("busy", &first_op));
+        assert!(state.still_owned("busy", &second_op));
+    }
+
+    #[test]
+    fn still_owned_false_after_removal() {
+        let mut state = State::default();
+        state.add_session(make_session("busy", 1));
+        let (_, op_id) = state.mark_pending("busy").unwrap();
+        state.remove_session("busy");
+        assert!(!state.still_owned("busy", &op_id));
+    }
+
+    #[test]
+    fn new_op_ids_are_unique() {
+        assert_ne!(new_op_id(), new_op_id());
+    }
+
+    #[test]
+    fn pending_op_roundtrips_in_state_json() {
+        let mut state = State::default();
+        state.add_session(make_session("busy", 1));
+        let (_, op_id) = state.mark_pending("busy").unwrap();
+        let json = serde_json::to_string(&state).unwrap();
+        let back: State = serde_json::from_str(&json).unwrap();
+        assert!(back.still_owned("busy", &op_id));
     }
 
     #[test]

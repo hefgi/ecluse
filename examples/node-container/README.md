@@ -2,7 +2,7 @@
 
 Node.js + Postgres fully containerized. Everything runs in Docker — no native processes.
 
-ecluse manages a separate compose project per worktree, with all ports offset by slot. The Docker image entrypoint runs `prisma migrate deploy` before starting the server, so no `on_up` hook is required.
+ecluse manages a separate compose project per worktree, with all ports offset by slot. The Docker image entrypoint runs `prisma migrate deploy` before starting the server, so no `post_up` hook is required.
 
 ## Mode
 

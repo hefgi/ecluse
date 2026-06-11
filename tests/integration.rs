@@ -24,10 +24,18 @@ fn setup_repo(dir: &std::path::Path) {
         .unwrap();
 }
 
+/// Run ecluse with HOME pointed at the repo dir: tests must never read or
+/// write the developer's real ~/.config/ecluse/config.toml (whose
+/// process_manager would otherwise leak into spawn behavior).
+fn ecluse_cmd(dir: &std::path::Path) -> Command {
+    let mut cmd = Command::new(ecluse_bin());
+    cmd.current_dir(dir).env("HOME", dir);
+    cmd
+}
+
 fn ecluse(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(ecluse_bin())
+    ecluse_cmd(dir)
         .args(args)
-        .current_dir(dir)
         .output()
         .expect("failed to run ecluse")
 }
@@ -509,9 +517,8 @@ post_up = "sleep 3"
     )
     .unwrap();
 
-    let mut slow_up = Command::new(ecluse_bin())
+    let mut slow_up = ecluse_cmd(repo.path())
         .args(["up", "slow-sess"])
-        .current_dir(repo.path())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -579,9 +586,8 @@ post_up = "sleep 3"
     )
     .unwrap();
 
-    let mut slow_up = Command::new(ecluse_bin())
+    let mut slow_up = ecluse_cmd(repo.path())
         .args(["up", "busy-sess"])
-        .current_dir(repo.path())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -636,5 +642,101 @@ post_up = "false"
         stdout(&out).contains("no active sessions"),
         "got: {}",
         stdout(&out)
+    );
+}
+
+// ── ownership tokens: no session resurrection ─────────────────────────────────
+
+#[test]
+fn down_during_slow_up_does_not_resurrect_the_session() {
+    let repo = tmp_repo();
+    ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
+    std::fs::write(
+        repo.path().join(".ecluse.toml"),
+        r#"mode = "host"
+inherit_env = []
+
+[hooks]
+post_up = "sleep 3"
+"#,
+    )
+    .unwrap();
+
+    let mut slow_up = ecluse_cmd(repo.path())
+        .args(["up", "race-sess"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+
+    // Wait for the pending reservation, then take the session over with down.
+    let state_path = repo.path().join(".ecluse/state.json");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !std::fs::read_to_string(&state_path)
+        .unwrap_or_default()
+        .contains("race-sess")
+    {
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let down = ecluse(repo.path(), &["down", "--delete-worktree", "race-sess"]);
+    assert!(down.status.success(), "{}", stderr(&down));
+
+    // The up must notice the takeover: non-zero exit, no resurrected entry,
+    // and no leftover worktree.
+    let status = slow_up.wait().unwrap();
+    assert!(
+        !status.success(),
+        "up must fail when its session was taken over mid-provisioning"
+    );
+    let ls = ecluse(repo.path(), &["ls"]);
+    assert!(
+        stdout(&ls).contains("no active sessions"),
+        "no resurrection: got {}",
+        stdout(&ls)
+    );
+    assert!(
+        !repo.path().join(".ecluse/worktrees/race-sess").exists(),
+        "worktree must not survive"
+    );
+}
+
+#[test]
+fn ls_warns_about_stale_pending_sessions() {
+    let repo = tmp_repo();
+    ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
+    // Forge a pending entry whose owning operation "crashed" an hour ago.
+    std::fs::write(
+        repo.path().join(".ecluse/state.json"),
+        r#"{
+  "version": 1,
+  "sessions": [{
+    "slug": "crashed-sess",
+    "mode": "host",
+    "slot": 1,
+    "branch": "crashed-sess",
+    "worktree_path": "/tmp/nope",
+    "status": "pending",
+    "pending_op": { "id": "1-1", "since": "2026-06-11T08:00:00Z" },
+    "compose_project": null,
+    "overlay_file": null,
+    "app_port": null,
+    "started_at": "2026-06-11T08:00:00Z"
+  }]
+}"#,
+    )
+    .unwrap();
+
+    let out = ecluse(repo.path(), &["ls"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("crashed-sess (pending)"),
+        "got: {}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains("has been pending for") && stderr(&out).contains("ecluse down"),
+        "got: {}",
+        stderr(&out)
     );
 }

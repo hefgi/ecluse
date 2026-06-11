@@ -29,5 +29,5 @@ run = "docker"
 base_port = 6379
 
 [hooks]
-on_up  = "bin/rails db:prepare"
-on_down = "bin/rails db:drop DISABLE_DATABASE_ENVIRONMENT_CHECK=1"
+post_up  = "bin/rails db:prepare"
+pre_down = "bin/rails db:drop DISABLE_DATABASE_ENVIRONMENT_CHECK=1"

@@ -26,7 +26,7 @@ Postgres runs in a Docker container managed by ecluse. The Express API and React
 
 ## Hooks
 
-- `on_up`: runs `npm run db:migrate` (wraps `prisma migrate deploy`) to apply pending migrations against the slot's database.
+- `post_up`: runs `npm run db:migrate` (wraps `prisma migrate deploy`) to apply pending migrations against the slot's database.
 
 ## Usage
 

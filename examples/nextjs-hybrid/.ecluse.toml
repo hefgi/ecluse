@@ -14,4 +14,4 @@ run = "docker"
 base_port = 5432
 
 [hooks]
-on_up = "npx prisma migrate deploy"
+post_up = "npx prisma migrate deploy"

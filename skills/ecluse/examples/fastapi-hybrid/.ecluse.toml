@@ -24,4 +24,4 @@ run = "docker"
 base_port = 6379
 
 [hooks]
-on_up = "alembic upgrade head"
+post_up = "alembic upgrade head"

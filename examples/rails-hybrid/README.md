@@ -28,8 +28,8 @@ Data services (postgres, redis) run in Docker containers managed by ecluse. The 
 
 ## Hooks
 
-- `on_up`: runs `bin/rails db:prepare` — creates and migrates the database for this slot.
-- `on_down`: runs `bin/rails db:drop` — drops the database before tearing down.
+- `post_up`: runs `bin/rails db:prepare` — creates and migrates the database for this slot.
+- `pre_down`: runs `bin/rails db:drop` — drops the database before tearing down.
 
 ## Usage
 

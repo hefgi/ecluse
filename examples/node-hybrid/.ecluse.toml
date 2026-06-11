@@ -24,4 +24,4 @@ run = "docker"
 base_port = 6379
 
 [hooks]
-on_up = "npm run db:migrate"
+post_up = "npm run db:migrate"

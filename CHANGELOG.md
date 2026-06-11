@@ -5,6 +5,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- Pending sessions: `up`/`down` reserve the session and release the state lock during provisioning/teardown, so parallel sessions never serialize on image pulls or hooks. `ls` shows `(pending)` (and `"status"` in `--json`), warns about entries pending >15 minutes after a crashed command, and `down <slug>` recovers them. Concurrent finalizes are guarded by per-operation ownership tokens — deleted sessions are never resurrected by a racing command.
+- Rollback-on-failure is enforced by an undo-stack guard: any `bring_up` failure tears down exactly what was created (containers, overlays, worktree, spawned services), in reverse order. Failed re-ups of existing sessions keep their data volumes.
+- PID files record the process start token; a recycled PID is never signaled, never attributed by `whose-pid`, and reports as down. Containers are matched by compose project label instead of name substrings.
+- tmux services run as their window's own process with recorded pane PIDs; commands that exit within ~1.5s fail `ecluse up` with the exit status and last output. Dead panes are kept for inspection; window `shell` is a plain shell with the session env.
+- `publish_primary` on `[[services]]`: explicit control over primary-port publication (the implicit "extra_port with container_port suppresses the primary" rule is deprecated; `validate` warns).
+- Docker-gated end-to-end test suite (`tests/docker_e2e.rs`): lifecycle, rollback, multi-compose teardown, container mode — runs wherever a docker daemon is available, skips elsewhere.
+
+### Changed
+- `extra_ports` use the same per-slot spacing as primary ports (`base + slot*slot_stride`) and are probed before startup: occupied extras are a hard error under `strict_port` and a warning otherwise. With `slot_stride = 1` (the default) allocations are unchanged.
+- `up --force` only kills processes owned by the session (verified via pid files/tmux panes), with TERM→KILL escalation; unowned listeners produce a warning naming the PID.
+- Teardown dispatches on the session's recorded mode, so changing `mode` in `.ecluse.toml` no longer strands containers of existing sessions.
+- `ModeHandler::bring_up` takes a `BringUpRequest`; container/hybrid share the docker-startup, worktree, port-allocation and spawn building blocks (was ~100 duplicated lines).
+- Session state records explicit `(compose, overlay)` pairs; teardown no longer reconstructs compose paths from overlay filenames (ambiguous for hyphenated slugs). Legacy state files still tear down via the old path.
+- Branch handling: `up <branch>` tracks `origin/<branch>` when it only exists on the remote (instead of forking a same-named branch from HEAD), and refuses to resume a slug that belongs to a different branch.
+- The tmux env preamble is per-slug (`.ecluse/preambles/<slug>.sh`); a shared file leaked ports between parallel sessions.
+
+### Fixed
+- `kill` paths signal the whole process group with TERM→KILL grace — service children no longer survive `ecluse down` holding their port.
+- A failing service spawn cleans up the services already spawned instead of orphaning them.
+- `ecluse sync` no longer accepts any directory whose path merely contains the slug; the cwd must be a linked worktree of the repo. It also refuses sessions that are mid-operation.
+- `worktree remove` verifies the directory is actually gone instead of treating `git worktree prune` success as removal success.
+- Shared-lock acquisition reads the real state when `state.lock` is missing (previously reported "no sessions" while sessions ran); `ls` no longer panics on malformed timestamps; `.env.ecluse` is parsed by a single shared parser everywhere.
+- Examples and README migrated off the deprecated `on_up`/`on_down` hook names (the README example also ran migrations in `pre_up`, before any env exists; now `post_up`).
+
 ## [0.2.17] — 2026-06-10
 
 ### Added

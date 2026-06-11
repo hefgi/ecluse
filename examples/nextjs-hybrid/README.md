@@ -25,7 +25,7 @@ Postgres runs in a Docker container managed by ecluse. Next.js runs natively. Ea
 
 ## Hooks
 
-- `on_up`: runs `npx prisma migrate deploy` against the slot's database.
+- `post_up`: runs `npx prisma migrate deploy` against the slot's database.
 
 ## Usage
 

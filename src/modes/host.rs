@@ -1,6 +1,5 @@
 use anyhow::Result;
 use chrono::Utc;
-use indexmap::IndexMap;
 use std::path::Path;
 
 use crate::config::Config;
@@ -10,35 +9,24 @@ use crate::log::StepLogger;
 use crate::process;
 use crate::rollback::Rollback;
 use crate::state::Session;
-use crate::validate;
 use crate::worktree::WorktreeManager;
+
+use super::BringUpRequest;
 
 pub struct HostMode;
 
 impl super::ModeHandler for HostMode {
     fn bring_up(
         &self,
-        slug: &str,
-        slot: u8,
-        branch: &str,
+        req: &BringUpRequest,
         config: &Config,
         root: &Path,
-        _watch: bool,
-        reuse_worktree: bool,
-        no_inherit_env: bool,
-        worktree_override: Option<std::path::PathBuf>,
-        port_overrides: &std::collections::HashMap<String, u16>,
-        service_filter: Option<&std::collections::HashSet<String>>,
-        skip_services: &std::collections::HashSet<String>,
-        existing_port_overrides: &std::collections::HashMap<String, u16>,
         log: &StepLogger,
     ) -> Result<Session> {
-        let wt = WorktreeManager::new(root.to_owned());
-        let worktree_path = worktree_override.unwrap_or_else(|| wt.worktree_path(config, slug));
         let native_svcs: Vec<_> = config
             .native_services()
             .into_iter()
-            .filter(|s| service_filter.is_none_or(|f| f.contains(&s.name)))
+            .filter(|s| req.service_filter.is_none_or(|f| f.contains(&s.name)))
             .collect();
 
         // pre_up: before anything exists — runs from repo root, no env vars yet
@@ -48,51 +36,42 @@ impl super::ModeHandler for HostMode {
             hooks::run(cmd, root, &std::collections::HashMap::new())?;
         }
 
+        // Every step below registers its undo; any early return tears down
+        // exactly what was created so far, in reverse order.
+        let mut rollback = Rollback::new();
+
         log.step("Allocating ports...");
-        let native_ports = native_ports_for_slot(
+        // Historical quirk kept on purpose: host mode allocates ports for all
+        // native services even when --services filters which ones spawn.
+        let native_ports = super::native_ports_for_slot(
             config,
-            slot,
-            port_overrides,
-            skip_services,
-            existing_port_overrides,
+            req.slot,
+            req.port_overrides,
+            req.skip_services,
+            req.existing_port_overrides,
+            None,
         )?;
         for (name, port) in &native_ports {
             log.detail(&format!("{name}: {port}"));
         }
 
-        // Every step below registers its undo; any early return tears down
-        // exactly what was created so far, in reverse order.
-        let mut rollback = Rollback::new();
+        let worktree_path = super::ensure_worktree(req, config, root, &mut rollback, log)?;
 
-        if reuse_worktree {
-            if !worktree_path.exists() {
-                return Err(anyhow::anyhow!(
-                    "worktree not found at {}; remove --reuse-worktree or run ecluse up without it",
-                    worktree_path.display()
-                ));
-            }
-            log.step("Reusing existing worktree...");
-            log.detail(&worktree_path.display().to_string());
-        } else {
-            log.step(&format!("Creating worktree (branch: {branch})..."));
-            log.detail(&worktree_path.display().to_string());
-            wt.create(&worktree_path, branch)?;
-            {
-                let root_owned = root.to_owned();
-                let wt_path = worktree_path.clone();
-                rollback.push(move || {
-                    let _ = WorktreeManager::new(root_owned).remove(&wt_path);
-                });
-            }
-        }
-
-        if !no_inherit_env && !config.inherit_env.is_empty() {
+        if !req.no_inherit_env && !config.inherit_env.is_empty() {
             log.step("Inheriting env files...");
             crate::worktree::inherit_env_files(root, &worktree_path, &config.inherit_env, log)?;
         }
 
         log.step("Writing .env.ecluse...");
-        let env_map = env::build_env(slot, slug, "host", &native_ports, &[], &native_svcs, &[]);
+        let env_map = env::build_env(
+            req.slot,
+            config.slot_stride,
+            req.slug,
+            "host",
+            &native_ports,
+            &[],
+            &native_svcs,
+        );
         env::write_env_file(&worktree_path, &env_map)?;
 
         // pre_spawn: env is written, services not yet started — use for derived env (URLs etc.)
@@ -102,38 +81,17 @@ impl super::ModeHandler for HostMode {
             hooks::run(cmd, &worktree_path, &env_map)?;
         }
 
-        let global = process::load_global_config()?;
+        super::check_extra_ports(config, &native_svcs, req.skip_services, req.slot, log)?;
 
-        let svcs_to_spawn: Vec<_> = native_svcs
-            .iter()
-            .filter(|s| !skip_services.contains(&s.name))
-            .copied()
-            .collect();
-
-        if svcs_to_spawn.iter().any(|s| s.command.is_some()) {
-            log.step(&format!(
-                "Spawning native services ({})...",
-                global.process_manager
-            ));
-            for svc in &svcs_to_spawn {
-                if let Some(cmd) = &svc.command {
-                    let port = native_ports.get(&svc.name).copied().unwrap_or(0);
-                    log.detail(&format!("{} on port {} — {}", svc.name, port, cmd));
-                }
-            }
-        }
-        let spawn = process::spawn_services(
-            &global.process_manager,
-            slug,
-            &svcs_to_spawn,
+        let (spawn, used_pm) = super::spawn_native_services(
+            req,
+            &native_svcs,
+            &native_ports,
             &worktree_path,
             &env_map,
+            &mut rollback,
+            log,
         )?;
-        if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
-            let manager = global.process_manager.clone();
-            let spawned = spawn.clone();
-            rollback.push(move || process::kill_services(&manager, &spawned));
-        }
 
         // post_up: all services spawned, full env available
         if let Some(cmd) = &config.hooks.post_up {
@@ -145,7 +103,7 @@ impl super::ModeHandler for HostMode {
         rollback.disarm();
 
         let pm = if spawn.tmux_session.is_some() || !spawn.pid_files.is_empty() {
-            Some(global.process_manager)
+            Some(used_pm)
         } else {
             None
         };
@@ -155,12 +113,13 @@ impl super::ModeHandler for HostMode {
             native_ports.iter().map(|(k, v)| (k.clone(), *v)).collect();
 
         Ok(Session {
-            slug: slug.to_string(),
+            slug: req.slug.to_string(),
             mode: crate::config::Mode::Host,
-            slot,
-            branch: branch.to_string(),
+            slot: req.slot,
+            branch: req.branch.to_string(),
             worktree_path: worktree_path.display().to_string(),
             status: crate::state::SessionStatus::Active,
+            pending_op: None,
             compose_project: None,
             overlay_file: None,
             overlay_files: vec![],
@@ -172,7 +131,7 @@ impl super::ModeHandler for HostMode {
             tmux_session: spawn.tmux_session,
             pid_files: spawn.pid_files,
             log_dir: spawn.log_dir,
-            services_subset: service_filter.map(|f| {
+            services_subset: req.service_filter.map(|f| {
                 let mut v: Vec<String> = f.iter().cloned().collect();
                 v.sort();
                 v
@@ -189,22 +148,23 @@ impl super::ModeHandler for HostMode {
         keep_worktree: bool,
         log: &StepLogger,
     ) -> Result<()> {
-        let native_ports = native_ports_for_slot(
+        let native_ports = super::native_ports_for_slot(
             config,
             session.slot,
             &session.port_overrides,
             &std::collections::HashSet::new(),
             &std::collections::HashMap::new(),
+            None,
         )?;
         let native_svcs = config.native_services();
         let env_map = env::build_env(
             session.slot,
+            config.slot_stride,
             &session.slug,
             "host",
             &native_ports,
             &[],
             &native_svcs,
-            &[],
         );
 
         // pre_down: before services are killed — app can drain/flush.
@@ -243,59 +203,6 @@ impl super::ModeHandler for HostMode {
         }
 
         Ok(())
-    }
-}
-
-/// Build the native port map for a slot, falling back to "app" on 3000+slot
-/// when no [[services]] are defined. Skipped services copy their port from
-/// `existing` instead of calling find_free_port.
-fn native_ports_for_slot(
-    config: &Config,
-    slot: u8,
-    overrides: &std::collections::HashMap<String, u16>,
-    skip: &std::collections::HashSet<String>,
-    existing: &std::collections::HashMap<String, u16>,
-) -> Result<IndexMap<String, u16>> {
-    let native = config.native_services();
-    if native.is_empty() {
-        let port = if let Some(&p) = overrides.get("app").or_else(|| existing.get("app")) {
-            p
-        } else {
-            let fallback = crate::config::ServiceConfig {
-                name: "app".into(),
-                base_port: 3000,
-                run: crate::config::ServiceRun::Native,
-                compose: None,
-                command: None,
-                port_env: vec![],
-                debug_port: None,
-                extra_ports: vec![],
-                host_port: None,
-            };
-            validate::find_free_port(config, &fallback, slot)?
-        };
-        let mut m = IndexMap::new();
-        m.insert("app".to_string(), port);
-        Ok(m)
-    } else {
-        native
-            .iter()
-            .map(|s| {
-                let port = if let Some(&p) = overrides.get(&s.name) {
-                    p
-                } else if skip.contains(&s.name) {
-                    existing.get(&s.name).copied().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "service '{}' is skipped but has no recorded port; run ecluse up without --skip or provide --port {}=<value>",
-                            s.name, s.name
-                        )
-                    })?
-                } else {
-                    validate::find_free_port(config, s, slot)?
-                };
-                Ok((s.name.clone(), port))
-            })
-            .collect()
     }
 }
 
@@ -343,22 +250,23 @@ mod tests {
 
     fn bring_up(config: &Config, root: &Path, slug: &str, reuse: bool) -> Result<Session> {
         let log = crate::log::StepLogger::new(true);
-        HostMode.bring_up(
+        let port_overrides = std::collections::HashMap::new();
+        let skip = std::collections::HashSet::new();
+        let existing = std::collections::HashMap::new();
+        let req = BringUpRequest {
             slug,
-            1,
-            slug,
-            config,
-            root,
-            false,
-            reuse,
-            true,
-            None,
-            &std::collections::HashMap::new(),
-            None,
-            &std::collections::HashSet::new(),
-            &std::collections::HashMap::new(),
-            &log,
-        )
+            slot: 1,
+            branch: slug,
+            watch: false,
+            reuse_worktree: reuse,
+            no_inherit_env: true,
+            worktree_override: None,
+            port_overrides: &port_overrides,
+            service_filter: None,
+            skip_services: &skip,
+            existing_port_overrides: &existing,
+        };
+        HostMode.bring_up(&req, config, root, &log)
     }
 
     #[test]

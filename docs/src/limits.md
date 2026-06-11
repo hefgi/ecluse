@@ -110,3 +110,13 @@ If you interrupt `ecluse up` mid-flight, partial state may be left behind. Use `
 ## Platform support
 
 macOS and Linux. Windows is not supported.
+
+## Pending sessions
+
+`up` and `down` reserve the session with a *pending* marker and release the
+state lock while they work, so parallel sessions never serialize on slow
+provisioning. `ecluse ls` shows `(pending)` during the operation and warns
+when a pending entry is older than 15 minutes (the owning command crashed);
+`ecluse down <slug>` takes such a session over and cleans it up. Commands that
+need a settled session (`up`, `env`, `status`, `shell`, `sync`) refuse pending
+sessions with an `operation in progress` error.
