@@ -57,6 +57,7 @@ impl super::ModeHandler for ContainerMode {
 
         let mut allocated_ports: Vec<(String, u16)> = vec![];
         let mut written_overlays: Vec<String> = vec![];
+        let mut compose_overlays: Vec<crate::state::ComposeOverlay> = vec![];
 
         // Copy ports for skipped docker services from existing session.
         for svc in &docker_svcs_config {
@@ -178,6 +179,10 @@ impl super::ModeHandler for ContainerMode {
                         return Err(e);
                     }
 
+                    compose_overlays.push(crate::state::ComposeOverlay {
+                        compose: compose_str,
+                        overlay: overlay_str.clone(),
+                    });
                     written_overlays.push(overlay_str);
                 }
             } // end if !docker_svcs_to_start.is_empty()
@@ -220,6 +225,11 @@ impl super::ModeHandler for ContainerMode {
                 }
                 return Err(e);
             }
+
+            compose_overlays.push(crate::state::ComposeOverlay {
+                compose: compose_str,
+                overlay: overlay_str.clone(),
+            });
 
             allocated_ports = compose_data
                 .services
@@ -322,6 +332,7 @@ impl super::ModeHandler for ContainerMode {
             compose_project: Some(project),
             overlay_file: primary_overlay,
             overlay_files: extra_overlays,
+            compose_overlays,
             app_port,
             started_at: Utc::now().to_rfc3339(),
             port_overrides: stored_port_overrides,
@@ -376,21 +387,36 @@ impl super::ModeHandler for ContainerMode {
         }
 
         if let Some(project) = &session.compose_project {
-            let all_overlays: Vec<String> = session
-                .overlay_file
-                .iter()
-                .cloned()
-                .chain(session.overlay_files.iter().cloned())
-                .collect();
-
-            if !all_overlays.is_empty() {
+            if !session.compose_overlays.is_empty() {
                 log.step("Stopping docker services...");
-            }
+                for pair in &session.compose_overlays {
+                    let _ = docker::compose_down(
+                        project,
+                        &pair.compose,
+                        Some(&pair.overlay),
+                        !keep_volumes,
+                    );
+                    let _ = std::fs::remove_file(&pair.overlay);
+                }
+            } else {
+                // Legacy state without compose_overlays: reconstruct compose
+                // paths from overlay filenames.
+                let all_overlays: Vec<String> = session
+                    .overlay_file
+                    .iter()
+                    .cloned()
+                    .chain(session.overlay_files.iter().cloned())
+                    .collect();
 
-            tear_down_all_overlays(project, root, &all_overlays, !keep_volumes);
+                if !all_overlays.is_empty() {
+                    log.step("Stopping docker services...");
+                }
 
-            for ov in &all_overlays {
-                let _ = std::fs::remove_file(ov);
+                tear_down_all_overlays(project, root, &all_overlays, !keep_volumes);
+
+                for ov in &all_overlays {
+                    let _ = std::fs::remove_file(ov);
+                }
             }
         }
 
@@ -413,5 +439,82 @@ impl super::ModeHandler for ContainerMode {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{HookConfig, Mode};
+    use crate::modes::ModeHandler;
+    use crate::state::{ComposeOverlay, Session};
+    use tempfile::TempDir;
+
+    // Teardown must use the recorded (compose, overlay) pairs — including for
+    // a hyphenated slug whose suffix matches a real subdirectory, where the
+    // legacy filename parser would target the wrong compose file.
+    #[test]
+    fn bring_down_uses_recorded_pairs_and_removes_overlays() {
+        let dir = TempDir::new().unwrap();
+        let overlays = dir.path().join(".ecluse/overlays");
+        std::fs::create_dir_all(&overlays).unwrap();
+        std::fs::create_dir_all(dir.path().join("worker")).unwrap();
+        std::fs::write(
+            dir.path().join("worker/docker-compose.yml"),
+            "services: {}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("docker-compose.yml"), "services: {}\n").unwrap();
+        let root_overlay = overlays.join("feat-worker.yml");
+        std::fs::write(&root_overlay, "services: {}\n").unwrap();
+
+        let session = Session {
+            slug: "feat-worker".into(),
+            mode: Mode::Container,
+            slot: 1,
+            branch: "feat-worker".into(),
+            worktree_path: dir.path().join("wt").display().to_string(),
+            compose_project: Some("ecluse_feat-worker".into()),
+            overlay_file: Some(root_overlay.display().to_string()),
+            overlay_files: vec![],
+            compose_overlays: vec![ComposeOverlay {
+                compose: dir.path().join("docker-compose.yml").display().to_string(),
+                overlay: root_overlay.display().to_string(),
+            }],
+            app_port: None,
+            started_at: "2026-01-01T00:00:00Z".into(),
+            port_overrides: std::collections::HashMap::new(),
+            process_manager: None,
+            tmux_session: None,
+            pid_files: vec![],
+            log_dir: None,
+            services_subset: None,
+        };
+        let config = Config {
+            mode: Mode::Container,
+            max_slots: 8,
+            prefix: "ecluse".into(),
+            worktree_dir: ".ecluse/worktrees".into(),
+            app_label: "ecluse.role".into(),
+            app_label_value: "app".into(),
+            strict_port: false,
+            port_search_range: 10,
+            slot_stride: 1,
+            services: vec![],
+            hooks: HookConfig::default(),
+            inherit_env: vec![],
+        };
+        let log = crate::log::StepLogger::new(true);
+
+        // keep_worktree=true: no git interaction; compose_down is best-effort
+        // and ignored when no docker daemon is available.
+        ContainerMode
+            .bring_down(&session, &config, dir.path(), true, true, &log)
+            .unwrap();
+
+        assert!(
+            !root_overlay.exists(),
+            "overlay from the recorded pair must be removed"
+        );
     }
 }

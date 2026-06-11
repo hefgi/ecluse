@@ -1649,6 +1649,7 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
         compose_project: None,
         overlay_file: None,
         overlay_files: vec![],
+        compose_overlays: vec![],
         started_at: chrono::Utc::now().to_rfc3339(),
         tmux_session: None,
         services_subset: None,

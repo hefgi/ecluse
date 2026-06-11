@@ -40,6 +40,7 @@ mod tests {
                     compose_project: None,
                     overlay_file: None,
                     overlay_files: vec![],
+                    compose_overlays: vec![],
                     app_port: None,
                     started_at: "2026-01-01T00:00:00Z".into(),
                     port_overrides: std::collections::HashMap::new(),

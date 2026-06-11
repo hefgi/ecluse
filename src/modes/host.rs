@@ -165,6 +165,7 @@ impl super::ModeHandler for HostMode {
             compose_project: None,
             overlay_file: None,
             overlay_files: vec![],
+            compose_overlays: vec![],
             app_port,
             started_at: Utc::now().to_rfc3339(),
             port_overrides: stored_port_overrides,
