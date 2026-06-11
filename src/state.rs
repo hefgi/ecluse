@@ -160,32 +160,18 @@ impl StateGuard {
     /// Use for commands that only read state: status, ls, env, shell.
     pub fn acquire_shared(root: &Path) -> Result<Self> {
         let ecluse_dir = root.join(".ecluse");
+        std::fs::create_dir_all(&ecluse_dir)
+            .with_context(|| format!("failed to create {}", ecluse_dir.display()))?;
+
+        // Create the lock file if missing. state.json may still exist (e.g.
+        // the lock file was removed by hand) — never report an empty state
+        // just because the lock file is gone.
         let lock_path = ecluse_dir.join("state.lock");
-
-        // If the lock file doesn't exist yet there's no state either — return empty.
-        if !lock_path.exists() {
-            return Ok(StateGuard {
-                state: State::default(),
-                state_path: ecluse_dir.join("state.json"),
-                _lock_file: OpenOptions::new()
-                    .create(true)
-                    .truncate(false)
-                    .write(true)
-                    .open(ecluse_dir.join("state.lock"))
-                    .unwrap_or_else(|_| {
-                        std::fs::create_dir_all(&ecluse_dir).ok();
-                        OpenOptions::new()
-                            .create(true)
-                            .truncate(false)
-                            .write(true)
-                            .open(&lock_path)
-                            .expect("failed to create lock file")
-                    }),
-            });
-        }
-
         let lock_file = OpenOptions::new()
             .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
             .open(&lock_path)
             .with_context(|| format!("failed to open lock file {}", lock_path.display()))?;
 
@@ -529,5 +515,23 @@ mod tests {
         let s = make_session("no-sub", 1);
         let json = serde_json::to_string(&s).unwrap();
         assert!(!json.contains("services_subset"), "got: {json}");
+    }
+
+    // The lock file can go missing while state.json survives (manual cleanup,
+    // partial flush). Shared acquisition must recreate the lock and read the
+    // real state, not silently report "no sessions".
+    #[test]
+    fn acquire_shared_reads_state_when_lock_file_missing() {
+        let dir = TempDir::new().unwrap();
+        {
+            let mut guard = StateGuard::acquire(dir.path()).unwrap();
+            guard.state.add_session(make_session("survivor", 1));
+            guard.commit().unwrap();
+        }
+        std::fs::remove_file(dir.path().join(".ecluse/state.lock")).unwrap();
+
+        let guard = StateGuard::acquire_shared(dir.path()).unwrap();
+        assert_eq!(guard.state.sessions.len(), 1);
+        assert_eq!(guard.state.sessions[0].slug, "survivor");
     }
 }

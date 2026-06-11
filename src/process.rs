@@ -176,24 +176,11 @@ fn tmux_session_exists(session: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Parse a .env-style file into key=value pairs. Lines starting with `#`
-/// and blank lines are skipped. Values are not unquoted — taken as-is.
+/// Parse a .env-style file into key=value pairs.
+/// Delegates to the shared parser so spawning, `shell`, `env`, and
+/// `up --json` all read env files identically.
 fn parse_env_file(path: &Path) -> std::collections::HashMap<String, String> {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return std::collections::HashMap::new();
-    };
-    content
-        .lines()
-        .filter(|l| !l.trim_start().starts_with('#') && l.contains('='))
-        .filter_map(|l| {
-            let (k, v) = l.split_once('=')?;
-            let k = k.trim().to_string();
-            if k.is_empty() {
-                return None;
-            }
-            Some((k, v.to_string()))
-        })
-        .collect()
+    crate::env::parse_env_file(path).into_iter().collect()
 }
 
 /// Merge .env → .env.local → .env.ecluse from `worktree` into `base`,

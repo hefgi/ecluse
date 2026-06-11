@@ -448,3 +448,14 @@ fn up_without_init_errors() {
         stderr(&out)
     );
 }
+
+#[test]
+fn sync_rejects_repo_root_as_worktree() {
+    let repo = tmp_repo();
+    ecluse(repo.path(), &["init", "--mode", "host", "--yes"]);
+    // No worktree exists for this slug; running from the repo root must not
+    // register the main checkout as the session's worktree.
+    let out = ecluse(repo.path(), &["sync", "ghost-slug"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("ghost-slug"), "got: {}", stderr(&out));
+}
