@@ -115,14 +115,18 @@ pub fn kill_services(manager: &ProcessManager, result: &SpawnResult) {
     }
 }
 
-/// Check whether spawned nohup processes are still alive.
+/// Check whether spawned services are still alive via their pid files
+/// (written for both nohup- and tmux-managed sessions).
 /// Returns warning strings for any that have died.
 pub fn check_processes_alive(
     manager: &Option<ProcessManager>,
     result: &SpawnResult,
     slug: &str,
 ) -> Vec<String> {
-    if !matches!(manager, Some(ProcessManager::Nohup)) {
+    if !matches!(
+        manager,
+        Some(ProcessManager::Nohup) | Some(ProcessManager::Tmux)
+    ) {
         return vec![];
     }
     let mut warnings = vec![];
@@ -131,24 +135,27 @@ pub fn check_processes_alive(
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown");
-        let Ok(content) = std::fs::read_to_string(pid_file) else {
-            warnings.push(format!(
+        let inspect_hint = match &result.tmux_session {
+            Some(session) => format!("inspect with `tmux attach -t {}`", session),
+            None => {
+                let log = result
+                    .log_dir
+                    .as_ref()
+                    .map(|d| d.join(format!("{}.log", service)).display().to_string())
+                    .unwrap_or_else(|| format!(".ecluse/logs/{}/{}.log", slug, service));
+                format!("check {}", log)
+            }
+        };
+        match read_pid_file(pid_file) {
+            None => warnings.push(format!(
                 "service '{}' has no pid file (likely killed); run `ecluse up` to restart it",
                 service
-            ));
-            continue;
-        };
-        {
-            if let Ok(pid) = content.trim().parse::<u32>() {
-                if !pid_alive(pid) {
-                    let log_hint = result
-                        .log_dir
-                        .as_ref()
-                        .map(|d| d.join(format!("{}.log", service)).display().to_string())
-                        .unwrap_or_else(|| format!(".ecluse/logs/{}/{}.log", slug, service));
+            )),
+            Some((pid, token)) => {
+                if !pid_file_alive(pid, &token) {
                     warnings.push(format!(
-                        "service '{}' (PID {}) is not running — check {}",
-                        service, pid, log_hint
+                        "service '{}' (PID {}) is not running — {}",
+                        service, pid, inspect_hint
                     ));
                 }
             }
@@ -164,6 +171,57 @@ pub fn pid_alive(pid: u32) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Opaque start-time token for a PID (`ps -o lstart=`). Two processes that
+/// recycle the same PID get different tokens, so a stored (pid, token) pair
+/// identifies exactly one process incarnation.
+pub fn pid_start_token(pid: u32) -> Option<String> {
+    let out = Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "lstart="])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Write `<pid>` plus its start token. Readers treat a mismatched token as a
+/// stale file (the PID was recycled by an unrelated process since the write).
+pub fn write_pid_file_with_token(path: &Path, pid: u32) -> std::io::Result<()> {
+    let token = pid_start_token(pid).unwrap_or_default();
+    std::fs::write(path, format!("{pid}\n{token}\n"))
+}
+
+/// Parse a pid file: first line pid, optional second line start token
+/// (absent in files written by older versions).
+pub fn read_pid_file(path: &Path) -> Option<(u32, Option<String>)> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut lines = content.lines();
+    let pid = lines.next()?.trim().parse().ok()?;
+    let token = lines
+        .next()
+        .map(|l| l.trim().to_string())
+        .filter(|t| !t.is_empty());
+    Some((pid, token))
+}
+
+/// True when the PID exists AND — if a token was recorded — it is still the
+/// same process incarnation the pid file was written for.
+pub fn pid_file_alive(pid: u32, token: &Option<String>) -> bool {
+    if !pid_alive(pid) {
+        return false;
+    }
+    match token {
+        None => true, // legacy pid file without token
+        Some(t) => pid_start_token(pid).as_deref() == Some(t.as_str()),
+    }
 }
 
 fn shell_escape(s: &str) -> String {
@@ -217,7 +275,7 @@ fn build_source_preamble(worktree: &Path) -> String {
     files
         .iter()
         .filter(|f| worktree.join(f).exists())
-        .map(|f| format!("set -a; source {}; set +a", shell_escape(f)))
+        .map(|f| format!("set -a; . {}; set +a", shell_escape(f)))
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -278,18 +336,19 @@ fn spawn_tmux(
     let session = tmux_session_name(slug);
     let merged_env = merge_worktree_env(worktree, env);
 
-    // Write merged env to a file so tmux windows source it rather than receiving
-    // a multi-KB export string through send-keys (safe for any env size).
+    // Window 0 stays a plain shell (handy for `ecluse shell` attaches); each
+    // service runs as its own window's process — no send-keys typing, so a
+    // command that fails to start is a detectable pane death, not a silently
+    // ignored keystroke.
     let preamble_path = write_env_preamble_file(worktree, slug, &merged_env);
 
-    // Build the source preamble: ecluse preamble file first, then the worktree env
-    // files (.env → .env.local → .env.ecluse) so manual restarts (↑ Enter) also
-    // have the correct environment. The preamble file is sourced first so the
-    // worktree files can override individual vars if needed.
-    let mut source_parts: Vec<String> = Vec::new();
+    let mut source_parts: Vec<String> = vec![format!(
+        "cd {}",
+        shell_escape(&worktree.display().to_string())
+    )];
     if let Some(ref p) = preamble_path {
         source_parts.push(format!(
-            "set -a; source {}; set +a",
+            "set -a; . {}; set +a",
             shell_escape(&p.display().to_string())
         ));
     }
@@ -297,10 +356,6 @@ fn spawn_tmux(
     if !worktree_files.is_empty() {
         source_parts.push(worktree_files);
     }
-    source_parts.push(format!(
-        "cd {}",
-        shell_escape(&worktree.display().to_string())
-    ));
     let setup_cmd = source_parts.join("; ");
 
     // Kill any stale tmux session with this name (processes exited but shell remains).
@@ -311,15 +366,24 @@ fn spawn_tmux(
             .ok();
     }
 
-    // Create detached session
     let status = Command::new("tmux")
-        .args(["new-session", "-d", "-s", &session, "-x", "220", "-y", "50"])
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            &session,
+            "-n",
+            "shell",
+            "-x",
+            "220",
+            "-y",
+            "50",
+        ])
         .status()
         .map_err(|e| crate::error::EcluseError::SpawnFailed {
             service: "tmux".into(),
             reason: e.to_string(),
         })?;
-
     if !status.success() {
         return Err(crate::error::EcluseError::SpawnFailed {
             service: "tmux".into(),
@@ -328,45 +392,179 @@ fn spawn_tmux(
         .into());
     }
 
-    for (i, svc) in services.iter().enumerate() {
-        let cmd = svc.command.as_deref().unwrap();
-        let target = if i == 0 {
-            format!("{}:0", session)
-        } else {
-            format!("{}:{}", session, svc.name)
-        };
+    // Keep dead panes around so a crashed service's output stays inspectable
+    // (and so the death is observable below instead of closing the window).
+    // A session-scoped hook applies the window option at creation time —
+    // setting it after new-window would race an instantly-dying command.
+    Command::new("tmux")
+        .args([
+            "set-hook",
+            "-t",
+            &session,
+            "after-new-window",
+            "set-option -w remain-on-exit on",
+        ])
+        .output()
+        .ok();
+    // The shell window should have the session env + worktree cwd too.
+    Command::new("tmux")
+        .args([
+            "send-keys",
+            "-t",
+            &format!("{}:shell", session),
+            &setup_cmd,
+            "Enter",
+        ])
+        .output()
+        .ok();
 
-        if i == 0 {
-            Command::new("tmux")
-                .args(["rename-window", "-t", &format!("{}:0", session), &svc.name])
-                .status()
-                .ok();
-        } else {
-            Command::new("tmux")
-                .args(["new-window", "-t", &session, "-n", &svc.name])
-                .status()
-                .ok();
+    let ecluse_dir = ecluse_dir_for(worktree);
+    let pid_dir = ecluse_dir.join("pids").join(slug);
+    std::fs::create_dir_all(&pid_dir)?;
+
+    let cleanup = |pid_files: &[PathBuf]| {
+        let _ = Command::new("tmux")
+            .args(["kill-session", "-t", &session])
+            .output();
+        for pf in pid_files {
+            let _ = std::fs::remove_file(pf);
+        }
+    };
+
+    let mut pid_files: Vec<PathBuf> = vec![];
+    for svc in services {
+        let cmd = svc.command.as_deref().unwrap();
+        let full_cmd = format!("{}; exec sh -c {}", setup_cmd, shell_escape(cmd));
+        let created = Command::new("tmux")
+            .args(["new-window", "-t", &session, "-n", &svc.name, &full_cmd])
+            .status()
+            .map(|st| st.success())
+            .unwrap_or(false);
+        if !created {
+            cleanup(&pid_files);
+            return Err(crate::error::EcluseError::SpawnFailed {
+                service: svc.name.clone(),
+                reason: "tmux new-window failed".into(),
+            }
+            .into());
         }
 
-        // Source env + cd to worktree, then run the service command.
-        // Two separate send-keys calls keeps each line short; the setup line
-        // is a handful of file paths, never a large export blob.
-        Command::new("tmux")
-            .args(["send-keys", "-t", &target, &setup_cmd, "Enter"])
-            .status()
-            .ok();
+        if let Some(pane_pid) = tmux_pane_pid_for(&session, &svc.name) {
+            let pid_path = pid_dir.join(format!("{}.pid", svc.name));
+            write_pid_file_with_token(&pid_path, pane_pid)?;
+            pid_files.push(pid_path);
+        }
+    }
 
-        Command::new("tmux")
-            .args(["send-keys", "-t", &target, cmd, "Enter"])
-            .status()
-            .ok();
+    // Catch instant failures: a service command that dies within the grace
+    // window (typo, missing binary, port conflict) fails the spawn instead of
+    // reporting a "ready" session with dead services.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+    loop {
+        if let Some((window, status)) = first_dead_pane(&session) {
+            let output = tmux_pane_tail(&session, &window, 5);
+            cleanup(&pid_files);
+            return Err(crate::error::EcluseError::SpawnFailed {
+                service: window,
+                reason: format!(
+                    "command exited immediately (status {}); last output:\n{}",
+                    status,
+                    output.trim_end()
+                ),
+            }
+            .into());
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
 
     Ok(SpawnResult {
         tmux_session: Some(session),
-        pid_files: vec![],
+        pid_files,
         log_dir: None,
     })
+}
+
+/// Pane PID of the named window in `session`.
+fn tmux_pane_pid_for(session: &str, window: &str) -> Option<u32> {
+    let out = Command::new("tmux")
+        .args([
+            "list-panes",
+            "-t",
+            &format!("{}:{}", session, window),
+            "-F",
+            "#{pane_pid}",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// First service pane that has died, as (window_name, exit_status).
+/// The plain "shell" window is exempt.
+fn first_dead_pane(session: &str) -> Option<(String, String)> {
+    let out = Command::new("tmux")
+        .args([
+            "list-panes",
+            "-s",
+            "-t",
+            session,
+            "-F",
+            "#{window_name}|#{pane_dead}|#{pane_dead_status}",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for line in stdout.lines() {
+        let mut parts = line.split('|');
+        let window = parts.next()?.to_string();
+        let dead = parts.next()? == "1";
+        let status = parts.next().unwrap_or("").to_string();
+        if dead && window != "shell" {
+            return Some((window, status));
+        }
+    }
+    None
+}
+
+/// Last `n` lines of a window's pane output (best effort).
+fn tmux_pane_tail(session: &str, window: &str, n: usize) -> String {
+    let out = Command::new("tmux")
+        .args([
+            "capture-pane",
+            "-p",
+            "-t",
+            &format!("{}:{}", session, window),
+        ])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let text = String::from_utf8_lossy(&o.stdout);
+            let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+            lines
+                .iter()
+                .rev()
+                .take(n)
+                .rev()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+        _ => String::new(),
+    }
 }
 
 fn kill_tmux(result: &SpawnResult) {
@@ -375,6 +573,9 @@ fn kill_tmux(result: &SpawnResult) {
             .args(["kill-session", "-t", session])
             .output()
             .ok();
+    }
+    for pid_file in &result.pid_files {
+        let _ = std::fs::remove_file(pid_file);
     }
 }
 
@@ -450,14 +651,26 @@ fn spawn_one_nohup(
             reason: e.to_string(),
         })?;
 
-    std::fs::write(&pid_path, child.id().to_string())?;
+    write_pid_file_with_token(&pid_path, child.id())?;
     Ok(pid_path)
 }
 
 fn kill_nohup(result: &SpawnResult) {
     for pid_file in &result.pid_files {
-        if let Ok(content) = std::fs::read_to_string(pid_file) {
-            if let Ok(pid) = content.trim().parse::<u32>() {
+        if let Some((pid, token)) = read_pid_file(pid_file) {
+            let leader_alive = pid_alive(pid);
+            if leader_alive && !pid_file_alive(pid, &token) {
+                // The PID was recycled by an unrelated process — never signal
+                // it (or its group, which now belongs to that process).
+                tracing::warn!(
+                    "PID {} from {} was recycled by another process; not signaling it",
+                    pid,
+                    pid_file.display()
+                );
+            } else if leader_alive || target_alive(&format!("-{}", pid)) {
+                // Leader verified, or leader gone but its group still has our
+                // orphaned children (a pgid stays allocated while any member
+                // lives, so it cannot have been recycled).
                 kill_process_group(pid);
             }
         }
@@ -743,6 +956,44 @@ mod tests {
         cond()
     }
 
+    // ── pid start tokens ──────────────────────────────────────────────────────
+
+    #[test]
+    fn pid_token_roundtrip_for_live_process() {
+        let dir = TempDir::new().unwrap();
+        let my_pid = std::process::id();
+        let path = dir.path().join("self.pid");
+        write_pid_file_with_token(&path, my_pid).unwrap();
+        let (pid, token) = read_pid_file(&path).unwrap();
+        assert_eq!(pid, my_pid);
+        assert!(token.is_some(), "live process must get a start token");
+        assert!(pid_file_alive(pid, &token));
+    }
+
+    #[test]
+    fn pid_file_alive_rejects_recycled_pid() {
+        // Same PID, forged token from "another incarnation".
+        let my_pid = std::process::id();
+        let forged = Some("Wed Jan  1 00:00:00 1986".to_string());
+        assert!(!pid_file_alive(my_pid, &forged));
+    }
+
+    #[test]
+    fn pid_file_alive_accepts_legacy_tokenless_files() {
+        let my_pid = std::process::id();
+        assert!(pid_file_alive(my_pid, &None));
+    }
+
+    #[test]
+    fn read_pid_file_parses_legacy_single_line_format() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy.pid");
+        std::fs::write(&path, "4242").unwrap();
+        let (pid, token) = read_pid_file(&path).unwrap();
+        assert_eq!(pid, 4242);
+        assert!(token.is_none());
+    }
+
     // The service command spawns a child; killing the session must take the
     // whole process group down, not just the `sh -c` group leader.
     #[test]
@@ -842,5 +1093,91 @@ mod tests {
             !one_pid.exists(),
             "service one's pid file should be removed by partial-spawn cleanup"
         );
+    }
+}
+
+#[cfg(test)]
+mod tmux_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn tmux_available() -> bool {
+        binary_available("tmux")
+    }
+
+    fn native_svc(name: &str, command: &str) -> crate::config::ServiceConfig {
+        crate::config::ServiceConfig {
+            name: name.into(),
+            base_port: 3000,
+            run: crate::config::ServiceRun::Native,
+            compose: None,
+            command: Some(command.into()),
+            port_env: vec![],
+            debug_port: None,
+            extra_ports: vec![],
+            host_port: None,
+        }
+    }
+
+    // A command that dies instantly must fail the spawn (and clean up the
+    // session) instead of reporting a "ready" session with dead services.
+    #[test]
+    fn spawn_tmux_detects_instantly_failing_command() {
+        if !tmux_available() {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ecluse")).unwrap();
+        let svc = native_svc("broken", "definitely-not-a-binary-xyz");
+        let err = spawn_services(
+            &ProcessManager::Tmux,
+            "tmux-fail-test",
+            &[&svc],
+            dir.path(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("broken"), "got: {}", err);
+        assert!(
+            !tmux_session_exists("ecluse-tmux-fail-test"),
+            "failed spawn must not leave the tmux session behind"
+        );
+    }
+
+    // A long-running service gets a recorded, token-verified pane PID, and
+    // kill_services takes the whole session (and pid files) down.
+    #[test]
+    fn spawn_tmux_records_pane_pids_and_kills_cleanly() {
+        if !tmux_available() {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ecluse")).unwrap();
+        let svc = native_svc("sleeper", "sleep 300");
+        let result = spawn_services(
+            &ProcessManager::Tmux,
+            "tmux-ok-test",
+            &[&svc],
+            dir.path(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert_eq!(result.tmux_session.as_deref(), Some("ecluse-tmux-ok-test"));
+        assert_eq!(result.pid_files.len(), 1, "pane pid must be recorded");
+        let (pid, token) = read_pid_file(&result.pid_files[0]).unwrap();
+        assert!(pid_file_alive(pid, &token), "pane process must be running");
+
+        kill_services(&ProcessManager::Tmux, &result);
+        assert!(!tmux_session_exists("ecluse-tmux-ok-test"));
+        assert!(
+            !result.pid_files[0].exists(),
+            "pid file must be removed on kill"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while pid_alive(pid) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!pid_alive(pid), "pane process must die with the session");
     }
 }

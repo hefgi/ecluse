@@ -45,8 +45,16 @@ fn match_pid_files(root: &Path, session: &Session, pid: u32) -> Option<PidOwner>
         if path.extension().and_then(|s| s.to_str()) != Some("pid") {
             continue;
         }
-        let content = std::fs::read_to_string(&path).ok()?;
-        let tracked_pid: u32 = content.trim().parse().ok()?;
+        let Some((tracked_pid, token)) = crate::process::read_pid_file(&path) else {
+            continue;
+        };
+        // A live PID whose start token no longer matches was recycled by an
+        // unrelated process — it must not be attributed to this session.
+        if crate::process::pid_alive(tracked_pid)
+            && !crate::process::pid_file_alive(tracked_pid, &token)
+        {
+            continue;
+        }
         // Match either the tracked PID directly or any descendant of it.
         if tracked_pid == pid || is_descendant(tracked_pid, pid) {
             let service = path.file_stem().and_then(|s| s.to_str()).map(String::from);

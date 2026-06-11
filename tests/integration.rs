@@ -24,10 +24,18 @@ fn setup_repo(dir: &std::path::Path) {
         .unwrap();
 }
 
+/// Run ecluse with HOME pointed at the repo dir: tests must never read or
+/// write the developer's real ~/.config/ecluse/config.toml (whose
+/// process_manager would otherwise leak into spawn behavior).
+fn ecluse_cmd(dir: &std::path::Path) -> Command {
+    let mut cmd = Command::new(ecluse_bin());
+    cmd.current_dir(dir).env("HOME", dir);
+    cmd
+}
+
 fn ecluse(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
-    Command::new(ecluse_bin())
+    ecluse_cmd(dir)
         .args(args)
-        .current_dir(dir)
         .output()
         .expect("failed to run ecluse")
 }
@@ -509,9 +517,8 @@ post_up = "sleep 3"
     )
     .unwrap();
 
-    let mut slow_up = Command::new(ecluse_bin())
+    let mut slow_up = ecluse_cmd(repo.path())
         .args(["up", "slow-sess"])
-        .current_dir(repo.path())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -579,9 +586,8 @@ post_up = "sleep 3"
     )
     .unwrap();
 
-    let mut slow_up = Command::new(ecluse_bin())
+    let mut slow_up = ecluse_cmd(repo.path())
         .args(["up", "busy-sess"])
-        .current_dir(repo.path())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -656,9 +662,8 @@ post_up = "sleep 3"
     )
     .unwrap();
 
-    let mut slow_up = Command::new(ecluse_bin())
+    let mut slow_up = ecluse_cmd(repo.path())
         .args(["up", "race-sess"])
-        .current_dir(repo.path())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()

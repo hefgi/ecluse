@@ -970,7 +970,6 @@ fn resume_provision(
     explicit_skip: &std::collections::HashSet<String>,
     log: &log::StepLogger,
 ) -> Result<Option<(state::Session, usize, usize)>> {
-    let worktree = std::path::Path::new(&existing.worktree_path);
     let handler = modes::get_handler(config);
 
     let mut skip_services: std::collections::HashSet<String> = explicit_skip.clone();
@@ -993,14 +992,11 @@ fn resume_provision(
             .filter(|s| s.run == config::ServiceRun::Docker)
             .collect();
 
-        let discovered = if !native_svcs.is_empty() {
-            sync::find_processes_in_worktree(worktree)
-        } else {
-            vec![]
-        };
-        let native_matches = sync::match_services(&native_svcs, &discovered);
         let docker_matches = if !docker_svcs.is_empty() {
-            sync::find_docker_services(&docker_svcs, &existing.slug)
+            sync::find_docker_services(
+                &docker_svcs,
+                &modes::compose_project_name(config, &existing.slug),
+            )
         } else {
             vec![]
         };
@@ -1010,11 +1006,11 @@ fn resume_provision(
                 log.detail(&format!("{}: skipped (--skip)", svc.name));
                 continue;
             }
-            let alive = native_matches
-                .iter()
-                .find(|m| m.service_name == svc.name)
-                .map(|m| process::pid_alive(m.pid))
-                .unwrap_or(false);
+            // Identity-based check: the session's own pid file (token-verified)
+            // or tmux window — never lsof discovery, whose depth-1 scan misses
+            // servers with a cwd in a subdirectory and then spawns duplicates.
+            let expected_port = existing.port_overrides.get(&svc.name).copied();
+            let alive = sync::native_service_running(root, existing, &svc.name, expected_port);
             if alive {
                 log.detail(&format!("{}: \u{2713} already running — skipped", svc.name));
                 skip_services.insert(svc.name.clone());
@@ -1846,7 +1842,7 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
     // Detect docker services.
     let docker_matches = if !docker_svcs.is_empty() {
         log.step("Detecting docker services...");
-        sync::find_docker_services(&docker_svcs, &slug)
+        sync::find_docker_services(&docker_svcs, &modes::compose_project_name(&config, &slug))
     } else {
         vec![]
     };
@@ -2185,8 +2181,6 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
         .clone();
     ensure_session_settled(&session)?;
 
-    let worktree = std::path::Path::new(&session.worktree_path);
-
     // Build per-service health status.
     let native_svcs: Vec<&config::ServiceConfig> = config
         .services
@@ -2200,18 +2194,12 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
         .filter(|s| s.run == config::ServiceRun::Docker)
         .collect();
 
-    // Discover processes once for all native services.
-    let discovered = if !native_svcs.is_empty() {
-        sync::find_processes_in_worktree(worktree)
-    } else {
-        vec![]
-    };
-
-    let native_matches = sync::match_services(&native_svcs, &discovered);
-
     // Docker: find running containers.
     let docker_matches = if !docker_svcs.is_empty() {
-        sync::find_docker_services(&docker_svcs, &session.slug)
+        sync::find_docker_services(
+            &docker_svcs,
+            &modes::compose_project_name(&config, &session.slug),
+        )
     } else {
         vec![]
     };
@@ -2235,59 +2223,17 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
                 }
             });
 
-        let matched = native_matches.iter().find(|m| m.service_name == svc.name);
-        let (healthy, pid, port) = match matched {
-            Some(m) => {
-                let alive = process::pid_alive(m.pid);
-                // Verify the matched process actually owns the expected port.
-                // If it doesn't, the service is listening on the wrong port
-                // (e.g. external task runner inherited the wrong env) — that's
-                // a health failure, not "discovered new port".
-                let on_expected_port = match expected_port {
-                    Some(p) => sync::subtree_owns_port(m.pid, p),
-                    None => true, // no expected port → just check liveness
-                };
-                (alive && on_expected_port, Some(m.pid), expected_port)
-            }
-            None => {
-                let pid_file = root
-                    .join(".ecluse")
-                    .join("pids")
-                    .join(&session.slug)
-                    .join(format!("{}.pid", svc.name));
-                if pid_file.exists() {
-                    // Nohup-managed: verify the stored PID is alive AND on the right port.
-                    if let Ok(content) = std::fs::read_to_string(&pid_file) {
-                        if let Ok(pid) = content.trim().parse::<u32>() {
-                            let alive = process::pid_alive(pid);
-                            let on_expected_port = match expected_port {
-                                Some(p) => sync::subtree_owns_port(pid, p),
-                                None => true,
-                            };
-                            (alive && on_expected_port, Some(pid), expected_port)
-                        } else {
-                            (false, None, expected_port)
-                        }
-                    } else {
-                        (false, None, expected_port)
-                    }
-                } else if matches!(session.process_manager, Some(process::ProcessManager::Tmux)) {
-                    // Tmux-managed: verify the pane's process subtree owns the port.
-                    if let Some(ref tmux_session) = session.tmux_session {
-                        let healthy = if let Some(port) = expected_port {
-                            sync::tmux_window_owns_port(tmux_session, &svc.name, port)
-                        } else {
-                            sync::tmux_window_exists(tmux_session, &svc.name)
-                        };
-                        (healthy, None, expected_port)
-                    } else {
-                        (false, None, expected_port)
-                    }
-                } else {
-                    (false, None, expected_port)
-                }
-            }
-        };
+        // Identity first: the session's own pid file (token-verified) or tmux
+        // window decides health — never an lsof scan that can misattribute a
+        // neighbor's process.
+        let pid_file = root
+            .join(".ecluse")
+            .join("pids")
+            .join(&session.slug)
+            .join(format!("{}.pid", svc.name));
+        let recorded_pid = process::read_pid_file(&pid_file).map(|(pid, _)| pid);
+        let healthy = sync::native_service_running(&root, &session, &svc.name, expected_port);
+        let (healthy, pid, port) = (healthy, recorded_pid, expected_port);
         let tmux_window = if matches!(session.process_manager, Some(process::ProcessManager::Tmux))
         {
             Some(svc.name.clone())

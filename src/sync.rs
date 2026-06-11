@@ -50,6 +50,7 @@ pub fn match_services(
     processes: &[DiscoveredProcess],
 ) -> Vec<ServiceMatch> {
     let mut matches = Vec::new();
+    let mut claimed: std::collections::HashSet<u32> = std::collections::HashSet::new();
 
     for svc in services {
         let command = match &svc.command {
@@ -62,9 +63,11 @@ pub fn match_services(
             continue;
         }
 
+        // Skip processes already claimed by another service — two services
+        // with overlapping command tokens must not both "own" one process.
         let root = processes
             .iter()
-            .find(|p| cmdline_matches(&p.cmdline, &tokens));
+            .find(|p| !claimed.contains(&p.pid) && cmdline_matches(&p.cmdline, &tokens));
 
         let (pid, port) = match root {
             Some(proc) => {
@@ -79,6 +82,7 @@ pub fn match_services(
             None => continue,
         };
 
+        claimed.insert(pid);
         matches.push(ServiceMatch {
             service_name: svc.name.clone(),
             pid,
@@ -89,15 +93,21 @@ pub fn match_services(
     matches
 }
 
-/// Detect running docker containers related to `slug` and match them to docker services.
+/// Detect the session's running docker services and their published host ports.
 ///
-/// Runs `docker ps` and filters containers whose name contains the slug.
-/// For each docker service, returns the first host port bound to the container's
-/// `base_port` (or any port the container exposes if base_port doesn't match).
+/// Matches by the compose project label docker-compose stamps on every
+/// container it starts — exact, never by name substring (slug `feat-a` must
+/// not adopt `feat-ab`'s containers). `project` is `<prefix>_<slug>`.
 /// Best-effort: returns empty if docker is unavailable or nothing matches.
-pub fn find_docker_services(services: &[&ServiceConfig], slug: &str) -> Vec<(String, u16)> {
+pub fn find_docker_services(services: &[&ServiceConfig], project: &str) -> Vec<(String, u16)> {
     let output = match docker::docker_cmd()
-        .args(["ps", "--format", "{{.Names}}\t{{.Ports}}"])
+        .args([
+            "ps",
+            "--filter",
+            &format!("label=com.docker.compose.project={}", project),
+            "--format",
+            "{{.Label \"com.docker.compose.service\"}}\t{{.Ports}}",
+        ])
         .output()
     {
         Ok(o) if o.status.success() => o,
@@ -105,23 +115,17 @@ pub fn find_docker_services(services: &[&ServiceConfig], slug: &str) -> Vec<(Str
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Parse lines into (container_name, ports_string)
+    // Parse lines into (compose_service_name, ports_string)
     let containers: Vec<(&str, &str)> = stdout
         .lines()
         .filter_map(|line| line.split_once('\t'))
         .collect();
 
     let mut result = Vec::new();
-
     for svc in services {
-        // Find a container whose name contains the slug and (optionally) the service name.
         let container = containers
             .iter()
-            .find(|(name, _)| {
-                name.contains(slug) && (name.contains(&svc.name) || containers.len() == 1)
-            })
-            .or_else(|| containers.iter().find(|(name, _)| name.contains(slug)));
-
+            .find(|(service_label, _)| *service_label == svc.name);
         if let Some((_, ports_str)) = container {
             if let Some(port) = parse_host_port(ports_str, svc.base_port) {
                 result.push((svc.name.clone(), port));
@@ -130,6 +134,40 @@ pub fn find_docker_services(services: &[&ServiceConfig], slug: &str) -> Vec<(Str
     }
 
     result
+}
+
+/// True when a native service of `session` is demonstrably running: its pid
+/// file points at a live, token-verified process (that owns `expected_port`
+/// when one is recorded), or — for tmux-managed sessions without a pid file —
+/// the service's tmux window owns the port.
+pub fn native_service_running(
+    root: &Path,
+    session: &crate::state::Session,
+    svc_name: &str,
+    expected_port: Option<u16>,
+) -> bool {
+    let pid_file = root
+        .join(".ecluse")
+        .join("pids")
+        .join(&session.slug)
+        .join(format!("{}.pid", svc_name));
+    if let Some((pid, token)) = crate::process::read_pid_file(&pid_file) {
+        if !crate::process::pid_file_alive(pid, &token) {
+            return false;
+        }
+        return match expected_port {
+            Some(p) => subtree_owns_port(pid, p),
+            None => true,
+        };
+    }
+    // No pid file — legacy tmux sessions only have window names to go by.
+    if let Some(ref tmux_session) = session.tmux_session {
+        return match expected_port {
+            Some(p) => tmux_window_owns_port(tmux_session, svc_name, p),
+            None => tmux_window_exists(tmux_session, svc_name),
+        };
+    }
+    false
 }
 
 /// Write a PID file for a discovered process at the standard ecluse path.
@@ -144,7 +182,7 @@ pub fn write_pid_file(
     let pid_dir = ecluse_dir.join("pids").join(slug);
     std::fs::create_dir_all(&pid_dir)?;
     let pid_path = pid_dir.join(format!("{}.pid", service));
-    std::fs::write(&pid_path, pid.to_string())?;
+    crate::process::write_pid_file_with_token(&pid_path, pid)?;
     Ok(pid_path)
 }
 
@@ -625,8 +663,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let pid_path = write_pid_file(dir.path(), "my-slug", "api", 12345).unwrap();
         assert!(pid_path.ends_with("pids/my-slug/api.pid"));
-        let content = std::fs::read_to_string(&pid_path).unwrap();
-        assert_eq!(content, "12345");
+        // First line is the pid; second line is the start token (empty for a
+        // pid that is not running).
+        let (pid, _token) = crate::process::read_pid_file(&pid_path).unwrap();
+        assert_eq!(pid, 12345);
     }
 
     #[test]
