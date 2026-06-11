@@ -150,6 +150,7 @@ mod tests {
             branch: format!("branch/{}", slug),
             worktree_path: format!("/tmp/{}", slug),
             status: crate::state::SessionStatus::Active,
+            pending_op: None,
             compose_project: None,
             overlay_file: None,
             overlay_files: vec![],

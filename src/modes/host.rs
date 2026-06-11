@@ -117,6 +117,7 @@ impl super::ModeHandler for HostMode {
             branch: req.branch.to_string(),
             worktree_path: worktree_path.display().to_string(),
             status: crate::state::SessionStatus::Active,
+            pending_op: None,
             compose_project: None,
             overlay_file: None,
             overlay_files: vec![],

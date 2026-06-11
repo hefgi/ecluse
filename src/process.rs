@@ -131,7 +131,14 @@ pub fn check_processes_alive(
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown");
-        if let Ok(content) = std::fs::read_to_string(pid_file) {
+        let Ok(content) = std::fs::read_to_string(pid_file) else {
+            warnings.push(format!(
+                "service '{}' has no pid file (likely killed); run `ecluse up` to restart it",
+                service
+            ));
+            continue;
+        };
+        {
             if let Ok(pid) = content.trim().parse::<u32>() {
                 if !pid_alive(pid) {
                     let log_hint = result
@@ -465,23 +472,33 @@ fn kill_nohup(result: &SpawnResult) {
 /// orphan the service's children — the `sh -c` wrapper dies while the actual
 /// server keeps running and holds the port.
 fn kill_process_group(pgid: u32) {
-    let group = format!("-{}", pgid);
-    let _ = Command::new("kill").args(["-TERM", "--", &group]).output();
+    signal_with_grace(&format!("-{}", pgid));
+}
+
+/// TERM a single process, escalating to KILL after the grace period.
+pub fn kill_pid_with_grace(pid: u32) {
+    signal_with_grace(&pid.to_string());
+}
+
+/// SIGTERM `target` (a pid, or "-pgid" for a whole group), poll for it to
+/// disappear, and SIGKILL whatever survives the 2s grace period.
+fn signal_with_grace(target: &str) {
+    let _ = Command::new("kill").args(["-TERM", "--", target]).output();
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while process_group_alive(pgid) {
+    while target_alive(target) {
         if std::time::Instant::now() >= deadline {
-            let _ = Command::new("kill").args(["-KILL", "--", &group]).output();
+            let _ = Command::new("kill").args(["-KILL", "--", target]).output();
             return;
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
-/// True while any process in the group still exists (kill -0 on the group).
-fn process_group_alive(pgid: u32) -> bool {
+/// True while the target (pid or process group) still exists (kill -0).
+fn target_alive(target: &str) -> bool {
     Command::new("kill")
-        .args(["-0", "--", &format!("-{}", pgid)])
+        .args(["-0", "--", target])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)

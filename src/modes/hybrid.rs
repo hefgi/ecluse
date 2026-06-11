@@ -222,6 +222,7 @@ impl super::ModeHandler for HybridMode {
             branch: req.branch.to_string(),
             worktree_path: worktree_path.display().to_string(),
             status: crate::state::SessionStatus::Active,
+            pending_op: None,
             compose_project: Some(super::compose_project_name(config, req.slug)),
             overlay_file: primary_overlay,
             overlay_files: extra_overlays,

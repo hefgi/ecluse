@@ -499,7 +499,7 @@ fn prompt_branch_name() -> Result<String> {
 /// 4. cwd in main worktree / repo root → prompt for branch name.
 fn resolve_slug_and_branch(
     arg: &Option<String>,
-    guard: &state::StateGuard,
+    state: &state::State,
     _root: &std::path::Path,
 ) -> Result<(String, String, bool, Option<std::path::PathBuf>)> {
     if let Some(input) = arg {
@@ -510,8 +510,7 @@ fn resolve_slug_and_branch(
     let cwd = std::env::current_dir().context("could not determine current directory")?;
 
     // 1. Inside an ecluse-registered worktree → reuse stored slug/branch.
-    if let Some(session) = guard
-        .state
+    if let Some(session) = state
         .sessions
         .iter()
         .find(|s| cwd.starts_with(std::path::Path::new(&s.worktree_path)))
@@ -545,11 +544,7 @@ fn ensure_session_settled(session: &state::Session) -> Result<()> {
     Ok(())
 }
 
-fn resolve_slug_from_args(
-    arg: Option<&str>,
-    guard: &state::StateGuard,
-    hint: &str,
-) -> Result<String> {
+fn resolve_slug_from_args(arg: Option<&str>, state: &state::State, hint: &str) -> Result<String> {
     match arg {
         Some(s) => {
             validate_slug(s)?;
@@ -559,8 +554,7 @@ fn resolve_slug_from_args(
             let cwd = std::env::current_dir().context("could not determine current directory")?;
 
             // Inside an active ecluse session — use it.
-            if let Some(session) = guard
-                .state
+            if let Some(session) = state
                 .sessions
                 .iter()
                 .find(|s| cwd.starts_with(std::path::Path::new(&s.worktree_path)))
@@ -679,18 +673,20 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         parse_service_filter(&args.services, &config)?;
 
     // Resolve slug + branch from a read-only snapshot. Resolution can prompt
-    // for a branch name; neither the prompt nor the provisioning below may
-    // run under the exclusive lock, or every other ecluse command in this
-    // repo blocks on us until it times out.
-    let (slug, branch, implicit_reuse, worktree_override) = {
+    // for a branch name; the prompt must not hold ANY lock (a shared lock
+    // still blocks exclusive acquirers), so clone the state and release the
+    // guard before resolving.
+    let snapshot = {
         let guard = state::StateGuard::acquire_shared(&root)?;
-        resolve_slug_and_branch(&args.slug, &guard, &root)?
+        guard.state.clone()
     };
+    let (slug, branch, implicit_reuse, worktree_override) =
+        resolve_slug_and_branch(&args.slug, &snapshot, &root)?;
     validate_branch(&branch)?;
 
     // Short exclusive section: route to resume, or reserve the slot with a
     // pending session, then release the lock for the slow provisioning work.
-    let slot = {
+    let (slot, op_id) = {
         let mut guard = state::StateGuard::acquire(&root)?;
 
         if let Some(existing) = guard.state.find_session(&slug).cloned() {
@@ -731,6 +727,7 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
         let planned_worktree = worktree_override.clone().unwrap_or_else(|| {
             worktree::WorktreeManager::new(root.clone()).worktree_path(&config, &slug)
         });
+        let op_id = state::new_op_id();
         guard.state.add_session(state::Session {
             slug: slug.clone(),
             mode: config.mode.clone(),
@@ -738,6 +735,10 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
             branch: branch.clone(),
             worktree_path: planned_worktree.display().to_string(),
             status: state::SessionStatus::Pending,
+            pending_op: Some(state::PendingOp {
+                id: op_id.clone(),
+                since: chrono::Utc::now().to_rfc3339(),
+            }),
             compose_project: None,
             overlay_file: None,
             overlay_files: vec![],
@@ -752,7 +753,7 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
             services_subset: None,
         });
         guard.commit()?;
-        slot
+        (slot, op_id)
     };
 
     let handler = modes::get_handler(&config);
@@ -779,22 +780,41 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
 
     // Re-acquire to finalize: replace the pending reservation with the real
     // session, or drop it when provisioning failed (bring_up rolled back).
+    // Only the operation that wrote the reservation may finalize it — if
+    // another command (down/flush) removed or took over the entry meanwhile,
+    // writing state here would resurrect a session whose resources are gone.
     let mut guard = state::StateGuard::acquire(&root)?;
-    guard.state.remove_session(&slug);
-    match result {
-        Ok(session) => {
-            if args.json {
-                print_up_json(&session, &root)?;
-            } else {
-                print_up_summary(&session, &config, &log);
+    if guard.state.still_owned(&slug, &op_id) {
+        guard.state.remove_session(&slug);
+        match result {
+            Ok(session) => {
+                if args.json {
+                    print_up_json(&session, &root)?;
+                } else {
+                    print_up_summary(&session, &config, &log);
+                }
+                guard.state.add_session(session);
+                guard.commit()?;
+                Ok(())
             }
-            guard.state.add_session(session);
-            guard.commit()?;
-            Ok(())
+            Err(e) => {
+                guard.commit()?;
+                Err(e)
+            }
         }
-        Err(e) => {
-            guard.commit()?;
-            Err(e)
+    } else {
+        drop(guard);
+        match result {
+            Ok(session) => {
+                log.warn(&format!(
+                    "session '{slug}' was removed or taken over by another command while provisioning; tearing the new resources back down"
+                ));
+                let _ = handler.bring_down(&session, &config, &root, false, false, &log);
+                Err(anyhow::anyhow!(
+                    "session '{slug}' was removed by another command while it was being provisioned; the resources it created were torn down — re-run `ecluse up {slug}`"
+                ))
+            }
+            Err(e) => Err(e),
         }
     }
 }
@@ -868,10 +888,10 @@ fn cmd_up_resume(
     }
 
     // Mark pending and release the lock for the health checks + startup.
-    let mut marked = existing.clone();
-    marked.status = state::SessionStatus::Pending;
-    guard.state.remove_session(&existing.slug);
-    guard.state.add_session(marked);
+    let op_id = match guard.state.mark_pending(&existing.slug) {
+        Some((_, op_id)) => op_id,
+        None => return Err(error::EcluseError::SessionNotFound(existing.slug.clone()).into()),
+    };
     guard.commit()?;
     drop(guard);
 
@@ -879,7 +899,28 @@ fn cmd_up_resume(
 
     // Re-acquire to finalize: replace with the refreshed session, or restore
     // the original (still-active) entry when nothing changed or on failure.
+    // Skip entirely when another command took the session over meanwhile —
+    // writing here would resurrect an entry that command deleted.
     let mut guard = state::StateGuard::acquire(&root)?;
+    if !guard.state.still_owned(&existing.slug, &op_id) {
+        drop(guard);
+        if let Ok(Some((updated, _, _))) = &outcome {
+            log.warn(&format!(
+                "session '{}' was removed or taken over by another command during resume; stopping the services this resume started",
+                existing.slug
+            ));
+            let handler = modes::get_handler(&config);
+            let _ = handler.bring_down(updated, &config, &root, true, true, &log);
+        }
+        return match outcome {
+            Err(e) => Err(e),
+            _ => Err(anyhow::anyhow!(
+                "session '{}' was removed by another command while it was being resumed; re-run `ecluse up {}`",
+                existing.slug,
+                existing.slug
+            )),
+        };
+    }
     guard.state.remove_session(&existing.slug);
     match outcome {
         Ok(Some((updated, started, skipped))) => {
@@ -1088,7 +1129,7 @@ fn force_kill_session_services(
                     "killing process {} on port {} ({})",
                     pid, port, svc_name
                 ));
-                terminate_with_grace(pid);
+                process::kill_pid_with_grace(pid);
             }
         }
     }
@@ -1125,23 +1166,6 @@ fn force_kill_session_services(
         let _ = docker::docker_cmd()
             .args(["stop", &container_name])
             .status();
-    }
-}
-
-/// SIGTERM, escalating to SIGKILL after a short grace period if still alive.
-fn terminate_with_grace(pid: u32) {
-    let _ = std::process::Command::new("kill")
-        .args(["-TERM", &pid.to_string()])
-        .status();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while process::pid_alive(pid) {
-        if std::time::Instant::now() >= deadline {
-            let _ = std::process::Command::new("kill")
-                .args(["-9", &pid.to_string()])
-                .status();
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 }
 
@@ -1208,31 +1232,32 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     // prompt below must never run while holding the exclusive lock.
     let slug = {
         let guard = state::StateGuard::acquire_shared(&root)?;
-        resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse down <slug>")?
+        resolve_slug_from_args(args.slug.as_deref(), &guard.state, "ecluse down <slug>")?
     };
 
     // Short exclusive section: re-verify the session and mark it pending so
     // the slug + slot stay reserved while teardown runs without the lock.
+    // Marking takes over the entry — including from a crashed or still-running
+    // up/down, whose finalize will then stand down via the ownership check.
     log.step(&format!("Loading session '{slug}'..."));
-    let session = {
+    let (session, op_id) = {
         let mut guard = state::StateGuard::acquire(&root)?;
-        let current = guard
+        let (current, op_id) = guard
             .state
-            .find_session(&slug)
-            .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?
-            .clone();
+            .mark_pending(&slug)
+            .ok_or_else(|| error::EcluseError::SessionNotFound(slug.clone()))?;
         if current.status == state::SessionStatus::Pending {
             log.warn(&format!(
-                "session '{slug}' has an operation in progress (started {}); tearing it down anyway",
-                current.started_at
+                "session '{slug}' has an operation in progress (started {}); taking it over and tearing it down",
+                current
+                    .pending_op
+                    .as_ref()
+                    .map(|op| op.since.as_str())
+                    .unwrap_or(current.started_at.as_str())
             ));
         }
-        let mut marked = current.clone();
-        marked.status = state::SessionStatus::Pending;
-        guard.state.remove_session(&slug);
-        guard.state.add_session(marked);
         guard.commit()?;
-        current
+        (current, op_id)
     };
     log.detail(&format!("slot {}, mode: {}", session.slot, session.mode));
 
@@ -1244,7 +1269,7 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         Ok(k) => k,
         Err(e) => {
             // Aborted at the prompt — restore the session before bailing out.
-            restore_session(&root, &session)?;
+            restore_session(&root, &session, &op_id)?;
             return Err(e);
         }
     };
@@ -1260,16 +1285,27 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     );
 
     let mut guard = state::StateGuard::acquire(&root)?;
-    guard.state.remove_session(&slug);
-    if let Err(e) = result {
-        // Teardown failed — keep the session visible so it can be retried.
-        let mut restored = session;
-        restored.status = state::SessionStatus::Active;
-        guard.state.add_session(restored);
+    if guard.state.still_owned(&slug, &op_id) {
+        guard.state.remove_session(&slug);
+        if let Err(e) = result {
+            // Teardown failed — keep the session visible so it can be retried.
+            let mut restored = session;
+            restored.status = state::SessionStatus::Active;
+            restored.pending_op = None;
+            guard.state.add_session(restored);
+            guard.commit()?;
+            return Err(e);
+        }
         guard.commit()?;
-        return Err(e);
+    } else {
+        // Another command took the session over during teardown — leave the
+        // entry to its new owner, but still report our own outcome.
+        drop(guard);
+        log.warn(&format!(
+            "session '{slug}' was taken over by another command during teardown; leaving its state entry alone"
+        ));
+        result?;
     }
-    guard.commit()?;
 
     if args.keep_branch {
         eprintln!(
@@ -1294,11 +1330,17 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
 
 /// Put a session back into state with Active status (used when an operation
 /// that marked it Pending aborts or fails without changing anything durable).
-fn restore_session(root: &std::path::Path, session: &state::Session) -> Result<()> {
+/// No-op when `op_id` no longer owns the entry — another command took the
+/// session over and restoring would clobber its work.
+fn restore_session(root: &std::path::Path, session: &state::Session, op_id: &str) -> Result<()> {
     let mut guard = state::StateGuard::acquire(root)?;
+    if !guard.state.still_owned(&session.slug, op_id) {
+        return Ok(());
+    }
     guard.state.remove_session(&session.slug);
     let mut restored = session.clone();
     restored.status = state::SessionStatus::Active;
+    restored.pending_op = None;
     guard.state.add_session(restored);
     guard.commit()
 }
@@ -1346,20 +1388,16 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
 
         // Re-verify under the lock (another command may have removed it) and
         // mark pending for the unlocked teardown.
-        let current = {
+        let (current, op_id) = {
             let mut guard = state::StateGuard::acquire(&root)?;
-            match guard.state.find_session(&session.slug).cloned() {
+            match guard.state.mark_pending(&session.slug) {
                 None => {
                     log.detail("already removed — skipped");
                     continue;
                 }
-                Some(current) => {
-                    let mut marked = current.clone();
-                    marked.status = state::SessionStatus::Pending;
-                    guard.state.remove_session(&session.slug);
-                    guard.state.add_session(marked);
+                Some((current, op_id)) => {
                     guard.commit()?;
-                    current
+                    (current, op_id)
                 }
             }
         };
@@ -1367,13 +1405,20 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
         match handler.bring_down(&current, &config, &root, args.keep_volumes, keep_wt, &log) {
             Ok(()) => {
                 let mut guard = state::StateGuard::acquire(&root)?;
-                guard.state.remove_session(&current.slug);
-                guard.commit()?;
+                if guard.state.still_owned(&current.slug, &op_id) {
+                    guard.state.remove_session(&current.slug);
+                    guard.commit()?;
+                } else {
+                    log.warn(&format!(
+                        "'{}' was taken over by another command during teardown; leaving its state entry alone",
+                        current.slug
+                    ));
+                }
             }
             Err(e) => {
                 log.warn(&format!("'{}' failed: {}", current.slug, e));
                 failed.push(current.slug.clone());
-                restore_session(&root, &current)?;
+                restore_session(&root, &current, &op_id)?;
             }
         }
     }
@@ -1508,6 +1553,22 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
         for w in process::check_processes_alive(&s.process_manager, &s.spawn_result(), &s.slug) {
             log.warn(&format!("[{}] {}", s.slug, w));
         }
+        // A pending entry only lives for the duration of one up/down; one that
+        // sticks around means the owning command crashed and the slot leaks.
+        if let Some(op) = &s.pending_op {
+            if let Ok(since) = chrono::DateTime::parse_from_rfc3339(&op.since) {
+                let age = chrono::Utc::now().signed_duration_since(since);
+                if age > chrono::Duration::minutes(15) {
+                    log.warn(&format!(
+                        "session '{}' has been pending for {} minutes — if the owning ecluse command crashed, run `ecluse down {}` to clean it up and free slot {}",
+                        s.slug,
+                        age.num_minutes(),
+                        s.slug,
+                        s.slot
+                    ));
+                }
+            }
+        }
     }
 
     Ok(())
@@ -1519,7 +1580,7 @@ fn cmd_shell(args: cli::ShellArgs) -> Result<()> {
     let (_, root) = config::Config::find_and_load()?;
     let guard = state::StateGuard::acquire_shared(&root)?;
 
-    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse shell <slug>")?;
+    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard.state, "ecluse shell <slug>")?;
 
     let session = guard
         .state
@@ -1633,7 +1694,7 @@ fn cmd_env(args: cli::EnvArgs) -> Result<()> {
     let (_, root) = config::Config::find_and_load()?;
     let guard = state::StateGuard::acquire_shared(&root)?;
 
-    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse env <slug>")?;
+    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard.state, "ecluse env <slug>")?;
     let session = guard
         .state
         .find_session(&slug)
@@ -1733,6 +1794,10 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
     // Acquire state lock.
     let mut guard = state::StateGuard::acquire(&root)?;
     let existing = guard.state.find_session(&slug).cloned();
+    if let Some(ref s) = existing {
+        // Never overwrite an entry another command is mid-operating on.
+        ensure_session_settled(s)?;
+    }
     let update_mode = existing.is_some();
 
     // Allocate or reuse slot.
@@ -1859,6 +1924,7 @@ fn cmd_sync(args: cli::SyncArgs) -> Result<()> {
         branch,
         worktree_path: worktree_path.display().to_string(),
         status: state::SessionStatus::Active,
+        pending_op: None,
         app_port,
         port_overrides,
         process_manager: Some(process::ProcessManager::Nohup),
@@ -2111,7 +2177,7 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
     let (config, root) = config::Config::find_and_load()?;
     let guard = state::StateGuard::acquire_shared(&root)?;
 
-    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard, "ecluse status <slug>")?;
+    let slug = resolve_slug_from_args(args.slug.as_deref(), &guard.state, "ecluse status <slug>")?;
     let session = guard
         .state
         .find_session(&slug)
