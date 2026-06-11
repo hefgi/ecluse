@@ -20,8 +20,8 @@ Each slot gets a distinct `PORT` so multiple worktrees can serve simultaneously.
 
 ## Hooks
 
-- `on_up`: runs `npx prisma migrate deploy` to apply migrations.
-- `on_down`: runs `npx prisma migrate reset --force` to wipe the slot's database on teardown (optional — remove if you want to keep data).
+- `post_up`: runs `npx prisma migrate deploy` to apply migrations.
+- `pre_down`: runs `npx prisma migrate reset --force` to wipe the slot's database on teardown (optional — remove if you want to keep data).
 
 ## .env setup
 

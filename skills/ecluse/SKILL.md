@@ -692,6 +692,49 @@ RUST_LOG=debug ecluse up feat-foo
 
 ---
 
+## Concurrency and recovery
+
+`ecluse up`/`down` no longer hold the state lock while provisioning or tearing
+down — sessions are reserved with a **pending** marker instead, so parallel
+agents never block on each other's slow image pulls or hooks.
+
+What this means for you:
+
+- `ecluse ls` shows `<slug> (pending)` while an up/down is in flight
+  (`"status": "pending"` in `ls --json`). Other read commands keep working.
+- Running `up`, `env`, `status`, `shell`, or `sync` against a pending session
+  fails with `operation in progress`. Wait for the owning command, or — if it
+  crashed — run `ecluse down <slug>` to take the session over and clean it up.
+- `ls` warns when a session has been pending for more than 15 minutes; that
+  means the owning command died and the slot is leaked until you `down` it.
+- If a session is removed (`down`, `flush`) while another command was still
+  provisioning it, the loser detects the takeover, tears down whatever it
+  created, and exits non-zero. State never resurrects deleted sessions.
+
+### Service identity
+
+Pid files record the process **start token** alongside the PID. A recycled PID
+(same number, different process) is never killed, never attributed by
+`whose-pid`, and reports as down in `status`. Containers are matched by their
+compose project label, never by name substrings.
+
+### tmux sessions
+
+Services run as their tmux window's own process. A command that exits within
+~1.5 s fails `ecluse up` with the exit status and last output — a "ready"
+session means the services actually started. Dead panes are kept on screen
+(`remain-on-exit`) so you can attach and read the error; window `shell` is a
+plain shell with the session env loaded. Service commands must be
+long-running: a command like `echo done` is treated as an instant failure
+under tmux.
+
+### --force and unowned ports
+
+`ecluse up --force` only kills processes that **belong to the session**
+(verified via pid files / tmux panes). A process squatting the session's port
+that ecluse does not own produces a warning naming the PID instead of a kill —
+inspect it with `ecluse whose-pid <pid>` and kill it manually if intended.
+
 ## Limits
 
 What ecluse intentionally does not do in v0. These are design decisions, not bugs.

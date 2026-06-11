@@ -25,7 +25,7 @@ Postgres runs in a Docker container managed by ecluse. The Go binary runs native
 
 ## Hooks
 
-- `on_up`: runs `migrate -path ./migrations -database "$DATABASE_URL" up` to apply pending migrations.
+- `post_up`: runs `migrate -path ./migrations -database "$DATABASE_URL" up` to apply pending migrations.
 
 Requires the [`migrate` CLI](https://github.com/golang-migrate/migrate) to be installed (`brew install golang-migrate`).
 

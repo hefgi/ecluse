@@ -35,7 +35,7 @@ const mongoUrl = `mongodb://localhost:${process.env.ECLUSE_MONGODB_PORT}/${proce
 
 ## Hooks
 
-- `on_up`: runs `npm run db:seed` (optional) to seed initial data for this slot.
+- `post_up`: runs `npm run db:seed` (optional) to seed initial data for this slot.
 
 ## Usage
 

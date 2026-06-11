@@ -8,5 +8,5 @@ name = "app"
 base_port = 3000
 
 [hooks]
-on_up = "npx prisma migrate deploy"
-on_down = "npx prisma migrate reset --force"
+post_up = "npx prisma migrate deploy"
+pre_down = "npx prisma migrate reset --force"

@@ -27,7 +27,7 @@ Postgres runs in a Docker container managed by ecluse. The FastAPI process and V
 
 ## Hooks
 
-- `on_up`: runs `alembic upgrade head` to apply pending migrations against the slot's database.
+- `post_up`: runs `alembic upgrade head` to apply pending migrations against the slot's database.
 
 ## Usage
 

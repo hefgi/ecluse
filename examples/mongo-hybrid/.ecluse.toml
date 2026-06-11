@@ -14,4 +14,4 @@ run = "docker"
 base_port = 27017
 
 [hooks]
-on_up = "npm run db:seed"
+post_up = "npm run db:seed"

@@ -24,8 +24,8 @@ brew install k3d helm helmfile
 
 ## Hooks
 
-- `on_up`: `k3d cluster create ecluse-$ECLUSE_SLUG --port "$PORT:80@loadbalancer"` — provisions a fresh k3s cluster.
-- `on_down`: `k3d cluster delete ecluse-$ECLUSE_SLUG` — destroys the cluster and all its resources.
+- `post_up`: `k3d cluster create ecluse-$ECLUSE_SLUG --port "$PORT:80@loadbalancer"` — provisions a fresh k3s cluster.
+- `pre_down`: `k3d cluster delete ecluse-$ECLUSE_SLUG` — destroys the cluster and all its resources.
 
 ## Usage
 

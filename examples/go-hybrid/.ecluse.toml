@@ -14,4 +14,4 @@ run = "docker"
 base_port = 5432
 
 [hooks]
-on_up = "migrate -path ./migrations -database \"postgres://localhost:$ECLUSE_POSTGRES_PORT/myapp\" up"
+post_up = "migrate -path ./migrations -database \"postgres://localhost:$ECLUSE_POSTGRES_PORT/myapp\" up"
