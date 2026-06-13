@@ -1,6 +1,6 @@
 [package]
 name = "ecluse"
-version = "0.2.17"
+version = "0.3.0"
 edition = "2021"
 description = "Ephemeral local environments for coding agents — any stack."
 license = "Apache-2.0"

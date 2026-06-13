@@ -5,7 +5,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.3.0] — 2026-06-10
 
 ### Added
 - Pending sessions: `up`/`down` reserve the session and release the state lock during provisioning/teardown, so parallel sessions never serialize on image pulls or hooks. `ls` shows `(pending)` (and `"status"` in `--json`), warns about entries pending >15 minutes after a crashed command, and `down <slug>` recovers them. Concurrent finalizes are guarded by per-operation ownership tokens — deleted sessions are never resurrected by a racing command.
