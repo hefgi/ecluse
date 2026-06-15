@@ -270,12 +270,17 @@ pub fn merge_worktree_env(
 /// Files that don't exist are silently skipped.
 /// Sent as a separate command before the service command so that
 /// manual restarts inside the tmux window (`↑ Enter`) also have the env.
+///
+/// Paths are emitted with an explicit `./` prefix because zsh's POSIX `.`
+/// builtin does NOT search the current directory unless `.` is in `$PATH` —
+/// `. .env` silently fails as "no such file or directory" under zsh
+/// (the default macOS shell) while working in bash. `./` works in both.
 fn build_source_preamble(worktree: &Path) -> String {
     let files = [".env", ".env.local", ".env.ecluse"];
     files
         .iter()
         .filter(|f| worktree.join(f).exists())
-        .map(|f| format!("set -a; . {}; set +a", shell_escape(f)))
+        .map(|f| format!("set -a; . {}; set +a", shell_escape(&format!("./{}", f))))
         .collect::<Vec<_>>()
         .join("; ")
 }
@@ -1096,6 +1101,51 @@ mod tests {
             !one_pid.exists(),
             "service one's pid file should be removed by partial-spawn cleanup"
         );
+    }
+
+    // ── build_source_preamble ─────────────────────────────────────────────────
+
+    #[test]
+    fn build_source_preamble_prefixes_relative_paths_with_dot_slash() {
+        // zsh's POSIX `.` builtin does NOT search cwd unless `.` is in $PATH.
+        // The emitted command must use `./<name>` so it works in both bash and zsh.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join(".env"), "FOO=bar").unwrap();
+        std::fs::write(dir.path().join(".env.local"), "BAR=baz").unwrap();
+        let cmd = build_source_preamble(dir.path());
+        assert!(
+            cmd.contains(". './.env'"),
+            "expected `. './.env'` in: {}",
+            cmd
+        );
+        assert!(
+            cmd.contains(". './.env.local'"),
+            "expected `. './.env.local'` in: {}",
+            cmd
+        );
+        // Never emit the bare `. '.env'` form — that's the regression we're fixing.
+        assert!(
+            !cmd.contains(". '.env'"),
+            "must not emit zsh-incompatible `. '.env'`: {}",
+            cmd
+        );
+    }
+
+    #[test]
+    fn build_source_preamble_skips_missing_files() {
+        let dir = TempDir::new().unwrap();
+        // Only .env present.
+        std::fs::write(dir.path().join(".env"), "FOO=bar").unwrap();
+        let cmd = build_source_preamble(dir.path());
+        assert!(cmd.contains(". './.env'"));
+        assert!(!cmd.contains(".env.local"));
+        assert!(!cmd.contains(".env.ecluse"));
+    }
+
+    #[test]
+    fn build_source_preamble_empty_when_no_files() {
+        let dir = TempDir::new().unwrap();
+        assert_eq!(build_source_preamble(dir.path()), "");
     }
 }
 
