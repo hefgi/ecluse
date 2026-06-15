@@ -554,14 +554,85 @@ mod tests {
         let keys: Vec<String> = parse_env_file(&path).into_iter().map(|(k, _)| k).collect();
         assert_eq!(keys, vec!["B", "A"]);
     }
+
+    #[test]
+    fn parse_env_file_strips_outer_double_quotes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "ONYX_ENVIRONMENT=\"development\"\n").unwrap();
+        let pairs = parse_env_file(&path);
+        assert_eq!(pairs[0].1, "development");
+    }
+
+    #[test]
+    fn parse_env_file_strips_outer_single_quotes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "FOO='bar baz'\n").unwrap();
+        let pairs = parse_env_file(&path);
+        assert_eq!(pairs[0].1, "bar baz");
+    }
+
+    #[test]
+    fn parse_env_file_keeps_unquoted_values_verbatim() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "URL=postgres://x:5433/db?a=b\n").unwrap();
+        let pairs = parse_env_file(&path);
+        assert_eq!(pairs[0].1, "postgres://x:5433/db?a=b");
+    }
+
+    #[test]
+    fn parse_env_file_keeps_unmatched_quotes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "FOO=\"unmatched\nBAR='also unmatched\n").unwrap();
+        let pairs = parse_env_file(&path);
+        assert_eq!(pairs[0].1, "\"unmatched");
+        assert_eq!(pairs[1].1, "'also unmatched");
+    }
+
+    #[test]
+    fn parse_env_file_keeps_inner_quotes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "MSG=\"hello \\\"world\\\"\"\n").unwrap();
+        let pairs = parse_env_file(&path);
+        // Outer pair stripped, inner literal backslash-escaped quotes preserved as-is.
+        assert_eq!(pairs[0].1, "hello \\\"world\\\"");
+    }
+
+    #[test]
+    fn parse_env_file_empty_quoted_value() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "EMPTY=\"\"\n").unwrap();
+        let pairs = parse_env_file(&path);
+        assert_eq!(pairs[0].1, "");
+    }
+
+    #[test]
+    fn parse_env_file_single_quote_char_value() {
+        // A single quote character alone is not a matched pair — kept verbatim.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        std::fs::write(&path, "Q=\"\n").unwrap();
+        let pairs = parse_env_file(&path);
+        assert_eq!(pairs[0].1, "\"");
+    }
 }
 
 /// Parse a .env-style file into key/value pairs, in file order.
 /// Blank lines and `#` comments are skipped; each line splits on the first
-/// `=`; keys are trimmed, values taken as-is. Missing file → empty.
+/// `=`; keys are trimmed.
 ///
-/// The single parser for `.env.ecluse` — `shell`, `env`, `up --json`, and
-/// process spawning must all read the file the same way.
+/// Values: a matched outer pair of `"..."` or `'...'` is stripped (dotenv
+/// convention — `FOO="bar"` and `FOO=bar` both mean `FOO=bar`). Unmatched
+/// quotes and values without quotes are kept verbatim, so URL/path values
+/// like `postgres://x:5433/db?a=b` round-trip unchanged.
+///
+/// The single parser for `.env`-style files — `shell`, `env`, `up --json`,
+/// and process spawning must all read the file the same way.
 pub fn parse_env_file(path: &Path) -> Vec<(String, String)> {
     let Ok(content) = std::fs::read_to_string(path) else {
         return vec![];
@@ -578,9 +649,23 @@ pub fn parse_env_file(path: &Path) -> Vec<(String, String)> {
             if k.is_empty() {
                 return None;
             }
-            Some((k.to_string(), v.to_string()))
+            Some((k.to_string(), strip_dotenv_quotes(v).to_string()))
         })
         .collect()
+}
+
+/// Strip a matched outer pair of `"..."` or `'...'` from a dotenv value.
+/// Unmatched or absent quotes return the input unchanged.
+fn strip_dotenv_quotes(v: &str) -> &str {
+    let bytes = v.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
+            return &v[1..v.len() - 1];
+        }
+    }
+    v
 }
 
 pub fn write_env_file(worktree: &Path, env: &HashMap<String, String>) -> Result<()> {
