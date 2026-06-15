@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- tmux startup sources `.env`, `.env.local`, and `.env.ecluse` with an explicit `./` prefix (`. './.env'`). zsh's POSIX `.` builtin does not search cwd unless `.` is in `$PATH`, so the previous bare `. '.env'` form silently failed on zsh (the default macOS shell), leaving services in tmux windows without the per-slot env. (#27)
+- `parse_env_file` now strips a matched outer pair of `"..."` or `'...'` from dotenv values. The per-slug preamble previously echoed `ONYX_ENVIRONMENT='"development"'`, leaking the literal double-quote characters into the runtime env and breaking strict consumers (e.g. zod `z.literal("development")`). Unquoted values like `postgres://x:5433/db?a=b` are unaffected. (#28)
+
+---
+
 ## [0.3.0] — 2026-06-10
 
 ### Added
