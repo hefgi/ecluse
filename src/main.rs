@@ -437,6 +437,65 @@ mod tests {
         // Single char after sanitization → invalid slug
         assert!(sanitize_to_slug("a").is_err());
     }
+
+    // ── status_str ────────────────────────────────────────────────────────────
+
+    fn svc_status(
+        managed: bool,
+        healthy: bool,
+        wrong_owner: bool,
+        listener_pid: Option<u32>,
+    ) -> ServiceStatus {
+        ServiceStatus {
+            name: "api".into(),
+            kind: "native",
+            port: Some(3001),
+            healthy,
+            managed,
+            pid: Some(42),
+            tmux_window: None,
+            listener_pid,
+            wrong_owner,
+        }
+    }
+
+    #[test]
+    fn status_str_unmanaged_shows_dash() {
+        let s = svc_status(false, false, false, None);
+        assert_eq!(status_str(&s), "\u{2014}");
+    }
+
+    #[test]
+    fn status_str_healthy_managed_shows_up() {
+        let s = svc_status(true, true, false, None);
+        assert_eq!(status_str(&s), "\u{2713} up");
+    }
+
+    #[test]
+    fn status_str_unhealthy_managed_shows_down() {
+        let s = svc_status(true, false, false, None);
+        assert_eq!(status_str(&s), "\u{2717} down");
+    }
+
+    #[test]
+    fn status_str_wrong_owner_with_listener_pid_shows_pid() {
+        let s = svc_status(true, false, true, Some(99999));
+        assert_eq!(status_str(&s), "\u{2717} wrong owner (PID 99999)");
+    }
+
+    #[test]
+    fn status_str_wrong_owner_without_listener_pid() {
+        let s = svc_status(true, false, true, None);
+        assert_eq!(status_str(&s), "\u{2717} wrong owner");
+    }
+
+    #[test]
+    fn status_str_wrong_owner_takes_precedence_over_healthy() {
+        // A service can simultaneously have its stored PID alive AND a
+        // different process bound to its port. `wrong_owner` wins.
+        let s = svc_status(true, true, true, Some(99999));
+        assert_eq!(status_str(&s), "\u{2717} wrong owner (PID 99999)");
+    }
 }
 
 /// Sanitize a branch name or slug into a valid ecluse slug + original branch pair.
@@ -2094,7 +2153,11 @@ fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
                     if pid == std::process::id() {
                         continue;
                     }
-                    log.detail(&format!("  kill -TERM -- -{} (cwd {})", pid, path.display()));
+                    log.detail(&format!(
+                        "  kill -TERM -- -{} (cwd {})",
+                        pid,
+                        path.display()
+                    ));
                     process::kill_process_group_with_grace(pid);
                 }
             }
@@ -2116,8 +2179,9 @@ fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
                 .extra_ports
                 .iter()
                 .map(|ep| {
-                    ep.base_port
-                        .saturating_add((slot as u16).saturating_mul(config.slot_stride.max(1) as u16))
+                    ep.base_port.saturating_add(
+                        (slot as u16).saturating_mul(config.slot_stride.max(1) as u16),
+                    )
                 })
                 .collect();
             for port in std::iter::once(primary).chain(extras) {
@@ -2194,6 +2258,35 @@ struct ServiceStatus {
     managed: bool,
     pid: Option<u32>,
     tmux_window: Option<String>,
+    /// PID of whatever process is actually listening on `port`, if any.
+    /// Only populated for native services; docker port mappings are owned by
+    /// the daemon, not the container process, so the check doesn't apply.
+    listener_pid: Option<u32>,
+    /// True iff a listener is bound to `port` AND that listener is neither
+    /// `pid` nor a descendant of it. A stale orphan from a previous session
+    /// hijacking the port — `ecluse status` reports the service as down
+    /// even though something IS responding to requests.
+    wrong_owner: bool,
+}
+
+/// Human-readable status string for a service row. Extracted from cmd_status
+/// so the wrong-owner branch can be unit-tested.
+fn status_str(s: &ServiceStatus) -> String {
+    if !s.managed {
+        "\u{2014}".into() // — port-only, not ecluse-managed
+    } else if s.wrong_owner {
+        // A different process owns the configured port — likely an orphan from
+        // a previous session. The service is "down" from ecluse's perspective
+        // even if something IS responding.
+        match s.listener_pid {
+            Some(pid) => format!("\u{2717} wrong owner (PID {})", pid),
+            None => "\u{2717} wrong owner".into(),
+        }
+    } else if s.healthy {
+        "\u{2713} up".into()
+    } else {
+        "\u{2717} down".into()
+    }
 }
 
 #[derive(Tabled)]
@@ -2310,14 +2403,42 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
         // Port-allocation-only services (no command) are never spawned by
         // ecluse — don't report them as down.
         let managed = svc.command.is_some();
+
+        // Listener identity check: if SOME process is bound to the expected
+        // port and it's neither this service's recorded PID nor a descendant
+        // of it, the port is being served by an orphan from a previous
+        // session (or unrelated software). Surface this rather than silently
+        // reporting healthy=true — the service is technically alive but the
+        // user is hitting the wrong process.
+        let (listener_pid, wrong_owner) = if managed {
+            match (port, pid) {
+                (Some(p), Some(stored)) => match validate::port_listener(p) {
+                    Some(actual)
+                        if actual != stored
+                            && actual != 0
+                            && !whose_pid::is_descendant(stored, actual) =>
+                    {
+                        (Some(actual), true)
+                    }
+                    other => (other, false),
+                },
+                _ => (None, false),
+            }
+        } else {
+            (None, false)
+        };
+        let healthy_with_owner_check = healthy && !wrong_owner;
+
         statuses.push(ServiceStatus {
             name: svc.name.clone(),
             kind: "native",
             port,
-            healthy: healthy || !managed,
+            healthy: healthy_with_owner_check || !managed,
             managed,
             pid,
             tmux_window,
+            listener_pid,
+            wrong_owner,
         });
     }
 
@@ -2336,6 +2457,8 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
             managed: true,
             pid: None,
             tmux_window: None,
+            listener_pid: None,
+            wrong_owner: false,
         });
     }
 
@@ -2353,6 +2476,8 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
                     "managed": s.managed,
                     "pid": s.pid,
                     "tmux_window": s.tmux_window,
+                    "listener_pid": s.listener_pid,
+                    "wrong_owner": s.wrong_owner,
                 })
             })
             .collect();
@@ -2382,15 +2507,6 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
         if statuses.is_empty() {
             println!("No services defined in .ecluse.toml.");
         } else {
-            let status_str = |s: &ServiceStatus| -> String {
-                if !s.managed {
-                    "\u{2014}".into() // — port-only, not ecluse-managed
-                } else if s.healthy {
-                    "\u{2713} up".into()
-                } else {
-                    "\u{2717} down".into()
-                }
-            };
             let port_str = |s: &ServiceStatus| -> String {
                 s.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into())
             };

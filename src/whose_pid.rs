@@ -106,7 +106,7 @@ fn match_tmux_session(session: &Session, pid: u32) -> Option<PidOwner> {
 }
 
 /// True iff `descendant` is a transitive child of `ancestor` (up to 5 levels deep).
-fn is_descendant(ancestor: u32, descendant: u32) -> bool {
+pub(crate) fn is_descendant(ancestor: u32, descendant: u32) -> bool {
     if ancestor == descendant {
         return false;
     }
