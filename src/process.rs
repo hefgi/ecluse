@@ -574,6 +574,13 @@ fn tmux_pane_tail(session: &str, window: &str, n: usize) -> String {
 
 fn kill_tmux(result: &SpawnResult) {
     if let Some(session) = &result.tmux_session {
+        // Bare `tmux kill-session` only delivers SIGHUP to each pane's foreground
+        // process. Wrapper chains like sh → pnpm → node → vite reparent and survive,
+        // holding ports across `ecluse down`. Group-kill every pane PID first (same
+        // TERM→KILL grace as the nohup path), then kill the now-empty session.
+        for pid in tmux_session_pane_pids(session) {
+            kill_process_group(pid);
+        }
         Command::new("tmux")
             .args(["kill-session", "-t", session])
             .output()
@@ -582,6 +589,23 @@ fn kill_tmux(result: &SpawnResult) {
     for pid_file in &result.pid_files {
         let _ = std::fs::remove_file(pid_file);
     }
+}
+
+/// All pane PIDs across all windows of `session`. Empty on any tmux failure.
+fn tmux_session_pane_pids(session: &str) -> Vec<u32> {
+    let Ok(out) = Command::new("tmux")
+        .args(["list-panes", "-s", "-t", session, "-F", "#{pane_pid}"])
+        .output()
+    else {
+        return vec![];
+    };
+    if !out.status.success() {
+        return vec![];
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| l.trim().parse::<u32>().ok())
+        .collect()
 }
 
 fn spawn_nohup(
@@ -1233,5 +1257,60 @@ mod tmux_tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         assert!(!pid_alive(pid), "pane process must die with the session");
+    }
+
+    fn wait_until(timeout: std::time::Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        cond()
+    }
+
+    // The pane command spawns a background child (the common pnpm → node → vite
+    // case); kill_services must take the whole process group, not just the pane.
+    #[test]
+    fn kill_tmux_kills_whole_process_group() {
+        if !tmux_available() {
+            return;
+        }
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".ecluse")).unwrap();
+        let child_pid_file = dir.path().join("child.pid");
+        let svc = native_svc(
+            "bg",
+            &format!("sleep 300 & echo $! > {}; wait", child_pid_file.display()),
+        );
+        let result = spawn_services(
+            &ProcessManager::Tmux,
+            "tmux-pg-test",
+            &[&svc],
+            dir.path(),
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+        assert!(
+            wait_until(std::time::Duration::from_secs(5), || child_pid_file
+                .exists()),
+            "background child pid file never appeared"
+        );
+        let child_pid: u32 = std::fs::read_to_string(&child_pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(pid_alive(child_pid), "background child should be running");
+
+        kill_services(&ProcessManager::Tmux, &result);
+
+        assert!(
+            wait_until(std::time::Duration::from_secs(5), || !pid_alive(child_pid)),
+            "background child must die with the tmux pane's process group"
+        );
+        assert!(!tmux_session_exists("ecluse-tmux-pg-test"));
     }
 }
