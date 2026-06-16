@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Fixed
+- `ecluse down` in tmux mode now kills the entire pane process group, not just the pane's foreground shell. Previously, multi-level child chains (`sh → pnpm → node → vite`, plus anything that calls `setsid()` like Cloudflare workerd) survived as orphans adopted by `launchd`/`init`, holding their ports indefinitely. Each orphan held 4-8 ports; after a few `up`/`down` cycles the next `ecluse up` would silently land on a port already held by a zombie, serving a different worktree's content. The same TERM→KILL grace pattern that was applied to the nohup path in PR #18 now applies to tmux. (#30)
+- `ecluse flush` now sweeps every process whose cwd is inside a worktree (`lsof +d <worktree>`) AND every listener on a configured port (`base_port + slot*slot_stride` and `extra_ports[].base_port + slot*slot_stride` across all `max_slots`), killing each with TERM→KILL grace. The flush confirmation prompt warns that editors/shells with files open in worktrees will be killed; `--yes` bypass for CI is unchanged. (#30)
+- `ecluse status` detects when the configured port is being served by a different process than the recorded PID (or any of its descendants). The service is flagged `✗ wrong owner (PID N)` instead of being silently reported as healthy. `--json` output gains `listener_pid` and `wrong_owner` fields. Exit code semantics unchanged: a wrong-owner row trips the existing `exit 1` path. (#30)
+
+---
+
 ## [0.3.1] — 2026-06-15
 
 ### Fixed
