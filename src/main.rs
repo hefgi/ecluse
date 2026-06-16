@@ -2001,6 +2001,9 @@ fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
     if !args.yes {
         print!(
             "This will destroy all ecluse sessions, worktrees, and running services.\n\
+             It will also KILL every process with a file open inside the worktrees \
+             (including editors, shells, and `tail -f` against worktree logs) and \
+             every process listening on a configured port.\n\
              There is no undo. Continue? [y/N] "
         );
         std::io::stdout().flush()?;
@@ -2067,6 +2070,67 @@ fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
             log.detail(&format!("  compose down -p '{project}'"));
             if let Err(e) = docker::compose_down_by_project(&project, false) {
                 log.warn(&format!("  could not stop project '{project}': {e}"));
+            }
+        }
+    }
+
+    // Step 3a: sweep every process whose cwd is inside a worktree. Step 1
+    // killed services tracked in state.json; this catches detached descendants
+    // (workerd, vite plugins that setsid()) and processes that crashed out of
+    // a recorded session. Runs BEFORE worktree removal so git worktree remove
+    // doesn't race a live process holding file handles.
+    let worktree_dir_path = root.join(&config.worktree_dir);
+    if worktree_dir_path.exists() {
+        log.step("Sweeping stray processes with cwd in worktrees...");
+        if let Ok(entries) = std::fs::read_dir(&worktree_dir_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                for pid in sync::pids_in_directory(&path) {
+                    // Skip our own pid — flush runs from inside the repo and
+                    // would otherwise commit suicide on the first sweep.
+                    if pid == std::process::id() {
+                        continue;
+                    }
+                    log.detail(&format!("  kill -TERM -- -{} (cwd {})", pid, path.display()));
+                    process::kill_process_group_with_grace(pid);
+                }
+            }
+        }
+    }
+
+    // Step 3b: sweep every listener on any port the config can allocate. This
+    // catches orphans that no longer have an open file inside the worktree
+    // (e.g. a daemonized process that chdir'd to /) but are still holding a
+    // port from the configured range.
+    log.step("Sweeping listeners on configured ports...");
+    let mut swept_listener_pids: std::collections::HashSet<u32> = Default::default();
+    for svc in &config.services {
+        for slot in 1..=config.max_slots {
+            // Primary port (covers host_port override).
+            let primary = svc.port(slot, config.slot_stride);
+            // Extra ports (debugger sockets, secondary listeners).
+            let extras: Vec<u16> = svc
+                .extra_ports
+                .iter()
+                .map(|ep| {
+                    ep.base_port
+                        .saturating_add((slot as u16).saturating_mul(config.slot_stride.max(1) as u16))
+                })
+                .collect();
+            for port in std::iter::once(primary).chain(extras) {
+                if let Some(pid) = validate::port_listener(port) {
+                    if pid == 0 || pid == std::process::id() {
+                        continue;
+                    }
+                    if !swept_listener_pids.insert(pid) {
+                        continue;
+                    }
+                    log.detail(&format!("  kill -TERM -- -{} (port {})", pid, port));
+                    process::kill_process_group_with_grace(pid);
+                }
             }
         }
     }

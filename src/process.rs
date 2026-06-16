@@ -717,6 +717,15 @@ fn kill_process_group(pgid: u32) {
     signal_with_grace(&format!("-{}", pgid));
 }
 
+/// Public wrapper around the module-private `kill_process_group` for callers
+/// that need to TERM→KILL a process group (e.g. `ecluse flush` sweeping
+/// orphaned descendants of long-dead sessions). For an ecluse-spawned service
+/// the pgid equals the leader PID stored in the pid file, so callers can just
+/// pass the recorded PID.
+pub fn kill_process_group_with_grace(pgid: u32) {
+    kill_process_group(pgid);
+}
+
 /// TERM a single process, escalating to KILL after the grace period.
 pub fn kill_pid_with_grace(pid: u32) {
     signal_with_grace(&pid.to_string());
