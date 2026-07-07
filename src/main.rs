@@ -1359,8 +1359,15 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     if guard.state.still_owned(&slug, &op_id) {
         if let Err(e) = result {
             // Teardown failed — restore the session so it can be retried.
+            // Preserve a pre-existing Stopped status (a `down` on an already
+            // stopped session that failed); otherwise settle back to Active.
+            let restore_status = if session.status == state::SessionStatus::Stopped {
+                state::SessionStatus::Stopped
+            } else {
+                state::SessionStatus::Active
+            };
             let mut restored = session;
-            restored.status = state::SessionStatus::Active;
+            restored.status = restore_status;
             restored.pending_op = None;
             guard.state.add_session(restored);
             guard.commit()?;
@@ -1406,10 +1413,12 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     Ok(())
 }
 
-/// Put a session back into state with Active status (used when an operation
-/// that marked it Pending aborts or fails without changing anything durable).
-/// No-op when `op_id` no longer owns the entry — another command took the
-/// session over and restoring would clobber its work.
+/// Restore a session that was marked Pending for an operation that then aborted
+/// or failed without changing anything durable. A pre-existing Stopped status is
+/// preserved (a `down`/`shutdown` on an already stopped session that bailed);
+/// otherwise the entry settles back to Active. No-op when `op_id` no longer owns
+/// the entry — another command took the session over and restoring would clobber
+/// its work.
 fn restore_session(root: &std::path::Path, session: &state::Session, op_id: &str) -> Result<()> {
     let mut guard = state::StateGuard::acquire(root)?;
     if !guard.state.still_owned(&session.slug, op_id) {
@@ -1417,7 +1426,11 @@ fn restore_session(root: &std::path::Path, session: &state::Session, op_id: &str
     }
     guard.state.remove_session(&session.slug);
     let mut restored = session.clone();
-    restored.status = state::SessionStatus::Active;
+    restored.status = if session.status == state::SessionStatus::Stopped {
+        state::SessionStatus::Stopped
+    } else {
+        state::SessionStatus::Active
+    };
     restored.pending_op = None;
     guard.state.add_session(restored);
     guard.commit()

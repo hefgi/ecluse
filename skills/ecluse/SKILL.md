@@ -914,7 +914,7 @@ ecluse status --quiet            # exit-code only (0 = all up, 1 = any down)
 
 ```bash
 ecluse down feat-foo --keep-worktree   # stops services, marks the session Stopped (slot reserved), keeps worktree on disk
-ecluse up feat-foo --reuse-worktree    # resumes at the same slot, skips worktree creation
+ecluse up feat-foo                      # resumes at the same slot (stopped session auto-detected; --reuse-worktree not needed)
 ```
 
 Use this when a service failed to bind after `up` and you want a fresh start without losing changes in the worktree. While stopped, `ecluse env`, `ecluse shell`, and `ecluse status` on that session error with a hint to run `ecluse up` — they will not surface stale, no-longer-running ports.

@@ -173,7 +173,7 @@ ecluse up --skip api  # skip api; start everything else
 
 ```bash
 ecluse down feat-foo --keep-worktree   # services torn down, worktree + branch kept, slot reserved
-ecluse up feat-foo --reuse-worktree    # resumes at the same slot and ports, worktree reused
+ecluse up feat-foo                      # resumes at the same slot and ports (stopped session auto-detected)
 ```
 
 **Port override** — pin a specific service to a port for this session (useful when the auto-assigned port conflicts with something ecluse can't detect):
@@ -260,8 +260,8 @@ Hooks run as shell commands inside the worktree directory with all `.env.ecluse`
 **Ports are checked, not reserved.** ecluse finds a free port at `ecluse up` time and writes it to `.env.ecluse`. There is a small window between the check and when your process actually binds — if something else takes the port in between, the port in `.env.ecluse` will be wrong. The fix is to tear down and recreate the session:
 
 ```bash
-ecluse down feat-foo --keep-worktree
-ecluse up feat-foo --reuse-worktree
+ecluse down feat-foo --keep-worktree   # session shows as `feat-foo (stopped)` in `ecluse ls` until the next up
+ecluse up feat-foo                      # resumes the stopped session and re-probes for free ports
 ```
 
 Or pin a specific port manually:
