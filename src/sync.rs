@@ -204,7 +204,7 @@ pub(crate) fn tmux_window_exists(session: &str, window: &str) -> bool {
 // ── internal helpers ──────────────────────────────────────────────────────────
 
 /// Return unique PIDs of processes with an open file descriptor inside `dir`.
-fn pids_in_directory(dir: &Path) -> Vec<u32> {
+pub(crate) fn pids_in_directory(dir: &Path) -> Vec<u32> {
     let output = match Command::new("lsof")
         .arg("+d")
         .arg(dir)

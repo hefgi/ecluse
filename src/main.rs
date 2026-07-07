@@ -437,6 +437,65 @@ mod tests {
         // Single char after sanitization → invalid slug
         assert!(sanitize_to_slug("a").is_err());
     }
+
+    // ── status_str ────────────────────────────────────────────────────────────
+
+    fn svc_status(
+        managed: bool,
+        healthy: bool,
+        wrong_owner: bool,
+        listener_pid: Option<u32>,
+    ) -> ServiceStatus {
+        ServiceStatus {
+            name: "api".into(),
+            kind: "native",
+            port: Some(3001),
+            healthy,
+            managed,
+            pid: Some(42),
+            tmux_window: None,
+            listener_pid,
+            wrong_owner,
+        }
+    }
+
+    #[test]
+    fn status_str_unmanaged_shows_dash() {
+        let s = svc_status(false, false, false, None);
+        assert_eq!(status_str(&s), "\u{2014}");
+    }
+
+    #[test]
+    fn status_str_healthy_managed_shows_up() {
+        let s = svc_status(true, true, false, None);
+        assert_eq!(status_str(&s), "\u{2713} up");
+    }
+
+    #[test]
+    fn status_str_unhealthy_managed_shows_down() {
+        let s = svc_status(true, false, false, None);
+        assert_eq!(status_str(&s), "\u{2717} down");
+    }
+
+    #[test]
+    fn status_str_wrong_owner_with_listener_pid_shows_pid() {
+        let s = svc_status(true, false, true, Some(99999));
+        assert_eq!(status_str(&s), "\u{2717} wrong owner (PID 99999)");
+    }
+
+    #[test]
+    fn status_str_wrong_owner_without_listener_pid() {
+        let s = svc_status(true, false, true, None);
+        assert_eq!(status_str(&s), "\u{2717} wrong owner");
+    }
+
+    #[test]
+    fn status_str_wrong_owner_takes_precedence_over_healthy() {
+        // A service can simultaneously have its stored PID alive AND a
+        // different process bound to its port. `wrong_owner` wins.
+        let s = svc_status(true, true, true, Some(99999));
+        assert_eq!(status_str(&s), "\u{2717} wrong owner (PID 99999)");
+    }
 }
 
 /// Sanitize a branch name or slug into a valid ecluse slug + original branch pair.
@@ -2001,6 +2060,9 @@ fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
     if !args.yes {
         print!(
             "This will destroy all ecluse sessions, worktrees, and running services.\n\
+             It will also KILL every process with a file open inside the worktrees \
+             (including editors, shells, and `tail -f` against worktree logs) and \
+             every process listening on a configured port.\n\
              There is no undo. Continue? [y/N] "
         );
         std::io::stdout().flush()?;
@@ -2071,6 +2133,72 @@ fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
         }
     }
 
+    // Step 3a: sweep every process whose cwd is inside a worktree. Step 1
+    // killed services tracked in state.json; this catches detached descendants
+    // (workerd, vite plugins that setsid()) and processes that crashed out of
+    // a recorded session. Runs BEFORE worktree removal so git worktree remove
+    // doesn't race a live process holding file handles.
+    let worktree_dir_path = root.join(&config.worktree_dir);
+    if worktree_dir_path.exists() {
+        log.step("Sweeping stray processes with cwd in worktrees...");
+        if let Ok(entries) = std::fs::read_dir(&worktree_dir_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
+                for pid in sync::pids_in_directory(&path) {
+                    // Skip our own pid — flush runs from inside the repo and
+                    // would otherwise commit suicide on the first sweep.
+                    if pid == std::process::id() {
+                        continue;
+                    }
+                    log.detail(&format!(
+                        "  kill -TERM -- -{} (cwd {})",
+                        pid,
+                        path.display()
+                    ));
+                    process::kill_process_group_with_grace(pid);
+                }
+            }
+        }
+    }
+
+    // Step 3b: sweep every listener on any port the config can allocate. This
+    // catches orphans that no longer have an open file inside the worktree
+    // (e.g. a daemonized process that chdir'd to /) but are still holding a
+    // port from the configured range.
+    log.step("Sweeping listeners on configured ports...");
+    let mut swept_listener_pids: std::collections::HashSet<u32> = Default::default();
+    for svc in &config.services {
+        for slot in 1..=config.max_slots {
+            // Primary port (covers host_port override).
+            let primary = svc.port(slot, config.slot_stride);
+            // Extra ports (debugger sockets, secondary listeners).
+            let extras: Vec<u16> = svc
+                .extra_ports
+                .iter()
+                .map(|ep| {
+                    ep.base_port.saturating_add(
+                        (slot as u16).saturating_mul(config.slot_stride.max(1) as u16),
+                    )
+                })
+                .collect();
+            for port in std::iter::once(primary).chain(extras) {
+                if let Some(pid) = validate::port_listener(port) {
+                    if pid == 0 || pid == std::process::id() {
+                        continue;
+                    }
+                    if !swept_listener_pids.insert(pid) {
+                        continue;
+                    }
+                    log.detail(&format!("  kill -TERM -- -{} (port {})", pid, port));
+                    process::kill_process_group_with_grace(pid);
+                }
+            }
+        }
+    }
+
     // Step 4: remove all worktrees under worktree_dir.
     let worktree_dir = root.join(&config.worktree_dir);
     if worktree_dir.exists() {
@@ -2130,6 +2258,35 @@ struct ServiceStatus {
     managed: bool,
     pid: Option<u32>,
     tmux_window: Option<String>,
+    /// PID of whatever process is actually listening on `port`, if any.
+    /// Only populated for native services; docker port mappings are owned by
+    /// the daemon, not the container process, so the check doesn't apply.
+    listener_pid: Option<u32>,
+    /// True iff a listener is bound to `port` AND that listener is neither
+    /// `pid` nor a descendant of it. A stale orphan from a previous session
+    /// hijacking the port — `ecluse status` reports the service as down
+    /// even though something IS responding to requests.
+    wrong_owner: bool,
+}
+
+/// Human-readable status string for a service row. Extracted from cmd_status
+/// so the wrong-owner branch can be unit-tested.
+fn status_str(s: &ServiceStatus) -> String {
+    if !s.managed {
+        "\u{2014}".into() // — port-only, not ecluse-managed
+    } else if s.wrong_owner {
+        // A different process owns the configured port — likely an orphan from
+        // a previous session. The service is "down" from ecluse's perspective
+        // even if something IS responding.
+        match s.listener_pid {
+            Some(pid) => format!("\u{2717} wrong owner (PID {})", pid),
+            None => "\u{2717} wrong owner".into(),
+        }
+    } else if s.healthy {
+        "\u{2713} up".into()
+    } else {
+        "\u{2717} down".into()
+    }
 }
 
 #[derive(Tabled)]
@@ -2246,14 +2403,42 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
         // Port-allocation-only services (no command) are never spawned by
         // ecluse — don't report them as down.
         let managed = svc.command.is_some();
+
+        // Listener identity check: if SOME process is bound to the expected
+        // port and it's neither this service's recorded PID nor a descendant
+        // of it, the port is being served by an orphan from a previous
+        // session (or unrelated software). Surface this rather than silently
+        // reporting healthy=true — the service is technically alive but the
+        // user is hitting the wrong process.
+        let (listener_pid, wrong_owner) = if managed {
+            match (port, pid) {
+                (Some(p), Some(stored)) => match validate::port_listener(p) {
+                    Some(actual)
+                        if actual != stored
+                            && actual != 0
+                            && !whose_pid::is_descendant(stored, actual) =>
+                    {
+                        (Some(actual), true)
+                    }
+                    other => (other, false),
+                },
+                _ => (None, false),
+            }
+        } else {
+            (None, false)
+        };
+        let healthy_with_owner_check = healthy && !wrong_owner;
+
         statuses.push(ServiceStatus {
             name: svc.name.clone(),
             kind: "native",
             port,
-            healthy: healthy || !managed,
+            healthy: healthy_with_owner_check || !managed,
             managed,
             pid,
             tmux_window,
+            listener_pid,
+            wrong_owner,
         });
     }
 
@@ -2272,6 +2457,8 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
             managed: true,
             pid: None,
             tmux_window: None,
+            listener_pid: None,
+            wrong_owner: false,
         });
     }
 
@@ -2289,6 +2476,8 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
                     "managed": s.managed,
                     "pid": s.pid,
                     "tmux_window": s.tmux_window,
+                    "listener_pid": s.listener_pid,
+                    "wrong_owner": s.wrong_owner,
                 })
             })
             .collect();
@@ -2318,15 +2507,6 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
         if statuses.is_empty() {
             println!("No services defined in .ecluse.toml.");
         } else {
-            let status_str = |s: &ServiceStatus| -> String {
-                if !s.managed {
-                    "\u{2014}".into() // — port-only, not ecluse-managed
-                } else if s.healthy {
-                    "\u{2713} up".into()
-                } else {
-                    "\u{2717} down".into()
-                }
-            };
             let port_str = |s: &ServiceStatus| -> String {
                 s.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into())
             };

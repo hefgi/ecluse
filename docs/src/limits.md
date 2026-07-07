@@ -24,6 +24,10 @@ ecluse down feat-foo --keep-worktree
 ecluse up feat-foo --reuse-worktree
 ```
 
+Teardown kills the whole process group of each spawned service, with a TERM→KILL grace (2s) — wrapper chains like `sh → pnpm → node → vite` are killed in their entirety, not just the outermost wrapper. This applies to both `tmux` and `nohup` process managers as of 0.3.2. Services that explicitly `setsid()` themselves out of the process group (rare) escape this and require `ecluse flush`, which additionally sweeps every process whose cwd is inside a worktree and every listener on a configured port.
+
+`ecluse status` flags ports where a different process is bound than the one ecluse recorded — `✗ wrong owner (PID N)` instead of `✓ up`. This catches stale orphans hijacking a session's port even though the session's own recorded PID is still alive.
+
 ## `command` requires the app to read its port from the environment
 
 ecluse injects the full `.env.ecluse` contents — `PORT`, `ECLUSE_SLOT`, `ECLUSE_SLUG`, `ECLUSE_MODE`, all `ECLUSE_<NAME>_PORT` vars, and any `port_env` aliases — directly into the environment of the spawned process. There is no separate sourcing step; the same map written to `.env.ecluse` is passed to the child process before exec. This only fails if the app ignores the environment entirely:

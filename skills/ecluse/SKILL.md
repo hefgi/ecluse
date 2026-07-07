@@ -586,6 +586,33 @@ ecluse status <your-slug>
 3. **Never run `lsof -ti TCP:<port> | xargs kill` blind** — see "Killing services safely". Use `ecluse whose-pid` to verify ownership before any manual kill.
 4. **Consider `slot_stride = 10` in `.ecluse.toml`** for visually distinct adjacent-slot ports (3010, 3020, 3030 instead of 3001, 3002, 3003). Doesn't prevent the root cause but makes mistakes harder.
 
+### Wrong content served on the configured URL after multiple up/down cycles
+
+**Symptom:** the user navigates to `http://localhost:7301` expecting slot 1, but sees slot 4's branch instead. `ecluse status` reports the slot 1 service as healthy. Restarting only the affected session doesn't fix it — the wrong content keeps appearing on the configured port.
+
+**Root cause (fixed in 0.3.2+):** an orphan from a previous session is holding the port. Common cause: pnpm/npm wrapper chains where the actual server is a grandchild (`sh → pnpm → node → vite`) — under 0.3.1 and earlier, `ecluse down` killed only the outer wrapper and the actual server reparented to `launchd`/`init`, surviving indefinitely and holding 4-8 ports each. After several `up`/`down` cycles these orphans accumulated and silently collided with new sessions.
+
+**Detection:** `ecluse status` in 0.3.2+ flags this directly:
+
+```
+SERVICE       TYPE     PORT   STATUS                       WINDOW
+backoffice    native   7301   ✗ wrong owner (PID 81906)    backoffice
+```
+
+The `wrong owner` row means: the stored PID (or its descendants) is NOT what's currently listening on 7301 — something else is. JSON output gains `listener_pid` and `wrong_owner` fields. Exit code is 1 (same as `✗ down`).
+
+**Recovery on any version:**
+
+```bash
+ecluse whose-pid <listener-pid>   # confirm it's an orphan, not another session
+# If unowned by any ecluse session:
+kill -- -<listener-pid>            # kill the whole process group (the `-` prefix)
+# OR, the recovery hammer (kills everything in worktrees + every configured port):
+ecluse flush --yes
+```
+
+**Prevention:** upgrade to 0.3.2+. The tmux teardown path now kills the whole process group (TERM→KILL grace), matching what the nohup path already did. `ecluse flush` also sweeps both the worktree cwd and every configured port to clean up orphans that escaped a previous version's teardown.
+
 ### Docker not running
 
 ```bash
