@@ -1526,11 +1526,14 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         guard.commit()?;
     } else {
         // Another command took the session over during teardown — leave the
-        // entry to its new owner. Teardown itself succeeded, so nothing to report.
+        // entry to its new owner. Teardown itself succeeded, but this invocation
+        // no longer owns the outcome, so report only the takeover and stop:
+        // printing "torn down" here would contradict the warning.
         drop(guard);
         log.warn(&format!(
             "session '{slug}' was taken over by another command during teardown; leaving its state entry alone"
         ));
+        return Ok(());
     }
 
     if args.keep_branch {
@@ -1637,7 +1640,12 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
 
     let total = sessions.len();
     let mut failed: Vec<String> = Vec::new();
-    // Sessions kept as Stopped (worktree preserved) rather than fully removed.
+    // Outcome tallies that partition the sessions this run actually acted on:
+    // `removed` = torn down and dropped from state; `stopped` = torn down but
+    // kept as Stopped (worktree preserved). Counted explicitly rather than
+    // derived, so sessions skipped as already-gone or taken over by a concurrent
+    // command aren't miscounted as torn down.
+    let mut removed = 0usize;
     let mut stopped = 0usize;
 
     for session in sessions {
@@ -1687,6 +1695,7 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
                         stopped += 1;
                     } else {
                         guard.state.remove_session(&current.slug);
+                        removed += 1;
                     }
                     guard.commit()?;
                 } else {
@@ -1705,9 +1714,8 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
     }
 
     println!();
-    let torn_down = total - failed.len();
-    // Sessions whose worktrees were kept remain in state as Stopped; call that
-    // out so the count isn't read as "everything was removed".
+    // `removed` and `stopped` partition the sessions torn down by this run.
+    let torn_down = removed + stopped;
     let kept_note = if stopped > 0 {
         format!(" ({stopped} kept as stopped — worktrees preserved)")
     } else {

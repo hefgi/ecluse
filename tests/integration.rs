@@ -408,6 +408,40 @@ fn down_delete_worktree_on_stopped_session_does_not_orphan() {
 }
 
 #[test]
+fn shutdown_keep_worktrees_marks_all_stopped_and_reserves_slots() {
+    // shutdown --keep-worktrees mirrors down --keep-worktree across every
+    // session: each survives in state as Stopped with its slot reserved and
+    // worktree on disk, and the summary calls out how many were kept.
+    let repo = tmp_repo();
+    write_service_config(repo.path());
+    ecluse(repo.path(), &["up", "feat-a"]);
+    ecluse(repo.path(), &["up", "feat-b"]);
+
+    let out = ecluse(repo.path(), &["shutdown", "--keep-worktrees"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("kept as stopped"),
+        "summary should note kept-as-stopped sessions, got: {}",
+        stdout(&out)
+    );
+
+    let state = read_state(repo.path());
+    let sessions = state["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 2, "both entries must survive");
+    for s in sessions {
+        assert_eq!(s["status"].as_str(), Some("stopped"));
+    }
+    let mut slots: Vec<u64> = sessions
+        .iter()
+        .map(|s| s["slot"].as_u64().unwrap())
+        .collect();
+    slots.sort_unstable();
+    assert_eq!(slots, vec![1, 2], "slots stay reserved");
+    assert!(repo.path().join(".ecluse/worktrees/feat-a").exists());
+    assert!(repo.path().join(".ecluse/worktrees/feat-b").exists());
+}
+
+#[test]
 fn resume_stopped_with_missing_worktree_gives_actionable_error() {
     // If a stopped session's kept worktree is deleted by hand, a bare
     // `ecluse up <slug>` must not surface the generic "remove --reuse-worktree"
