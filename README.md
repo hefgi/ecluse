@@ -172,8 +172,8 @@ ecluse up --skip api  # skip api; start everything else
 **Soft restart** — tear down services without losing your worktree, then spin them up fresh:
 
 ```bash
-ecluse down feat-foo --keep-worktree   # services torn down, worktree + branch kept
-ecluse up feat-foo --reuse-worktree    # new slot, fresh ports, worktree reused
+ecluse down feat-foo --keep-worktree   # services torn down, worktree + branch kept, slot reserved
+ecluse up feat-foo                      # resumes at the same slot; ports are re-probed (stopped session auto-detected)
 ```
 
 **Port override** — pin a specific service to a port for this session (useful when the auto-assigned port conflicts with something ecluse can't detect):
@@ -260,8 +260,8 @@ Hooks run as shell commands inside the worktree directory with all `.env.ecluse`
 **Ports are checked, not reserved.** ecluse finds a free port at `ecluse up` time and writes it to `.env.ecluse`. There is a small window between the check and when your process actually binds — if something else takes the port in between, the port in `.env.ecluse` will be wrong. The fix is to tear down and recreate the session:
 
 ```bash
-ecluse down feat-foo --keep-worktree
-ecluse up feat-foo --reuse-worktree
+ecluse down feat-foo --keep-worktree   # session shows as `feat-foo (stopped)` in `ecluse ls` until the next up
+ecluse up feat-foo                      # resumes the stopped session and re-probes for free ports
 ```
 
 Or pin a specific port manually:
@@ -270,7 +270,7 @@ Or pin a specific port manually:
 ecluse up feat-foo --port api=4001
 ```
 
-**Process management is spawn-and-kill only.** For `host` and `hybrid` modes, services with `command` are spawned on `up` and killed on `down`. ecluse does not monitor or restart crashed processes — `ecluse ls` warns if a nohup-managed process has died. For a fresh start, use `ecluse down feat-foo --keep-worktree && ecluse up feat-foo --reuse-worktree`.
+**Process management is spawn-and-kill only.** For `host` and `hybrid` modes, services with `command` are spawned on `up` and killed on `down`. ecluse does not monitor or restart crashed processes — `ecluse ls` warns if a nohup-managed process has died. For a fresh start, use `ecluse down feat-foo --keep-worktree && ecluse up feat-foo` (the stopped session is auto-detected on the next `up`).
 
 **`command` only works if the app reads its port from the environment.** ecluse injects the full `.env.ecluse` contents (all `ECLUSE_*` vars, `PORT`, `port_env` aliases) directly into the spawned process environment — no separate sourcing needed. It cannot help if:
 - The port is **hardcoded in source code** — the app must be changed to read `$PORT`.

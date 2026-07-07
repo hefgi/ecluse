@@ -496,6 +496,121 @@ mod tests {
         let s = svc_status(true, true, true, Some(99999));
         assert_eq!(status_str(&s), "\u{2717} wrong owner (PID 99999)");
     }
+
+    // ── Stopped-session guards ─────────────────────────────────────────────────
+
+    fn test_config() -> config::Config {
+        config::Config {
+            mode: config::Mode::Host,
+            max_slots: 4,
+            prefix: "test".into(),
+            worktree_dir: ".ecluse/worktrees".into(),
+            app_label: "ecluse.role".into(),
+            app_label_value: "app".into(),
+            strict_port: false,
+            port_search_range: 10,
+            slot_stride: 1,
+            services: vec![],
+            hooks: config::HookConfig::default(),
+            inherit_env: vec![],
+        }
+    }
+
+    fn session_with_status(status: state::SessionStatus) -> state::Session {
+        state::Session {
+            slug: "feat".into(),
+            mode: config::Mode::Host,
+            slot: 1,
+            branch: "feat".into(),
+            worktree_path: "/tmp/does-not-exist".into(),
+            status,
+            pending_op: None,
+            compose_project: None,
+            overlay_file: None,
+            overlay_files: vec![],
+            compose_overlays: vec![],
+            app_port: None,
+            started_at: "2026-01-01T00:00:00Z".into(),
+            port_overrides: std::collections::HashMap::new(),
+            process_manager: None,
+            tmux_session: None,
+            pid_files: vec![],
+            log_dir: None,
+            services_subset: None,
+        }
+    }
+
+    #[test]
+    fn ensure_session_settled_allows_active() {
+        let s = session_with_status(state::SessionStatus::Active);
+        assert!(ensure_session_settled(&s).is_ok());
+    }
+
+    #[test]
+    fn ensure_session_settled_rejects_pending() {
+        let s = session_with_status(state::SessionStatus::Pending);
+        let err = ensure_session_settled(&s).unwrap_err().to_string();
+        assert!(err.contains("in progress"), "got: {err}");
+    }
+
+    #[test]
+    fn ensure_session_settled_rejects_stopped_with_up_hint() {
+        let s = session_with_status(state::SessionStatus::Stopped);
+        let err = ensure_session_settled(&s).unwrap_err().to_string();
+        assert!(err.contains("stopped"), "got: {err}");
+        // Actionable: points the user at the command that revives it.
+        assert!(err.contains("ecluse up"), "got: {err}");
+    }
+
+    #[test]
+    fn teardown_skips_bring_down_for_stopped_and_keeps_worktree() {
+        // keep_worktree=true on a Stopped session: no bring_down, no removal,
+        // just Ok — the worktree stays on disk untouched.
+        let dir = tempfile::TempDir::new().unwrap();
+        let wt = dir.path().join("kept");
+        std::fs::create_dir(&wt).unwrap();
+        let mut s = session_with_status(state::SessionStatus::Stopped);
+        s.worktree_path = wt.to_string_lossy().into_owned();
+        let config = test_config();
+        let log = log::StepLogger::new(true);
+
+        teardown_or_skip_stopped(&s, &config, dir.path(), false, true, &log).unwrap();
+        assert!(wt.exists(), "kept worktree must remain on disk");
+    }
+
+    #[test]
+    fn teardown_removes_worktree_for_stopped_when_not_kept() {
+        // keep_worktree=false on a Stopped session: bring_down is skipped but the
+        // worktree removal still runs. Use a real git repo + registered worktree
+        // so WorktreeManager::remove succeeds and the directory is deleted —
+        // guarding against the --delete-worktree-orphans-directory regression.
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+        let wt = root.join("wt-gone");
+        git(&["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "gone"]);
+        assert!(wt.exists());
+
+        let mut s = session_with_status(state::SessionStatus::Stopped);
+        s.worktree_path = wt.to_string_lossy().into_owned();
+        let config = test_config();
+        let log = log::StepLogger::new(true);
+
+        teardown_or_skip_stopped(&s, &config, root, false, false, &log).unwrap();
+        assert!(!wt.exists(), "worktree must be removed when not kept");
+    }
 }
 
 /// Sanitize a branch name or slug into a valid ecluse slug + original branch pair.
@@ -569,6 +684,9 @@ fn resolve_slug_and_branch(
     let cwd = std::env::current_dir().context("could not determine current directory")?;
 
     // 1. Inside an ecluse-registered worktree → reuse stored slug/branch.
+    // Includes Stopped sessions so `ecluse up` from inside a kept worktree
+    // auto-detects the slug and resumes at the same slot — do not filter to
+    // Active here or the stopped-session resume flow breaks.
     if let Some(session) = state
         .sessions
         .iter()
@@ -591,16 +709,25 @@ fn resolve_slug_and_branch(
     Ok((slug, branch, false, None))
 }
 
-/// Error when the session is mid-operation — its env and services are in flux.
+/// Error unless the session is `Active` — its env and services are only
+/// meaningful then. `Pending` means an op is in flight; `Stopped` means the
+/// worktree was kept but services are down, so reading its env/status/shell
+/// would surface stale slot values for services that are no longer running.
 fn ensure_session_settled(session: &state::Session) -> Result<()> {
-    if session.status == state::SessionStatus::Pending {
-        return Err(anyhow::anyhow!(
+    match session.status {
+        state::SessionStatus::Active => Ok(()),
+        state::SessionStatus::Pending => Err(anyhow::anyhow!(
             "session '{}' has an up/down operation in progress; retry when it finishes, or run `ecluse down {}` if it crashed",
             session.slug,
             session.slug
-        ));
+        )),
+        state::SessionStatus::Stopped => Err(anyhow::anyhow!(
+            "session '{}' is stopped (worktree kept at {}); run `ecluse up {}` to restart it",
+            session.slug,
+            session.worktree_path,
+            session.slug
+        )),
     }
-    Ok(())
 }
 
 fn resolve_slug_from_args(arg: Option<&str>, state: &state::State, hint: &str) -> Result<String> {
@@ -612,7 +739,10 @@ fn resolve_slug_from_args(arg: Option<&str>, state: &state::State, hint: &str) -
         None => {
             let cwd = std::env::current_dir().context("could not determine current directory")?;
 
-            // Inside an active ecluse session — use it.
+            // Inside any known ecluse session — use it. Includes Stopped
+            // sessions so `ecluse up`/`down` resolve the slug from inside a
+            // kept worktree (read commands then reject Stopped via
+            // ensure_session_settled).
             if let Some(session) = state
                 .sessions
                 .iter()
@@ -771,10 +901,17 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
                 }
             }
             log.step("Looking for existing session...");
-            log.detail(&format!(
-                "found session '{}' (slot {}) — reusing worktree",
-                slug, existing.slot
-            ));
+            if existing.status == state::SessionStatus::Stopped {
+                log.detail(&format!(
+                    "found stopped session '{}' (slot {}) — restarting at same slot",
+                    slug, existing.slot
+                ));
+            } else {
+                log.detail(&format!(
+                    "found session '{}' (slot {}) — reusing worktree",
+                    slug, existing.slot
+                ));
+            }
             return cmd_up_resume(existing, args, config, root, guard, log);
         }
 
@@ -1000,13 +1137,21 @@ fn cmd_up_resume(
             Ok(())
         }
         Ok(None) => {
-            guard.state.add_session(existing.clone());
+            // Nothing to start (all services already running). Only an Active
+            // session can reach here: resume_provision short-circuits Ok(None)
+            // for Stopped sessions (`!resuming_stopped`), routing them through
+            // bring_up instead so their ports get re-probed. So `existing` is
+            // already Active — just clear any stale pending_op and re-add it.
+            let mut restored = existing.clone();
+            restored.status = state::SessionStatus::Active;
+            restored.pending_op = None;
+            guard.state.add_session(restored.clone());
             guard.commit()?;
             log.step("All services already running — nothing to do.");
             if args.json {
-                print_up_json(&existing, &root)?;
+                print_up_json(&restored, &root)?;
             } else {
-                print_up_summary(&existing, &config, &log);
+                print_up_summary(&restored, &config, &log);
             }
             Ok(())
         }
@@ -1096,8 +1241,28 @@ fn resume_provision(
     let total = config.services.len();
     let to_start = total.saturating_sub(skipped_count);
 
-    if to_start == 0 && !args.force {
+    // A Stopped session had its port_overrides/app_port cleared by
+    // `mark_stopped`. Even when nothing needs (re)starting, fall through to
+    // `bring_up` so it re-probes and re-fills the port mapping — otherwise the
+    // resumed Active session would be persisted with no ports and `ecluse env`
+    // would emit nothing. Active sessions keep the cheap early-return.
+    let resuming_stopped = existing.status == state::SessionStatus::Stopped;
+    if to_start == 0 && !args.force && !resuming_stopped {
         return Ok(None);
+    }
+
+    // Resume always reuses the recorded worktree. If a Stopped session's kept
+    // worktree was deleted by hand, bring_up would surface the generic
+    // "remove --reuse-worktree" advice — nonsense here, since the user ran a bare
+    // `ecluse up`. Give a tailored, actionable message instead.
+    if resuming_stopped && !std::path::Path::new(&existing.worktree_path).exists() {
+        return Err(anyhow::anyhow!(
+            "worktree for stopped session '{}' is missing at {}; run `ecluse down {}` to clear the stale entry, then `ecluse up {}` to start fresh",
+            existing.slug,
+            existing.worktree_path,
+            existing.slug,
+            existing.slug
+        ));
     }
 
     let port_overrides: std::collections::HashMap<String, u16> =
@@ -1329,8 +1494,7 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         }
     };
 
-    let handler = modes::get_handler_for_mode(&session.mode);
-    let result = handler.bring_down(
+    let result = teardown_or_skip_stopped(
         &session,
         &config,
         &root,
@@ -1339,27 +1503,37 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         &log,
     );
 
+    if let Err(e) = result {
+        // Teardown failed — restore the session so it can be retried. Use the
+        // shared helper (remove-then-add under its own lock): `mark_pending`
+        // left the Pending entry in place, so a bare add_session would
+        // duplicate it. The helper also preserves a pre-existing Stopped status
+        // and is a no-op if another command took the session over.
+        restore_session(&root, &session, &op_id)?;
+        return Err(e);
+    }
+
     let mut guard = state::StateGuard::acquire(&root)?;
     if guard.state.still_owned(&slug, &op_id) {
-        guard.state.remove_session(&slug);
-        if let Err(e) = result {
-            // Teardown failed — keep the session visible so it can be retried.
-            let mut restored = session;
-            restored.status = state::SessionStatus::Active;
-            restored.pending_op = None;
-            guard.state.add_session(restored);
-            guard.commit()?;
-            return Err(e);
+        if keep_worktree {
+            // Services are down but the worktree stays on disk.
+            // Mark Stopped so the next `ecluse up` from inside the worktree
+            // resumes at this slot rather than allocating a new one.
+            guard.state.mark_stopped(&slug)?;
+        } else {
+            guard.state.remove_session(&slug);
         }
         guard.commit()?;
     } else {
         // Another command took the session over during teardown — leave the
-        // entry to its new owner, but still report our own outcome.
+        // entry to its new owner. Teardown itself succeeded, but this invocation
+        // no longer owns the outcome, so report only the takeover and stop:
+        // printing "torn down" here would contradict the warning.
         drop(guard);
         log.warn(&format!(
             "session '{slug}' was taken over by another command during teardown; leaving its state entry alone"
         ));
-        result?;
+        return Ok(());
     }
 
     if args.keep_branch {
@@ -1383,10 +1557,12 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     Ok(())
 }
 
-/// Put a session back into state with Active status (used when an operation
-/// that marked it Pending aborts or fails without changing anything durable).
-/// No-op when `op_id` no longer owns the entry — another command took the
-/// session over and restoring would clobber its work.
+/// Restore a session that was marked Pending for an operation that then aborted
+/// or failed without changing anything durable. A pre-existing Stopped status is
+/// preserved (a `down`/`shutdown` on an already stopped session that bailed);
+/// otherwise the entry settles back to Active. No-op when `op_id` no longer owns
+/// the entry — another command took the session over and restoring would clobber
+/// its work.
 fn restore_session(root: &std::path::Path, session: &state::Session, op_id: &str) -> Result<()> {
     let mut guard = state::StateGuard::acquire(root)?;
     if !guard.state.still_owned(&session.slug, op_id) {
@@ -1394,10 +1570,52 @@ fn restore_session(root: &std::path::Path, session: &state::Session, op_id: &str
     }
     guard.state.remove_session(&session.slug);
     let mut restored = session.clone();
-    restored.status = state::SessionStatus::Active;
+    // Restore the session's settled status: keep a pre-existing Stopped (a
+    // down/shutdown on an already-stopped session that then failed/aborted), but
+    // settle everything else to Active. `session` is the snapshot returned by
+    // `mark_pending`, so it can be Active, Stopped, OR Pending — the Pending case
+    // arises when we took over a crashed in-flight op, and it must become Active
+    // (never stay wedged Pending).
+    restored.status = match session.status {
+        state::SessionStatus::Stopped => state::SessionStatus::Stopped,
+        _ => state::SessionStatus::Active,
+    };
     restored.pending_op = None;
     guard.state.add_session(restored);
     guard.commit()
+}
+
+/// Tear down a session's services, or skip that when it is already Stopped.
+///
+/// A Stopped session (from a prior `down --keep-worktree`) has no running
+/// services and cleared runtime state, so calling `bring_down` would fire
+/// pre_down/post_down hooks against nominal ports with nothing behind them.
+/// We skip it — but `bring_down` is also the only place the worktree is
+/// removed, so when the caller isn't keeping the worktree we remove it here
+/// directly, or a `down --delete-worktree` on a Stopped session would orphan
+/// the directory. Shared by `cmd_down` and `cmd_shutdown` so the two paths
+/// can't drift.
+fn teardown_or_skip_stopped(
+    session: &state::Session,
+    config: &config::Config,
+    root: &std::path::Path,
+    keep_volumes: bool,
+    keep_worktree: bool,
+    log: &log::StepLogger,
+) -> Result<()> {
+    if session.status != state::SessionStatus::Stopped {
+        let handler = modes::get_handler_for_mode(&session.mode);
+        return handler.bring_down(session, config, root, keep_volumes, keep_worktree, log);
+    }
+
+    log.detail("session already stopped — skipping service teardown");
+    if !keep_worktree {
+        log.step("Removing worktree...");
+        log.detail(&session.worktree_path);
+        worktree::WorktreeManager::new(root.to_owned())
+            .remove(std::path::Path::new(&session.worktree_path))?;
+    }
+    Ok(())
 }
 
 // ── shutdown ──────────────────────────────────────────────────────────────────
@@ -1422,11 +1640,17 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
 
     let total = sessions.len();
     let mut failed: Vec<String> = Vec::new();
+    // Outcome tallies that partition the sessions this run actually acted on:
+    // `removed` = torn down and dropped from state; `stopped` = torn down but
+    // kept as Stopped (worktree preserved). Counted explicitly rather than
+    // derived, so sessions skipped as already-gone or taken over by a concurrent
+    // command aren't miscounted as torn down.
+    let mut removed = 0usize;
+    let mut stopped = 0usize;
 
     for session in sessions {
         log.step(&format!("Tearing down '{}'...", session.slug));
         log.detail(&format!("slot {}, mode: {}", session.slot, session.mode));
-        let handler = modes::get_handler_for_mode(&session.mode);
 
         let keep_wt = match resolve_worktree_keep(
             std::path::Path::new(&session.worktree_path),
@@ -1457,11 +1681,22 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
             }
         };
 
-        match handler.bring_down(&current, &config, &root, args.keep_volumes, keep_wt, &log) {
+        let teardown =
+            teardown_or_skip_stopped(&current, &config, &root, args.keep_volumes, keep_wt, &log);
+        match teardown {
             Ok(()) => {
                 let mut guard = state::StateGuard::acquire(&root)?;
                 if guard.state.still_owned(&current.slug, &op_id) {
-                    guard.state.remove_session(&current.slug);
+                    if keep_wt {
+                        // Mirror `cmd_down`: the worktree stays on disk, so
+                        // preserve the entry as Stopped to reserve the slot for
+                        // the next `ecluse up` rather than dropping it.
+                        guard.state.mark_stopped(&current.slug)?;
+                        stopped += 1;
+                    } else {
+                        guard.state.remove_session(&current.slug);
+                        removed += 1;
+                    }
                     guard.commit()?;
                 } else {
                     log.warn(&format!(
@@ -1479,19 +1714,27 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
     }
 
     println!();
-    let torn_down = total - failed.len();
+    // `removed` and `stopped` partition the sessions torn down by this run.
+    let torn_down = removed + stopped;
+    let kept_note = if stopped > 0 {
+        format!(" ({stopped} kept as stopped — worktrees preserved)")
+    } else {
+        String::new()
+    };
     if failed.is_empty() {
         log.success(&format!(
-            "Shutdown complete — {} session{} torn down.",
+            "Shutdown complete — {} session{} torn down{}.",
             torn_down,
-            if torn_down == 1 { "" } else { "s" }
+            if torn_down == 1 { "" } else { "s" },
+            kept_note
         ));
     } else {
         log.warn(&format!(
-            "{}/{} session{} torn down; {} failed: {}",
+            "{}/{} session{} torn down{}; {} failed: {}",
             torn_down,
             total,
             if total == 1 { "" } else { "s" },
+            kept_note,
             failed.len(),
             failed.join(", ")
         ));
@@ -1564,10 +1807,10 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
                 pairs.join(" ")
             };
             SessionRow {
-                slug: if s.status == state::SessionStatus::Pending {
-                    format!("{} (pending)", s.slug)
-                } else {
-                    s.slug.clone()
+                slug: match s.status {
+                    state::SessionStatus::Pending => format!("{} (pending)", s.slug),
+                    state::SessionStatus::Stopped => format!("{} (stopped)", s.slug),
+                    state::SessionStatus::Active => s.slug.clone(),
                 },
                 mode: s.mode.to_string(),
                 slot: s.slot,
@@ -2085,8 +2328,12 @@ fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
             ));
             for session in sessions {
                 log.detail(&format!("  down '{}'", session.slug));
-                let handler = modes::get_handler_for_mode(&session.mode);
-                if let Err(e) = handler.bring_down(&session, &config, &root, false, false, &log) {
+                // Shared helper skips bring_down (and its hooks) for Stopped
+                // sessions with nothing running, and removes the worktree
+                // (flush always deletes worktrees) — same decision cmd_down uses.
+                if let Err(e) =
+                    teardown_or_skip_stopped(&session, &config, &root, false, false, &log)
+                {
                     log.warn(&format!(
                         "  '{}' teardown failed: {e} (continuing)",
                         session.slug

@@ -45,12 +45,18 @@ pub struct ComposeOverlay {
 /// hooks) and must not block every other ecluse command. A `Pending` entry
 /// that never transitions back means the operation crashed; `ecluse down
 /// <slug>` cleans it up.
+///
+/// `Stopped` means `ecluse down --keep-worktree` completed: services are
+/// down and the worktree is on disk. The entry stays in state so that the
+/// next `ecluse up` from inside that worktree resumes at the same slot
+/// instead of allocating a new one (which would change all ports).
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {
     #[default]
     Active,
     Pending,
+    Stopped,
 }
 
 fn is_active(status: &SessionStatus) -> bool {
@@ -70,11 +76,18 @@ pub struct PendingOp {
 }
 
 /// Fresh operation id: unique enough to distinguish two concurrent commands.
+///
+/// `pid` disambiguates across processes; the process-local counter guarantees
+/// two ids minted in the same process (even within one nanosecond) never
+/// collide, and the timestamp keeps ids human-readable / ordered.
 pub fn new_op_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     format!(
-        "{}-{}",
+        "{}-{}-{}",
         std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
     )
 }
 
@@ -85,8 +98,11 @@ pub struct Session {
     pub slot: u8,
     pub branch: String,
     pub worktree_path: String,
-    /// Active, or Pending while an up/down is in flight. Defaults to Active
-    /// so state.json files written by older versions load unchanged.
+    /// `Active` during normal operation; `Pending` while an up/down is in
+    /// flight; `Stopped` after `ecluse down --keep-worktree` (slot reserved
+    /// until the worktree is revived via `ecluse up`). Defaults to Active and
+    /// is omitted from JSON when Active, so state.json files written by older
+    /// versions load unchanged and stay byte-compatible.
     #[serde(default, skip_serializing_if = "is_active")]
     pub status: SessionStatus,
     /// Present iff status == Pending: identifies the operation that owns this
@@ -145,6 +161,10 @@ impl State {
         self.sessions.iter().find(|s| s.slug == slug)
     }
 
+    pub fn find_session_mut(&mut self, slug: &str) -> Option<&mut Session> {
+        self.sessions.iter_mut().find(|s| s.slug == slug)
+    }
+
     pub fn add_session(&mut self, session: Session) {
         self.sessions.push(session);
     }
@@ -175,6 +195,36 @@ impl State {
             since: chrono::Utc::now().to_rfc3339(),
         });
         Some((original, op_id))
+    }
+
+    /// Transition `slug` to `Stopped`, clearing all service runtime and
+    /// provisioning state so a later `ecluse up` from inside the kept worktree
+    /// resumes at the same slot with freshly re-probed ports and overlays. Only
+    /// the identity fields (slug, slot, branch, worktree_path, mode) survive.
+    /// Returns an error if the slug is absent — callers reach this only after
+    /// `still_owned` confirmed the entry, so a missing slug is a broken
+    /// invariant that must surface loudly rather than silently skip the update.
+    pub fn mark_stopped(&mut self, slug: &str) -> Result<()> {
+        let s = self.find_session_mut(slug).ok_or_else(|| {
+            anyhow::anyhow!("mark_stopped: session '{slug}' not found (state invariant broken)")
+        })?;
+        s.status = SessionStatus::Stopped;
+        s.pending_op = None;
+        // Native runtime handles — services are no longer running.
+        s.process_manager = None;
+        s.tmux_session = None;
+        s.pid_files.clear();
+        s.log_dir = None;
+        s.port_overrides.clear();
+        s.app_port = None;
+        // Provisioning artifacts — the overlays were removed at teardown and are
+        // regenerated on the next `up`; leaving stale paths here is misleading.
+        s.compose_project = None;
+        s.overlay_file = None;
+        s.overlay_files.clear();
+        s.compose_overlays.clear();
+        s.services_subset = None;
+        Ok(())
     }
 
     /// True while the Pending entry written under `op_id` is still in place —
@@ -703,6 +753,27 @@ mod tests {
         assert!(state.still_owned("busy", &op_id));
     }
 
+    // mark_pending mutates the entry in place — it does NOT remove it. A restore
+    // path must therefore remove-then-add, or it duplicates the session. This
+    // pins that invariant so the teardown-failure restore can't silently regress.
+    #[test]
+    fn mark_pending_keeps_a_single_entry() {
+        let mut state = State::default();
+        state.add_session(make_session("busy", 1));
+        state.mark_pending("busy").unwrap();
+        assert_eq!(
+            state.sessions.iter().filter(|s| s.slug == "busy").count(),
+            1
+        );
+        // Restore pattern: remove the Pending entry, then re-add — still one.
+        let original = state.remove_session("busy").unwrap();
+        state.add_session(original);
+        assert_eq!(
+            state.sessions.iter().filter(|s| s.slug == "busy").count(),
+            1
+        );
+    }
+
     #[test]
     fn mark_pending_missing_session_returns_none() {
         let mut state = State::default();
@@ -753,5 +824,94 @@ mod tests {
         s.status = SessionStatus::Pending;
         state.add_session(s);
         assert!(state.used_slots().contains(&3));
+    }
+
+    // ── Stopped status ────────────────────────────────────────────────────────
+
+    #[test]
+    fn stopped_status_serializes_and_deserializes() {
+        let mut s = make_session("kept", 3);
+        s.status = SessionStatus::Stopped;
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"status\":\"stopped\""), "got: {json}");
+        let back: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.status, SessionStatus::Stopped);
+    }
+
+    #[test]
+    fn stopped_slot_is_counted_as_used() {
+        let mut state = State::default();
+        let mut s = make_session("kept", 3);
+        s.status = SessionStatus::Stopped;
+        state.add_session(s);
+        assert!(state.used_slots().contains(&3));
+    }
+
+    #[test]
+    fn find_session_mut_updates_status() {
+        let mut state = State::default();
+        state.add_session(make_session("x", 1));
+        state.find_session_mut("x").unwrap().status = SessionStatus::Stopped;
+        assert_eq!(
+            state.find_session("x").unwrap().status,
+            SessionStatus::Stopped
+        );
+    }
+
+    #[test]
+    fn mark_stopped_transitions_and_clears_runtime_state() {
+        let mut state = State::default();
+        let mut s = make_session("kept", 2);
+        s.status = SessionStatus::Pending;
+        s.pending_op = Some(PendingOp {
+            id: "op".into(),
+            since: "now".into(),
+        });
+        s.tmux_session = Some("sess".into());
+        s.pid_files = vec![PathBuf::from("/tmp/pid")];
+        s.log_dir = Some(PathBuf::from("/tmp/log"));
+        s.port_overrides.insert("web".into(), 3002);
+        s.app_port = Some(3002);
+        s.process_manager = Some(ProcessManager::Tmux);
+        s.compose_project = Some("proj".into());
+        s.overlay_file = Some("overlay.yml".into());
+        s.overlay_files = vec!["a.yml".into()];
+        s.compose_overlays = vec![ComposeOverlay {
+            compose: "docker-compose.yml".into(),
+            overlay: "overlay.yml".into(),
+        }];
+        s.services_subset = Some(vec!["web".into()]);
+        state.add_session(s);
+
+        state.mark_stopped("kept").unwrap();
+
+        let back = state.find_session("kept").unwrap();
+        assert_eq!(back.status, SessionStatus::Stopped);
+        assert!(back.pending_op.is_none());
+        assert!(back.tmux_session.is_none());
+        assert!(back.pid_files.is_empty());
+        assert!(back.log_dir.is_none());
+        assert!(back.port_overrides.is_empty());
+        assert!(back.app_port.is_none());
+        assert!(back.process_manager.is_none());
+        assert!(back.compose_project.is_none());
+        assert!(back.overlay_file.is_none());
+        assert!(back.overlay_files.is_empty());
+        assert!(back.compose_overlays.is_empty());
+        assert!(back.services_subset.is_none());
+        // Identity fields must survive so `ecluse up` resumes the same worktree.
+        assert_eq!(back.slug, "kept");
+        assert_eq!(back.slot, 2);
+        assert_eq!(back.worktree_path, "/tmp/kept");
+        assert_eq!(back.branch, "branch/kept");
+        assert_eq!(back.mode, Mode::Host);
+        // Slot stays reserved so `ecluse up` resumes at the same slot.
+        assert!(state.used_slots().contains(&2));
+    }
+
+    #[test]
+    fn mark_stopped_missing_session_errors() {
+        let mut state = State::default();
+        assert!(state.mark_stopped("ghost").is_err());
     }
 }
