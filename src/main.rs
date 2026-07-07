@@ -496,6 +496,121 @@ mod tests {
         let s = svc_status(true, true, true, Some(99999));
         assert_eq!(status_str(&s), "\u{2717} wrong owner (PID 99999)");
     }
+
+    // ── Stopped-session guards ─────────────────────────────────────────────────
+
+    fn test_config() -> config::Config {
+        config::Config {
+            mode: config::Mode::Host,
+            max_slots: 4,
+            prefix: "test".into(),
+            worktree_dir: ".ecluse/worktrees".into(),
+            app_label: "ecluse.role".into(),
+            app_label_value: "app".into(),
+            strict_port: false,
+            port_search_range: 10,
+            slot_stride: 1,
+            services: vec![],
+            hooks: config::HookConfig::default(),
+            inherit_env: vec![],
+        }
+    }
+
+    fn session_with_status(status: state::SessionStatus) -> state::Session {
+        state::Session {
+            slug: "feat".into(),
+            mode: config::Mode::Host,
+            slot: 1,
+            branch: "feat".into(),
+            worktree_path: "/tmp/does-not-exist".into(),
+            status,
+            pending_op: None,
+            compose_project: None,
+            overlay_file: None,
+            overlay_files: vec![],
+            compose_overlays: vec![],
+            app_port: None,
+            started_at: "2026-01-01T00:00:00Z".into(),
+            port_overrides: std::collections::HashMap::new(),
+            process_manager: None,
+            tmux_session: None,
+            pid_files: vec![],
+            log_dir: None,
+            services_subset: None,
+        }
+    }
+
+    #[test]
+    fn ensure_session_settled_allows_active() {
+        let s = session_with_status(state::SessionStatus::Active);
+        assert!(ensure_session_settled(&s).is_ok());
+    }
+
+    #[test]
+    fn ensure_session_settled_rejects_pending() {
+        let s = session_with_status(state::SessionStatus::Pending);
+        let err = ensure_session_settled(&s).unwrap_err().to_string();
+        assert!(err.contains("in progress"), "got: {err}");
+    }
+
+    #[test]
+    fn ensure_session_settled_rejects_stopped_with_up_hint() {
+        let s = session_with_status(state::SessionStatus::Stopped);
+        let err = ensure_session_settled(&s).unwrap_err().to_string();
+        assert!(err.contains("stopped"), "got: {err}");
+        // Actionable: points the user at the command that revives it.
+        assert!(err.contains("ecluse up"), "got: {err}");
+    }
+
+    #[test]
+    fn teardown_skips_bring_down_for_stopped_and_keeps_worktree() {
+        // keep_worktree=true on a Stopped session: no bring_down, no removal,
+        // just Ok — the worktree stays on disk untouched.
+        let dir = tempfile::TempDir::new().unwrap();
+        let wt = dir.path().join("kept");
+        std::fs::create_dir(&wt).unwrap();
+        let mut s = session_with_status(state::SessionStatus::Stopped);
+        s.worktree_path = wt.to_string_lossy().into_owned();
+        let config = test_config();
+        let log = log::StepLogger::new(true);
+
+        teardown_or_skip_stopped(&s, &config, dir.path(), false, true, &log).unwrap();
+        assert!(wt.exists(), "kept worktree must remain on disk");
+    }
+
+    #[test]
+    fn teardown_removes_worktree_for_stopped_when_not_kept() {
+        // keep_worktree=false on a Stopped session: bring_down is skipped but the
+        // worktree removal still runs. Use a real git repo + registered worktree
+        // so WorktreeManager::remove succeeds and the directory is deleted —
+        // guarding against the --delete-worktree-orphans-directory regression.
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "t@t"]);
+        git(&["config", "user.name", "t"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "init"]);
+        let wt = root.join("wt-gone");
+        git(&["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "gone"]);
+        assert!(wt.exists());
+
+        let mut s = session_with_status(state::SessionStatus::Stopped);
+        s.worktree_path = wt.to_string_lossy().into_owned();
+        let config = test_config();
+        let log = log::StepLogger::new(true);
+
+        teardown_or_skip_stopped(&s, &config, root, false, false, &log).unwrap();
+        assert!(!wt.exists(), "worktree must be removed when not kept");
+    }
 }
 
 /// Sanitize a branch name or slug into a valid ecluse slug + original branch pair.
@@ -1022,10 +1137,11 @@ fn cmd_up_resume(
             Ok(())
         }
         Ok(None) => {
-            // Resume succeeded with nothing to start (all services already
-            // running, or none configured). Force Active: `existing` is the
-            // pre-`mark_pending` snapshot, so a resumed Stopped session would
-            // otherwise be persisted Stopped and immediately wedge env/shell/status.
+            // Nothing to start (all services already running). Only an Active
+            // session can reach here: resume_provision short-circuits Ok(None)
+            // for Stopped sessions (`!resuming_stopped`), routing them through
+            // bring_up instead so their ports get re-probed. So `existing` is
+            // already Active — just clear any stale pending_op and re-add it.
             let mut restored = existing.clone();
             restored.status = state::SessionStatus::Active;
             restored.pending_op = None;
