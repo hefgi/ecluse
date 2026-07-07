@@ -173,7 +173,7 @@ ecluse up --skip api  # skip api; start everything else
 
 ```bash
 ecluse down feat-foo --keep-worktree   # services torn down, worktree + branch kept, slot reserved
-ecluse up feat-foo                      # resumes at the same slot and ports (stopped session auto-detected)
+ecluse up feat-foo                      # resumes at the same slot; ports are re-probed (stopped session auto-detected)
 ```
 
 **Port override** — pin a specific service to a port for this session (useful when the auto-assigned port conflicts with something ecluse can't detect):

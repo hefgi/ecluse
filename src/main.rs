@@ -1364,35 +1364,14 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         }
     };
 
-    // An already-Stopped session has no running services (down --keep-worktree
-    // already tore them down and cleared the runtime state). Re-running
-    // bring_down would fire pre_down/post_down hooks against nominal ports with
-    // nothing behind them, so skip service teardown — but still remove the
-    // worktree when the user asked to (bring_down is the only place that does,
-    // so skipping it wholesale would orphan the directory on --delete-worktree).
-    let already_stopped = session.status == state::SessionStatus::Stopped;
-    let result = if already_stopped {
-        log.detail("session already stopped — skipping service teardown");
-        if !keep_worktree {
-            log.step("Removing worktree...");
-            log.detail(&session.worktree_path);
-            let wt = worktree::WorktreeManager::new(root.clone());
-            let wt_path = std::path::PathBuf::from(&session.worktree_path);
-            wt.remove(&wt_path)
-        } else {
-            Ok(())
-        }
-    } else {
-        let handler = modes::get_handler_for_mode(&session.mode);
-        handler.bring_down(
-            &session,
-            &config,
-            &root,
-            args.keep_volumes,
-            keep_worktree,
-            &log,
-        )
-    };
+    let result = teardown_or_skip_stopped(
+        &session,
+        &config,
+        &root,
+        args.keep_volumes,
+        keep_worktree,
+        &log,
+    );
 
     if let Err(e) = result {
         // Teardown failed — restore the session so it can be retried. Use the
@@ -1476,6 +1455,39 @@ fn restore_session(root: &std::path::Path, session: &state::Session, op_id: &str
     guard.commit()
 }
 
+/// Tear down a session's services, or skip that when it is already Stopped.
+///
+/// A Stopped session (from a prior `down --keep-worktree`) has no running
+/// services and cleared runtime state, so calling `bring_down` would fire
+/// pre_down/post_down hooks against nominal ports with nothing behind them.
+/// We skip it — but `bring_down` is also the only place the worktree is
+/// removed, so when the caller isn't keeping the worktree we remove it here
+/// directly, or a `down --delete-worktree` on a Stopped session would orphan
+/// the directory. Shared by `cmd_down` and `cmd_shutdown` so the two paths
+/// can't drift.
+fn teardown_or_skip_stopped(
+    session: &state::Session,
+    config: &config::Config,
+    root: &std::path::Path,
+    keep_volumes: bool,
+    keep_worktree: bool,
+    log: &log::StepLogger,
+) -> Result<()> {
+    if session.status != state::SessionStatus::Stopped {
+        let handler = modes::get_handler_for_mode(&session.mode);
+        return handler.bring_down(session, config, root, keep_volumes, keep_worktree, log);
+    }
+
+    log.detail("session already stopped — skipping service teardown");
+    if !keep_worktree {
+        log.step("Removing worktree...");
+        log.detail(&session.worktree_path);
+        worktree::WorktreeManager::new(root.to_owned())
+            .remove(std::path::Path::new(&session.worktree_path))?;
+    }
+    Ok(())
+}
+
 // ── shutdown ──────────────────────────────────────────────────────────────────
 
 fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
@@ -1502,7 +1514,6 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
     for session in sessions {
         log.step(&format!("Tearing down '{}'...", session.slug));
         log.detail(&format!("slot {}, mode: {}", session.slot, session.mode));
-        let handler = modes::get_handler_for_mode(&session.mode);
 
         let keep_wt = match resolve_worktree_keep(
             std::path::Path::new(&session.worktree_path),
@@ -1533,22 +1544,8 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
             }
         };
 
-        // Already-Stopped sessions have no live services: skip bring_down (and
-        // its pre_down/post_down hooks against dead ports), mirroring cmd_down,
-        // but still remove the worktree when the user isn't keeping it.
-        let teardown = if current.status == state::SessionStatus::Stopped {
-            log.detail("session already stopped — skipping service teardown");
-            if keep_wt {
-                Ok(())
-            } else {
-                log.step("Removing worktree...");
-                log.detail(&current.worktree_path);
-                worktree::WorktreeManager::new(root.clone())
-                    .remove(std::path::Path::new(&current.worktree_path))
-            }
-        } else {
-            handler.bring_down(&current, &config, &root, args.keep_volumes, keep_wt, &log)
-        };
+        let teardown =
+            teardown_or_skip_stopped(&current, &config, &root, args.keep_volumes, keep_wt, &log);
         match teardown {
             Ok(()) => {
                 let mut guard = state::StateGuard::acquire(&root)?;
