@@ -1553,15 +1553,12 @@ fn restore_session(root: &std::path::Path, session: &state::Session, op_id: &str
     }
     guard.state.remove_session(&session.slug);
     let mut restored = session.clone();
-    // `session` is the pre-`mark_pending` snapshot, so its status is Active or
-    // Stopped — preserve it. A live Pending entry here is an API misuse (pass the
-    // snapshot, not the marked entry); surface it in debug builds, and fall back
-    // to Active in release so it can never leave the entry wedged Pending.
-    debug_assert_ne!(
-        session.status,
-        state::SessionStatus::Pending,
-        "restore_session called with a live Pending entry — pass the pre-mark_pending snapshot"
-    );
+    // Restore the session's settled status: keep a pre-existing Stopped (a
+    // down/shutdown on an already-stopped session that then failed/aborted), but
+    // settle everything else to Active. `session` is the snapshot returned by
+    // `mark_pending`, so it can be Active, Stopped, OR Pending — the Pending case
+    // arises when we took over a crashed in-flight op, and it must become Active
+    // (never stay wedged Pending).
     restored.status = match session.status {
         state::SessionStatus::Stopped => state::SessionStatus::Stopped,
         _ => state::SessionStatus::Active,

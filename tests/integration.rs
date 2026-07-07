@@ -305,6 +305,100 @@ fn down_removes_worktree_and_clears_state() {
     assert!(stdout(&ls).contains("no active sessions"));
 }
 
+fn write_service_config(dir: &std::path::Path) {
+    std::fs::write(
+        dir.join(".ecluse.toml"),
+        r#"mode = "host"
+
+[[services]]
+name = "api"
+base_port = 4000
+command = "echo api"
+"#,
+    )
+    .unwrap();
+}
+
+fn read_state(dir: &std::path::Path) -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(dir.join(".ecluse/state.json")).unwrap()).unwrap()
+}
+
+#[test]
+fn down_keep_worktree_marks_stopped_and_reserves_slot() {
+    // The crux of the slot-preservation feature: down --keep-worktree keeps the
+    // session in state as Stopped (not removed), and a plain `ecluse up`
+    // auto-detects it, resumes at the SAME slot, and re-populates the port
+    // mapping that mark_stopped cleared.
+    let repo = tmp_repo();
+    write_service_config(repo.path());
+
+    let up = ecluse(repo.path(), &["up", "feat-foo"]);
+    assert!(up.status.success(), "up failed: {}", stderr(&up));
+    assert_eq!(
+        read_state(repo.path())["sessions"][0]["slot"].as_u64(),
+        Some(1)
+    );
+
+    // Tear down services but keep the worktree.
+    let down = ecluse(repo.path(), &["down", "feat-foo", "--keep-worktree"]);
+    assert!(down.status.success(), "down failed: {}", stderr(&down));
+
+    // State entry survives as Stopped, slot still reserved, worktree on disk.
+    let state = read_state(repo.path());
+    assert_eq!(state["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(state["sessions"][0]["status"].as_str(), Some("stopped"));
+    assert_eq!(state["sessions"][0]["slot"].as_u64(), Some(1));
+    assert!(repo.path().join(".ecluse/worktrees/feat-foo").exists());
+    assert!(
+        stdout(&ecluse(repo.path(), &["ls"])).contains("(stopped)"),
+        "ls should mark the session (stopped)"
+    );
+
+    // While stopped, env errors with a pointer to `ecluse up` (no stale ports).
+    let env = ecluse(repo.path(), &["env", "feat-foo"]);
+    assert!(!env.status.success());
+    assert!(
+        stderr(&env).contains("stopped") && stderr(&env).contains("ecluse up"),
+        "env on a stopped session must error with an up hint, got: {}",
+        stderr(&env)
+    );
+
+    // Plain `ecluse up` resumes the stopped session at the same slot, and the
+    // port mapping is re-probed back into state (mark_stopped had cleared it).
+    let reup = ecluse(repo.path(), &["up", "feat-foo"]);
+    assert!(reup.status.success(), "resume failed: {}", stderr(&reup));
+    let state = read_state(repo.path());
+    assert_eq!(state["sessions"].as_array().unwrap().len(), 1);
+    // Active sessions omit the status field entirely (serde skip_if is_active).
+    assert!(state["sessions"][0]["status"].is_null());
+    assert_eq!(state["sessions"][0]["slot"].as_u64(), Some(1));
+    assert_eq!(
+        state["sessions"][0]["port_overrides"]["api"].as_u64(),
+        Some(4001),
+        "resume must re-probe and re-record ports, got: {}",
+        state["sessions"][0]
+    );
+}
+
+#[test]
+fn down_delete_worktree_on_stopped_session_does_not_orphan() {
+    // Regression: skipping bring_down for a Stopped session must still remove the
+    // worktree when the user asks to delete it, or `down --delete-worktree` would
+    // leave an orphaned directory with no state entry tracking it.
+    let repo = tmp_repo();
+    write_service_config(repo.path());
+    ecluse(repo.path(), &["up", "feat-foo"]);
+    ecluse(repo.path(), &["down", "feat-foo", "--keep-worktree"]);
+    let worktree = repo.path().join(".ecluse/worktrees/feat-foo");
+    assert!(worktree.exists(), "precondition: worktree kept");
+
+    // Now delete the (already Stopped) session's worktree.
+    let out = ecluse(repo.path(), &["down", "feat-foo", "--delete-worktree"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!worktree.exists(), "worktree must not be orphaned on disk");
+    assert!(stdout(&ecluse(repo.path(), &["ls"])).contains("no active sessions"));
+}
+
 #[test]
 fn down_nonexistent_slug_errors() {
     let repo = tmp_repo();
@@ -669,13 +763,21 @@ post_up = "sleep 3"
         .spawn()
         .unwrap();
 
-    // Wait for the pending reservation, then take the session over with down.
+    // Wait for the pending reservation AND the worktree to exist before taking
+    // the session over. `mark_pending` commits the state entry before the
+    // worktree is created; waiting only on the entry lets `down --delete-worktree`
+    // race ahead of worktree creation and fail teardown (flaky). The post_up
+    // sleep guarantees the session is still mid-provisioning once both appear.
     let state_path = repo.path().join(".ecluse/state.json");
+    let worktree = repo.path().join(".ecluse/worktrees/race-sess");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !std::fs::read_to_string(&state_path)
-        .unwrap_or_default()
-        .contains("race-sess")
-    {
+    loop {
+        let entry_present = std::fs::read_to_string(&state_path)
+            .unwrap_or_default()
+            .contains("race-sess");
+        if entry_present && worktree.exists() {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
