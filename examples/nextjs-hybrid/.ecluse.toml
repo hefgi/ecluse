@@ -2,6 +2,14 @@ mode = "hybrid"
 max_slots = 6
 prefix = "ecluse"
 
+# .env is symlinked (shared secrets stay in sync); .env.local is a per-worktree
+# copy so pre_spawn can rewrite it with slot-specific DATABASE_URL without
+# leaking into sibling worktrees.
+inherit_env = [
+  ".env",
+  { file = ".env.local", mode = "copy" },
+]
+
 # Next.js dev server: slot 1 → ECLUSE_APP_PORT=3001 + PORT alias, slot 2 → 3002
 [[services]]
 name = "app"
@@ -13,5 +21,20 @@ name = "postgres"
 run = "docker"
 base_port = 5432
 
+# pre_spawn: write DATABASE_URL and apply migrations BEFORE Next.js boots.
+# Prisma reads DATABASE_URL at boot from .env.local; if we wrote it in
+# post_up, Prisma would already have connected to the wrong port (or the
+# default hardcoded in .env). Migrations must also complete before the app
+# queries a table that doesn't exist yet.
 [hooks]
-post_up = "npx prisma migrate deploy"
+pre_spawn = """
+set -e
+cat > .env.local <<EOF
+DATABASE_URL=postgres://postgres@localhost:$ECLUSE_POSTGRES_PORT/app
+EOF
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if pg_isready -h localhost -p "$ECLUSE_POSTGRES_PORT" -U postgres >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+npx prisma migrate deploy
+"""

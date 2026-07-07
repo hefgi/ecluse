@@ -2,6 +2,14 @@ mode = "hybrid"
 max_slots = 4
 prefix = "ecluse"
 
+# .env is symlinked from root (shared secrets stay in sync).
+# .env.local is a per-worktree copy so pre_spawn can rewrite it with
+# slot-specific URLs without leaking into sibling worktrees.
+inherit_env = [
+  ".env",
+  { file = ".env.local", mode = "copy" },
+]
+
 # tRPC / REST API: slot 1 → ECLUSE_API_PORT=3001 + PORT alias, slot 2 → 3002
 [[services]]
 name = "api"
@@ -33,6 +41,30 @@ name = "redis"
 run = "docker"
 base_port = 6379
 
+# pre_spawn: wire slot-specific URLs into .env.local BEFORE any Next.js
+# service boots. Every app in the monorepo reads NEXT_PUBLIC_API_URL and
+# NEXT_PUBLIC_WEB_URL at build/boot time — post_up is too late for that.
+# DATABASE_URL and REDIS_URL are read by the api / worker at connection
+# time, but writing them here (before any process starts) keeps the file
+# consistent with what the operator sees in .env.local.
+#
+# post_up handles the migration, since the api can wait for the schema
+# to appear (Prisma will retry on first query if the migration is still
+# running).
 [hooks]
+pre_spawn = """
+set -e
+cat > .env.local <<EOF
+DATABASE_URL=postgres://postgres@localhost:$ECLUSE_POSTGRES_PORT/app
+REDIS_URL=redis://localhost:$ECLUSE_REDIS_PORT
+NEXT_PUBLIC_API_URL=http://localhost:$ECLUSE_API_PORT
+NEXT_PUBLIC_WEB_URL=http://localhost:$ECLUSE_WEB_PORT
+INTERNAL_API_URL=http://localhost:$ECLUSE_API_PORT
+EOF
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if pg_isready -h localhost -p "$ECLUSE_POSTGRES_PORT" -U postgres >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+"""
 post_up  = "npx prisma migrate deploy"
 pre_down = "npx prisma migrate reset --force"
