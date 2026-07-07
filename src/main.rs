@@ -569,6 +569,9 @@ fn resolve_slug_and_branch(
     let cwd = std::env::current_dir().context("could not determine current directory")?;
 
     // 1. Inside an ecluse-registered worktree → reuse stored slug/branch.
+    // Includes Stopped sessions so `ecluse up` from inside a kept worktree
+    // auto-detects the slug and resumes at the same slot — do not filter to
+    // Active here or the stopped-session resume flow breaks.
     if let Some(session) = state
         .sessions
         .iter()
@@ -1364,11 +1367,21 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
     // An already-Stopped session has no running services (down --keep-worktree
     // already tore them down and cleared the runtime state). Re-running
     // bring_down would fire pre_down/post_down hooks against nominal ports with
-    // nothing behind them, so skip it and go straight to the state update.
+    // nothing behind them, so skip service teardown — but still remove the
+    // worktree when the user asked to (bring_down is the only place that does,
+    // so skipping it wholesale would orphan the directory on --delete-worktree).
     let already_stopped = session.status == state::SessionStatus::Stopped;
     let result = if already_stopped {
         log.detail("session already stopped — skipping service teardown");
-        Ok(())
+        if !keep_worktree {
+            log.step("Removing worktree...");
+            log.detail(&session.worktree_path);
+            let wt = worktree::WorktreeManager::new(root.clone());
+            let wt_path = std::path::PathBuf::from(&session.worktree_path);
+            wt.remove(&wt_path)
+        } else {
+            Ok(())
+        }
     } else {
         let handler = modes::get_handler_for_mode(&session.mode);
         handler.bring_down(
@@ -1446,8 +1459,14 @@ fn restore_session(root: &std::path::Path, session: &state::Session, op_id: &str
     guard.state.remove_session(&session.slug);
     let mut restored = session.clone();
     // `session` is the pre-`mark_pending` snapshot, so its status is Active or
-    // Stopped — preserve it. Guard the impossible Pending case back to Active so
-    // a future caller passing a live entry can never leave it wedged Pending.
+    // Stopped — preserve it. A live Pending entry here is an API misuse (pass the
+    // snapshot, not the marked entry); surface it in debug builds, and fall back
+    // to Active in release so it can never leave the entry wedged Pending.
+    debug_assert_ne!(
+        session.status,
+        state::SessionStatus::Pending,
+        "restore_session called with a live Pending entry — pass the pre-mark_pending snapshot"
+    );
     restored.status = match session.status {
         state::SessionStatus::Stopped => state::SessionStatus::Stopped,
         _ => state::SessionStatus::Active,
@@ -1514,7 +1533,23 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
             }
         };
 
-        match handler.bring_down(&current, &config, &root, args.keep_volumes, keep_wt, &log) {
+        // Already-Stopped sessions have no live services: skip bring_down (and
+        // its pre_down/post_down hooks against dead ports), mirroring cmd_down,
+        // but still remove the worktree when the user isn't keeping it.
+        let teardown = if current.status == state::SessionStatus::Stopped {
+            log.detail("session already stopped — skipping service teardown");
+            if keep_wt {
+                Ok(())
+            } else {
+                log.step("Removing worktree...");
+                log.detail(&current.worktree_path);
+                worktree::WorktreeManager::new(root.clone())
+                    .remove(std::path::Path::new(&current.worktree_path))
+            }
+        } else {
+            handler.bring_down(&current, &config, &root, args.keep_volumes, keep_wt, &log)
+        };
+        match teardown {
             Ok(()) => {
                 let mut guard = state::StateGuard::acquire(&root)?;
                 if guard.state.still_owned(&current.slug, &op_id) {
