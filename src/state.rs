@@ -197,8 +197,10 @@ impl State {
         Some((original, op_id))
     }
 
-    /// Transition `slug` to `Stopped`, clearing all service runtime state so a
-    /// later `ecluse up` from inside the kept worktree resumes at the same slot.
+    /// Transition `slug` to `Stopped`, clearing all service runtime and
+    /// provisioning state so a later `ecluse up` from inside the kept worktree
+    /// resumes at the same slot with freshly re-probed ports and overlays. Only
+    /// the identity fields (slug, slot, branch, worktree_path, mode) survive.
     /// Returns an error if the slug is absent — callers reach this only after
     /// `still_owned` confirmed the entry, so a missing slug is a broken
     /// invariant that must surface loudly rather than silently skip the update.
@@ -208,11 +210,20 @@ impl State {
         })?;
         s.status = SessionStatus::Stopped;
         s.pending_op = None;
+        // Native runtime handles — services are no longer running.
+        s.process_manager = None;
         s.tmux_session = None;
         s.pid_files.clear();
         s.log_dir = None;
         s.port_overrides.clear();
         s.app_port = None;
+        // Provisioning artifacts — the overlays were removed at teardown and are
+        // regenerated on the next `up`; leaving stale paths here is misleading.
+        s.compose_project = None;
+        s.overlay_file = None;
+        s.overlay_files.clear();
+        s.compose_overlays.clear();
+        s.services_subset = None;
         Ok(())
     }
 
@@ -861,6 +872,15 @@ mod tests {
         s.log_dir = Some(PathBuf::from("/tmp/log"));
         s.port_overrides.insert("web".into(), 3002);
         s.app_port = Some(3002);
+        s.process_manager = Some(ProcessManager::Tmux);
+        s.compose_project = Some("proj".into());
+        s.overlay_file = Some("overlay.yml".into());
+        s.overlay_files = vec!["a.yml".into()];
+        s.compose_overlays = vec![ComposeOverlay {
+            compose: "docker-compose.yml".into(),
+            overlay: "overlay.yml".into(),
+        }];
+        s.services_subset = Some(vec!["web".into()]);
         state.add_session(s);
 
         state.mark_stopped("kept").unwrap();
@@ -873,6 +893,12 @@ mod tests {
         assert!(back.log_dir.is_none());
         assert!(back.port_overrides.is_empty());
         assert!(back.app_port.is_none());
+        assert!(back.process_manager.is_none());
+        assert!(back.compose_project.is_none());
+        assert!(back.overlay_file.is_none());
+        assert!(back.overlay_files.is_empty());
+        assert!(back.compose_overlays.is_empty());
+        assert!(back.services_subset.is_none());
         // Identity fields must survive so `ecluse up` resumes the same worktree.
         assert_eq!(back.slug, "kept");
         assert_eq!(back.slot, 2);

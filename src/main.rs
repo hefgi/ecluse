@@ -1122,7 +1122,13 @@ fn resume_provision(
     let total = config.services.len();
     let to_start = total.saturating_sub(skipped_count);
 
-    if to_start == 0 && !args.force {
+    // A Stopped session had its port_overrides/app_port cleared by
+    // `mark_stopped`. Even when nothing needs (re)starting, fall through to
+    // `bring_up` so it re-probes and re-fills the port mapping — otherwise the
+    // resumed Active session would be persisted with no ports and `ecluse env`
+    // would emit nothing. Active sessions keep the cheap early-return.
+    let resuming_stopped = existing.status == state::SessionStatus::Stopped;
+    if to_start == 0 && !args.force && !resuming_stopped {
         return Ok(None);
     }
 
@@ -1355,15 +1361,25 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         }
     };
 
-    let handler = modes::get_handler_for_mode(&session.mode);
-    let result = handler.bring_down(
-        &session,
-        &config,
-        &root,
-        args.keep_volumes,
-        keep_worktree,
-        &log,
-    );
+    // An already-Stopped session has no running services (down --keep-worktree
+    // already tore them down and cleared the runtime state). Re-running
+    // bring_down would fire pre_down/post_down hooks against nominal ports with
+    // nothing behind them, so skip it and go straight to the state update.
+    let already_stopped = session.status == state::SessionStatus::Stopped;
+    let result = if already_stopped {
+        log.detail("session already stopped — skipping service teardown");
+        Ok(())
+    } else {
+        let handler = modes::get_handler_for_mode(&session.mode);
+        handler.bring_down(
+            &session,
+            &config,
+            &root,
+            args.keep_volumes,
+            keep_worktree,
+            &log,
+        )
+    };
 
     if let Err(e) = result {
         // Teardown failed — restore the session so it can be retried. Use the
@@ -1429,10 +1445,12 @@ fn restore_session(root: &std::path::Path, session: &state::Session, op_id: &str
     }
     guard.state.remove_session(&session.slug);
     let mut restored = session.clone();
-    restored.status = if session.status == state::SessionStatus::Stopped {
-        state::SessionStatus::Stopped
-    } else {
-        state::SessionStatus::Active
+    // `session` is the pre-`mark_pending` snapshot, so its status is Active or
+    // Stopped — preserve it. Guard the impossible Pending case back to Active so
+    // a future caller passing a live entry can never leave it wedged Pending.
+    restored.status = match session.status {
+        state::SessionStatus::Stopped => state::SessionStatus::Stopped,
+        _ => state::SessionStatus::Active,
     };
     restored.pending_op = None;
     guard.state.add_session(restored);
