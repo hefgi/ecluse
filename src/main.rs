@@ -591,16 +591,25 @@ fn resolve_slug_and_branch(
     Ok((slug, branch, false, None))
 }
 
-/// Error when the session is mid-operation — its env and services are in flux.
+/// Error unless the session is `Active` — its env and services are only
+/// meaningful then. `Pending` means an op is in flight; `Stopped` means the
+/// worktree was kept but services are down, so reading its env/status/shell
+/// would surface stale slot values for services that are no longer running.
 fn ensure_session_settled(session: &state::Session) -> Result<()> {
-    if session.status == state::SessionStatus::Pending {
-        return Err(anyhow::anyhow!(
+    match session.status {
+        state::SessionStatus::Active => Ok(()),
+        state::SessionStatus::Pending => Err(anyhow::anyhow!(
             "session '{}' has an up/down operation in progress; retry when it finishes, or run `ecluse down {}` if it crashed",
             session.slug,
             session.slug
-        ));
+        )),
+        state::SessionStatus::Stopped => Err(anyhow::anyhow!(
+            "session '{}' is stopped (worktree kept at {}); run `ecluse up {}` to restart it",
+            session.slug,
+            session.worktree_path,
+            session.slug
+        )),
     }
-    Ok(())
 }
 
 fn resolve_slug_from_args(arg: Option<&str>, state: &state::State, hint: &str) -> Result<String> {
@@ -1361,16 +1370,7 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
             // Services are down but the worktree stays on disk.
             // Mark Stopped so the next `ecluse up` from inside the worktree
             // resumes at this slot rather than allocating a new one.
-            if let Some(s) = guard.state.find_session_mut(&slug) {
-                s.status = state::SessionStatus::Stopped;
-                s.pending_op = None;
-                // Clear service runtime state — services are no longer running.
-                s.tmux_session = None;
-                s.pid_files = vec![];
-                s.log_dir = None;
-                s.port_overrides = std::collections::HashMap::new();
-                s.app_port = None;
-            }
+            guard.state.mark_stopped(&slug)?;
         } else {
             guard.state.remove_session(&slug);
         }
@@ -1484,7 +1484,14 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
             Ok(()) => {
                 let mut guard = state::StateGuard::acquire(&root)?;
                 if guard.state.still_owned(&current.slug, &op_id) {
-                    guard.state.remove_session(&current.slug);
+                    if keep_wt {
+                        // Mirror `cmd_down`: the worktree stays on disk, so
+                        // preserve the entry as Stopped to reserve the slot for
+                        // the next `ecluse up` rather than dropping it.
+                        guard.state.mark_stopped(&current.slug)?;
+                    } else {
+                        guard.state.remove_session(&current.slug);
+                    }
                     guard.commit()?;
                 } else {
                     log.warn(&format!(

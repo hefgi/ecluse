@@ -91,8 +91,11 @@ pub struct Session {
     pub slot: u8,
     pub branch: String,
     pub worktree_path: String,
-    /// Active, or Pending while an up/down is in flight. Defaults to Active
-    /// so state.json files written by older versions load unchanged.
+    /// `Active` during normal operation; `Pending` while an up/down is in
+    /// flight; `Stopped` after `ecluse down --keep-worktree` (slot reserved
+    /// until the worktree is revived via `ecluse up`). Defaults to Active and
+    /// is omitted from JSON when Active, so state.json files written by older
+    /// versions load unchanged and stay byte-compatible.
     #[serde(default, skip_serializing_if = "is_active")]
     pub status: SessionStatus,
     /// Present iff status == Pending: identifies the operation that owns this
@@ -185,6 +188,25 @@ impl State {
             since: chrono::Utc::now().to_rfc3339(),
         });
         Some((original, op_id))
+    }
+
+    /// Transition `slug` to `Stopped`, clearing all service runtime state so a
+    /// later `ecluse up` from inside the kept worktree resumes at the same slot.
+    /// Returns an error if the slug is absent — callers reach this only after
+    /// `still_owned` confirmed the entry, so a missing slug is a broken
+    /// invariant that must surface loudly rather than silently skip the update.
+    pub fn mark_stopped(&mut self, slug: &str) -> Result<()> {
+        let s = self.find_session_mut(slug).ok_or_else(|| {
+            anyhow::anyhow!("mark_stopped: session '{slug}' not found (state invariant broken)")
+        })?;
+        s.status = SessionStatus::Stopped;
+        s.pending_op = None;
+        s.tmux_session = None;
+        s.pid_files = vec![];
+        s.log_dir = None;
+        s.port_overrides = std::collections::HashMap::new();
+        s.app_port = None;
+        Ok(())
     }
 
     /// True while the Pending entry written under `op_id` is still in place —
@@ -772,7 +794,7 @@ mod tests {
         let mut s = make_session("kept", 3);
         s.status = SessionStatus::Stopped;
         let json = serde_json::to_string(&s).unwrap();
-        assert!(json.contains("\"stopped\""));
+        assert!(json.contains("\"status\":\"stopped\""), "got: {json}");
         let back: Session = serde_json::from_str(&json).unwrap();
         assert_eq!(back.status, SessionStatus::Stopped);
     }
@@ -795,5 +817,41 @@ mod tests {
             state.find_session("x").unwrap().status,
             SessionStatus::Stopped
         );
+    }
+
+    #[test]
+    fn mark_stopped_transitions_and_clears_runtime_state() {
+        let mut state = State::default();
+        let mut s = make_session("kept", 2);
+        s.status = SessionStatus::Pending;
+        s.pending_op = Some(PendingOp {
+            id: "op".into(),
+            since: "now".into(),
+        });
+        s.tmux_session = Some("sess".into());
+        s.pid_files = vec![PathBuf::from("/tmp/pid")];
+        s.log_dir = Some(PathBuf::from("/tmp/log"));
+        s.port_overrides.insert("web".into(), 3002);
+        s.app_port = Some(3002);
+        state.add_session(s);
+
+        state.mark_stopped("kept").unwrap();
+
+        let back = state.find_session("kept").unwrap();
+        assert_eq!(back.status, SessionStatus::Stopped);
+        assert!(back.pending_op.is_none());
+        assert!(back.tmux_session.is_none());
+        assert!(back.pid_files.is_empty());
+        assert!(back.log_dir.is_none());
+        assert!(back.port_overrides.is_empty());
+        assert!(back.app_port.is_none());
+        // Slot stays reserved so `ecluse up` resumes at the same slot.
+        assert!(state.used_slots().contains(&2));
+    }
+
+    #[test]
+    fn mark_stopped_missing_session_errors() {
+        let mut state = State::default();
+        assert!(state.mark_stopped("ghost").is_err());
     }
 }

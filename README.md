@@ -172,8 +172,8 @@ ecluse up --skip api  # skip api; start everything else
 **Soft restart** — tear down services without losing your worktree, then spin them up fresh:
 
 ```bash
-ecluse down feat-foo --keep-worktree   # services torn down, worktree + branch kept
-ecluse up feat-foo --reuse-worktree    # new slot, fresh ports, worktree reused
+ecluse down feat-foo --keep-worktree   # services torn down, worktree + branch kept, slot reserved
+ecluse up feat-foo --reuse-worktree    # resumes at the same slot and ports, worktree reused
 ```
 
 **Port override** — pin a specific service to a port for this session (useful when the auto-assigned port conflicts with something ecluse can't detect):

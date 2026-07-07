@@ -913,11 +913,11 @@ ecluse status --quiet            # exit-code only (0 = all up, 1 = any down)
 **Soft restart** — tear down services without losing the git worktree, then spin up fresh:
 
 ```bash
-ecluse down feat-foo --keep-worktree   # stops services, removes session from state, keeps worktree on disk
-ecluse up feat-foo --reuse-worktree    # allocates a new slot, skips worktree creation
+ecluse down feat-foo --keep-worktree   # stops services, marks the session Stopped (slot reserved), keeps worktree on disk
+ecluse up feat-foo --reuse-worktree    # resumes at the same slot, skips worktree creation
 ```
 
-Use this when a service failed to bind after `up` and you want a fresh start without losing changes in the worktree.
+Use this when a service failed to bind after `up` and you want a fresh start without losing changes in the worktree. While stopped, `ecluse env`, `ecluse shell`, and `ecluse status` on that session error with a hint to run `ecluse up` — they will not surface stale, no-longer-running ports.
 
 **Port override** — pin a service to a specific port for this session:
 
