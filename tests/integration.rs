@@ -396,7 +396,40 @@ fn down_delete_worktree_on_stopped_session_does_not_orphan() {
     let out = ecluse(repo.path(), &["down", "feat-foo", "--delete-worktree"]);
     assert!(out.status.success(), "{}", stderr(&out));
     assert!(!worktree.exists(), "worktree must not be orphaned on disk");
+    // Directly pin the invariant: the entry is dropped, not re-marked Stopped.
+    assert_eq!(
+        read_state(repo.path())["sessions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
     assert!(stdout(&ecluse(repo.path(), &["ls"])).contains("no active sessions"));
+}
+
+#[test]
+fn resume_stopped_with_missing_worktree_gives_actionable_error() {
+    // If a stopped session's kept worktree is deleted by hand, a bare
+    // `ecluse up <slug>` must not surface the generic "remove --reuse-worktree"
+    // advice (the user passed no such flag); it must tell them how to recover.
+    let repo = tmp_repo();
+    write_service_config(repo.path());
+    ecluse(repo.path(), &["up", "feat-foo"]);
+    ecluse(repo.path(), &["down", "feat-foo", "--keep-worktree"]);
+    let worktree = repo.path().join(".ecluse/worktrees/feat-foo");
+    std::fs::remove_dir_all(&worktree).unwrap();
+
+    let out = ecluse(repo.path(), &["up", "feat-foo"]);
+    assert!(!out.status.success());
+    let err = stderr(&out);
+    assert!(
+        err.contains("stopped session") && err.contains("ecluse down feat-foo"),
+        "error should point at recovery, not --reuse-worktree; got: {err}"
+    );
+    assert!(
+        !err.contains("--reuse-worktree"),
+        "must not mention a flag the user never passed; got: {err}"
+    );
 }
 
 #[test]

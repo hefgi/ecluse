@@ -1251,6 +1251,20 @@ fn resume_provision(
         return Ok(None);
     }
 
+    // Resume always reuses the recorded worktree. If a Stopped session's kept
+    // worktree was deleted by hand, bring_up would surface the generic
+    // "remove --reuse-worktree" advice — nonsense here, since the user ran a bare
+    // `ecluse up`. Give a tailored, actionable message instead.
+    if resuming_stopped && !std::path::Path::new(&existing.worktree_path).exists() {
+        return Err(anyhow::anyhow!(
+            "worktree for stopped session '{}' is missing at {}; run `ecluse down {}` to clear the stale entry, then `ecluse up {}` to start fresh",
+            existing.slug,
+            existing.worktree_path,
+            existing.slug,
+            existing.slug
+        ));
+    }
+
     let port_overrides: std::collections::HashMap<String, u16> =
         args.port_overrides.iter().cloned().collect();
     let service_filter = parse_service_filter(&args.services, config)?;
@@ -1623,6 +1637,8 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
 
     let total = sessions.len();
     let mut failed: Vec<String> = Vec::new();
+    // Sessions kept as Stopped (worktree preserved) rather than fully removed.
+    let mut stopped = 0usize;
 
     for session in sessions {
         log.step(&format!("Tearing down '{}'...", session.slug));
@@ -1668,6 +1684,7 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
                         // preserve the entry as Stopped to reserve the slot for
                         // the next `ecluse up` rather than dropping it.
                         guard.state.mark_stopped(&current.slug)?;
+                        stopped += 1;
                     } else {
                         guard.state.remove_session(&current.slug);
                     }
@@ -1689,18 +1706,27 @@ fn cmd_shutdown(args: cli::ShutdownArgs) -> Result<()> {
 
     println!();
     let torn_down = total - failed.len();
+    // Sessions whose worktrees were kept remain in state as Stopped; call that
+    // out so the count isn't read as "everything was removed".
+    let kept_note = if stopped > 0 {
+        format!(" ({stopped} kept as stopped — worktrees preserved)")
+    } else {
+        String::new()
+    };
     if failed.is_empty() {
         log.success(&format!(
-            "Shutdown complete — {} session{} torn down.",
+            "Shutdown complete — {} session{} torn down{}.",
             torn_down,
-            if torn_down == 1 { "" } else { "s" }
+            if torn_down == 1 { "" } else { "s" },
+            kept_note
         ));
     } else {
         log.warn(&format!(
-            "{}/{} session{} torn down; {} failed: {}",
+            "{}/{} session{} torn down{}; {} failed: {}",
             torn_down,
             total,
             if total == 1 { "" } else { "s" },
+            kept_note,
             failed.len(),
             failed.join(", ")
         ));
@@ -2294,8 +2320,12 @@ fn cmd_flush(args: cli::FlushArgs) -> Result<()> {
             ));
             for session in sessions {
                 log.detail(&format!("  down '{}'", session.slug));
-                let handler = modes::get_handler_for_mode(&session.mode);
-                if let Err(e) = handler.bring_down(&session, &config, &root, false, false, &log) {
+                // Shared helper skips bring_down (and its hooks) for Stopped
+                // sessions with nothing running, and removes the worktree
+                // (flush always deletes worktrees) — same decision cmd_down uses.
+                if let Err(e) =
+                    teardown_or_skip_stopped(&session, &config, &root, false, false, &log)
+                {
                     log.warn(&format!(
                         "  '{}' teardown failed: {e} (continuing)",
                         session.slug
