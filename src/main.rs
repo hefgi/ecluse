@@ -771,10 +771,17 @@ fn cmd_up(args: cli::UpArgs) -> Result<()> {
                 }
             }
             log.step("Looking for existing session...");
-            log.detail(&format!(
-                "found session '{}' (slot {}) — reusing worktree",
-                slug, existing.slot
-            ));
+            if existing.status == state::SessionStatus::Stopped {
+                log.detail(&format!(
+                    "found stopped session '{}' (slot {}) — restarting at same slot",
+                    slug, existing.slot
+                ));
+            } else {
+                log.detail(&format!(
+                    "found session '{}' (slot {}) — reusing worktree",
+                    slug, existing.slot
+                ));
+            }
             return cmd_up_resume(existing, args, config, root, guard, log);
         }
 
@@ -1341,15 +1348,31 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
 
     let mut guard = state::StateGuard::acquire(&root)?;
     if guard.state.still_owned(&slug, &op_id) {
-        guard.state.remove_session(&slug);
         if let Err(e) = result {
-            // Teardown failed — keep the session visible so it can be retried.
+            // Teardown failed — restore the session so it can be retried.
             let mut restored = session;
             restored.status = state::SessionStatus::Active;
             restored.pending_op = None;
             guard.state.add_session(restored);
             guard.commit()?;
             return Err(e);
+        }
+        if keep_worktree {
+            // Services are down but the worktree stays on disk.
+            // Mark Stopped so the next `ecluse up` from inside the worktree
+            // resumes at this slot rather than allocating a new one.
+            if let Some(s) = guard.state.find_session_mut(&slug) {
+                s.status = state::SessionStatus::Stopped;
+                s.pending_op = None;
+                // Clear service runtime state — services are no longer running.
+                s.tmux_session = None;
+                s.pid_files = vec![];
+                s.log_dir = None;
+                s.port_overrides = std::collections::HashMap::new();
+                s.app_port = None;
+            }
+        } else {
+            guard.state.remove_session(&slug);
         }
         guard.commit()?;
     } else {
@@ -1564,10 +1587,10 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
                 pairs.join(" ")
             };
             SessionRow {
-                slug: if s.status == state::SessionStatus::Pending {
-                    format!("{} (pending)", s.slug)
-                } else {
-                    s.slug.clone()
+                slug: match s.status {
+                    state::SessionStatus::Pending => format!("{} (pending)", s.slug),
+                    state::SessionStatus::Stopped => format!("{} (stopped)", s.slug),
+                    state::SessionStatus::Active => s.slug.clone(),
                 },
                 mode: s.mode.to_string(),
                 slot: s.slot,

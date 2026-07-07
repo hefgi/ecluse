@@ -45,12 +45,18 @@ pub struct ComposeOverlay {
 /// hooks) and must not block every other ecluse command. A `Pending` entry
 /// that never transitions back means the operation crashed; `ecluse down
 /// <slug>` cleans it up.
+///
+/// `Stopped` means `ecluse down --keep-worktree` completed: services are
+/// down and the worktree is on disk. The entry stays in state so that the
+/// next `ecluse up` from inside that worktree resumes at the same slot
+/// instead of allocating a new one (which would change all ports).
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {
     #[default]
     Active,
     Pending,
+    Stopped,
 }
 
 fn is_active(status: &SessionStatus) -> bool {
@@ -143,6 +149,10 @@ impl Session {
 impl State {
     pub fn find_session(&self, slug: &str) -> Option<&Session> {
         self.sessions.iter().find(|s| s.slug == slug)
+    }
+
+    pub fn find_session_mut(&mut self, slug: &str) -> Option<&mut Session> {
+        self.sessions.iter_mut().find(|s| s.slug == slug)
     }
 
     pub fn add_session(&mut self, session: Session) {
@@ -753,5 +763,37 @@ mod tests {
         s.status = SessionStatus::Pending;
         state.add_session(s);
         assert!(state.used_slots().contains(&3));
+    }
+
+    // ── Stopped status ────────────────────────────────────────────────────────
+
+    #[test]
+    fn stopped_status_serializes_and_deserializes() {
+        let mut s = make_session("kept", 3);
+        s.status = SessionStatus::Stopped;
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains("\"stopped\""));
+        let back: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.status, SessionStatus::Stopped);
+    }
+
+    #[test]
+    fn stopped_slot_is_counted_as_used() {
+        let mut state = State::default();
+        let mut s = make_session("kept", 3);
+        s.status = SessionStatus::Stopped;
+        state.add_session(s);
+        assert!(state.used_slots().contains(&3));
+    }
+
+    #[test]
+    fn find_session_mut_updates_status() {
+        let mut state = State::default();
+        state.add_session(make_session("x", 1));
+        state.find_session_mut("x").unwrap().status = SessionStatus::Stopped;
+        assert_eq!(
+            state.find_session("x").unwrap().status,
+            SessionStatus::Stopped
+        );
     }
 }
