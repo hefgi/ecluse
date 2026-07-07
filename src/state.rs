@@ -742,6 +742,27 @@ mod tests {
         assert!(state.still_owned("busy", &op_id));
     }
 
+    // mark_pending mutates the entry in place — it does NOT remove it. A restore
+    // path must therefore remove-then-add, or it duplicates the session. This
+    // pins that invariant so the teardown-failure restore can't silently regress.
+    #[test]
+    fn mark_pending_keeps_a_single_entry() {
+        let mut state = State::default();
+        state.add_session(make_session("busy", 1));
+        state.mark_pending("busy").unwrap();
+        assert_eq!(
+            state.sessions.iter().filter(|s| s.slug == "busy").count(),
+            1
+        );
+        // Restore pattern: remove the Pending entry, then re-add — still one.
+        let original = state.remove_session("busy").unwrap();
+        state.add_session(original);
+        assert_eq!(
+            state.sessions.iter().filter(|s| s.slug == "busy").count(),
+            1
+        );
+    }
+
     #[test]
     fn mark_pending_missing_session_returns_none() {
         let mut state = State::default();

@@ -270,7 +270,7 @@ Or pin a specific port manually:
 ecluse up feat-foo --port api=4001
 ```
 
-**Process management is spawn-and-kill only.** For `host` and `hybrid` modes, services with `command` are spawned on `up` and killed on `down`. ecluse does not monitor or restart crashed processes — `ecluse ls` warns if a nohup-managed process has died. For a fresh start, use `ecluse down feat-foo --keep-worktree && ecluse up feat-foo --reuse-worktree`.
+**Process management is spawn-and-kill only.** For `host` and `hybrid` modes, services with `command` are spawned on `up` and killed on `down`. ecluse does not monitor or restart crashed processes — `ecluse ls` warns if a nohup-managed process has died. For a fresh start, use `ecluse down feat-foo --keep-worktree && ecluse up feat-foo` (the stopped session is auto-detected on the next `up`).
 
 **`command` only works if the app reads its port from the environment.** ecluse injects the full `.env.ecluse` contents (all `ECLUSE_*` vars, `PORT`, `port_env` aliases) directly into the spawned process environment — no separate sourcing needed. It cannot help if:
 - The port is **hardcoded in source code** — the app must be changed to read `$PORT`.

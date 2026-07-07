@@ -264,7 +264,7 @@ The canonical fix for misbehaving services is `ecluse down` + `ecluse up`, not `
 
 ```bash
 ecluse down <your-slug> --keep-worktree
-ecluse up <your-slug> --reuse-worktree
+ecluse up <your-slug>                    # stopped session auto-detected; resumes at the same slot
 ```
 
 This tears down only **your** services and respawns them with the right env. Idempotent, safe under parallel sessions, never touches another agent's work. Reach for this 95% of the time.
@@ -573,7 +573,7 @@ Persistent conflict: change `base_port` in the relevant `[[services]]` block, or
 ecluse down <your-slug> --keep-worktree
 
 # 2. Restart with ecluse spawning the services directly
-ecluse up <your-slug> --reuse-worktree
+ecluse up <your-slug>                    # stopped session auto-detected; resumes at the same slot
 
 # 3. Verify ports are correct
 ecluse status <your-slug>
@@ -766,7 +766,7 @@ inspect it with `ecluse whose-pid <pid>` and kill it manually if intended.
 
 What ecluse intentionally does not do in v0. These are design decisions, not bugs.
 
-- **Ports are checked, not reserved** — ecluse finds a free port at `up` time and writes it to `.env.ecluse`. There is a small window between that check and when your process actually binds. If another process takes the port in between, the value in `.env.ecluse` will be wrong. Fix: `ecluse down feat-foo --keep-worktree` then `ecluse up feat-foo --reuse-worktree`, or pin a specific port with `--port name=value`.
+- **Ports are checked, not reserved** — ecluse finds a free port at `up` time and writes it to `.env.ecluse`. There is a small window between that check and when your process actually binds. If another process takes the port in between, the value in `.env.ecluse` will be wrong. Fix: `ecluse down feat-foo --keep-worktree` then `ecluse up feat-foo` (stopped session auto-detected, re-probes for a free port), or pin a specific port with `--port name=value`.
 - **No process lifecycle management beyond spawn/kill** — ecluse can spawn native services on `up` (via `command` + `process_manager`) and kill them on `down`, but cannot auto-restart a crashed process. If a service dies, `ecluse up` (idempotent — slug auto-detected from cwd) starts only the downed services. `ecluse up --force` kills everything on allocated ports and restarts fresh. `ecluse ls` and `ecluse env` warn about dead nohup processes.
 - **`command` requires the app to expose a port entry point** — ecluse injects the full `.env.ecluse` contents (`PORT`, `ECLUSE_SLOT`, `ECLUSE_SLUG`, `ECLUSE_MODE`, all `ECLUSE_<NAME>_PORT` vars, and any `port_env` aliases) directly into the spawned process environment — no separate sourcing step needed. If the port is hardcoded or set in a config file, resolve it via `.ecluse.toml` first: pass it as a CLI flag (`command = "vite --port $ECLUSE_WEB_PORT"`), or use `port_env` to inject it under the var name the app already reads. Modifying app source code is the last resort — see [Port wiring](#port-wiring--exhaust-eclusetoml-options-before-touching-app-code) above.
 - **Mode is set at `init`, not re-detected on `up`** — to change: `ecluse init --mode <new>`

@@ -621,7 +621,10 @@ fn resolve_slug_from_args(arg: Option<&str>, state: &state::State, hint: &str) -
         None => {
             let cwd = std::env::current_dir().context("could not determine current directory")?;
 
-            // Inside an active ecluse session — use it.
+            // Inside any known ecluse session — use it. Includes Stopped
+            // sessions so `ecluse up`/`down` resolve the slug from inside a
+            // kept worktree (read commands then reject Stopped via
+            // ensure_session_settled).
             if let Some(session) = state
                 .sessions
                 .iter()
@@ -1016,13 +1019,20 @@ fn cmd_up_resume(
             Ok(())
         }
         Ok(None) => {
-            guard.state.add_session(existing.clone());
+            // Resume succeeded with nothing to start (all services already
+            // running, or none configured). Force Active: `existing` is the
+            // pre-`mark_pending` snapshot, so a resumed Stopped session would
+            // otherwise be persisted Stopped and immediately wedge env/shell/status.
+            let mut restored = existing.clone();
+            restored.status = state::SessionStatus::Active;
+            restored.pending_op = None;
+            guard.state.add_session(restored.clone());
             guard.commit()?;
             log.step("All services already running — nothing to do.");
             if args.json {
-                print_up_json(&existing, &root)?;
+                print_up_json(&restored, &root)?;
             } else {
-                print_up_summary(&existing, &config, &log);
+                print_up_summary(&restored, &config, &log);
             }
             Ok(())
         }
@@ -1355,24 +1365,18 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         &log,
     );
 
+    if let Err(e) = result {
+        // Teardown failed — restore the session so it can be retried. Use the
+        // shared helper (remove-then-add under its own lock): `mark_pending`
+        // left the Pending entry in place, so a bare add_session would
+        // duplicate it. The helper also preserves a pre-existing Stopped status
+        // and is a no-op if another command took the session over.
+        restore_session(&root, &session, &op_id)?;
+        return Err(e);
+    }
+
     let mut guard = state::StateGuard::acquire(&root)?;
     if guard.state.still_owned(&slug, &op_id) {
-        if let Err(e) = result {
-            // Teardown failed — restore the session so it can be retried.
-            // Preserve a pre-existing Stopped status (a `down` on an already
-            // stopped session that failed); otherwise settle back to Active.
-            let restore_status = if session.status == state::SessionStatus::Stopped {
-                state::SessionStatus::Stopped
-            } else {
-                state::SessionStatus::Active
-            };
-            let mut restored = session;
-            restored.status = restore_status;
-            restored.pending_op = None;
-            guard.state.add_session(restored);
-            guard.commit()?;
-            return Err(e);
-        }
         if keep_worktree {
             // Services are down but the worktree stays on disk.
             // Mark Stopped so the next `ecluse up` from inside the worktree
@@ -1384,12 +1388,11 @@ fn cmd_down(args: cli::DownArgs) -> Result<()> {
         guard.commit()?;
     } else {
         // Another command took the session over during teardown — leave the
-        // entry to its new owner, but still report our own outcome.
+        // entry to its new owner. Teardown itself succeeded, so nothing to report.
         drop(guard);
         log.warn(&format!(
             "session '{slug}' was taken over by another command during teardown; leaving its state entry alone"
         ));
-        result?;
     }
 
     if args.keep_branch {
