@@ -1,14 +1,20 @@
 # ecluse
 
-**Ephemeral local environments for coding agents — any stack.**
+**Your coding agent can't verify its work if it has nowhere to run it.**
 
-Each git worktree gets its own slot — isolated ports, isolated services, isolated data. Works whether your stack runs in Docker, on the host, or a mix. No collisions, clean teardown.
+ecluse gives every agent its own full stack — isolated ports, isolated services, isolated database. Run 8 agents in parallel, each verifying against a real running system. No collisions, clean teardown.
 
 ---
 
-You're running 4 Claude Code sessions in parallel. Each agent finishes its task and wants to verify — run the test suite, spin up the app, hit the endpoints. But port 3000 is taken. Agent 2 kills agent 1's server. Agent 3 waits. The verification loop that was supposed to run in parallel is now sequential. You're paying for 4 agents and getting the throughput of one.
+AI writes the code. It can't check the code.
 
-ecluse gives each agent its own slot: isolated ports, its own services, its own infra. All 4 agents spin up, verify, and tear down independently. The full AI verification loop — build, migrate, test, e2e — runs in parallel, without collisions, without waiting.
+Writing code needs a context window. *Verifying* code needs a running system — a database to migrate, a port to bind, an endpoint to hit, a browser to click through. An agent with no environment can only do the two weakest kinds of verification: re-read its own diff, and run unit tests that mock away the parts where bugs live.
+
+So you get plausible-looking code that nobody ran. And it lands in a human's review queue, which is the one part of the pipeline that doesn't parallelize.
+
+Now try to fix that by running four agents at once. Each needs Postgres, port 3000, and a migrated schema. Port 3000 is taken. Agent B drops Agent A's database. Agent C waits. The verification loop that was supposed to run in parallel is now sequential, and you're paying for four agents to get the throughput of one.
+
+ecluse gives each agent its own slot: isolated ports, its own services, its own data. All four spin up, run the full loop — build, migrate, test, e2e, hit the real endpoints — and tear down independently.
 
 ```
 Create worktree → Spin up env → Do work → Verify → PR → Teardown
@@ -31,3 +37,9 @@ The central concept is a **slot** — an integer from 1 to `max_slots`. Every re
 - Named volumes: `<volume>_<prefix>_<slug>`
 
 Three thin mode implementations share this slot primitive. Mode is selected once at `init` time and stored in `.ecluse.toml`.
+
+## Where ecluse sits
+
+There's a healthy ecosystem of tools for running coding agents in parallel — [Superset](https://github.com/superset-sh/superset), [Gastown](https://github.com/gastownhall/gastown), [claude-squad](https://github.com/smtg-ai/claude-squad), [cmux](https://github.com/craigsc/cmux), [ccmanager](https://github.com/kbwo/ccmanager). Most of them solve *orchestration*: giving each agent a directory, a terminal, a session.
+
+ecluse solves the layer underneath — giving each agent a **running system** to verify against. They compose well together: use an orchestrator for the agents, ecluse for the environments those agents need. And [nono](https://github.com/nolabs-ai/nono) confines what an agent is *allowed* to touch at the kernel level, which is a different problem again — use both.

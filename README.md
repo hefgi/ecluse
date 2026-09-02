@@ -2,10 +2,11 @@
 
 <img src="banner.png" alt="ecluse" width="600" />
 
-**Ephemeral local environments for coding agents — any stack.**
+**Your coding agent can't verify its work if it has nowhere to run it.**
 
-Each git worktree gets its own slot — isolated ports, isolated services, isolated data.
-Works whether your stack runs in Docker, on the host, or a mix. No collisions, clean teardown.
+ecluse gives every agent its own full stack — isolated ports, isolated services,
+isolated database. Run 8 agents in parallel, each verifying against a real running
+system. No collisions, clean teardown.
 
 [![CI](https://github.com/hefgi/ecluse/actions/workflows/ci.yml/badge.svg)](https://github.com/hefgi/ecluse/actions/workflows/ci.yml)
 [![Crates.io](https://img.shields.io/crates/v/ecluse.svg)](https://crates.io/crates/ecluse)
@@ -13,9 +14,13 @@ Works whether your stack runs in Docker, on the host, or a mix. No collisions, c
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-ecluse.ai-blue)](https://ecluse.ai/)
 
+<!-- TODO(demo): replace with demo.gif — 4 agents, 4 stacks, one laptop, no collisions.
+     See docs/DEMO-SCRIPT.md for the shot list and recording commands. -->
+<img src="docs/demo.gif" alt="Four coding agents, four isolated stacks, one laptop" width="800" />
+
 ---
 
-**Built for coding agents running tasks in parallel.**
+**Works with every agent that runs in a terminal.**
 
 ![Claude Code](https://img.shields.io/badge/Claude_Code-d97706?style=flat-square)
 ![Cursor](https://img.shields.io/badge/Cursor-000?style=flat-square)
@@ -23,21 +28,37 @@ Works whether your stack runs in Docker, on the host, or a mix. No collisions, c
 ![OpenCode](https://img.shields.io/badge/OpenCode-6366f1?style=flat-square)
 ![Pi](https://img.shields.io/badge/Pi-333?style=flat-square)
 
-and any agent that can run shell commands.
-
 </div>
 
 ## The problem
 
-You're running 4 Claude Code sessions in parallel. Each agent finishes its task and wants to verify — run the test suite, spin up the app, hit the endpoints. But port 3000 is taken. Agent 2 kills agent 1's server. Agent 3 waits. The verification loop that was supposed to run in parallel is now sequential. You're paying for 4 agents and getting the throughput of one.
+AI writes the code. It can't check the code.
 
-ecluse gives each agent its own slot: isolated ports, its own services, its own infra. All 4 agents spin up, verify, and tear down independently. The full AI verification loop — build, migrate, test, e2e — runs in parallel, without collisions, without waiting.
+Writing code needs a context window. *Verifying* code needs a running system — a
+database to migrate, a port to bind, an endpoint to hit, a browser to click through.
+An agent with no environment can only do the two weakest kinds of verification:
+re-read its own diff, and run unit tests that mock away the parts where bugs live.
 
-<div align="center">
+So you get plausible-looking code that nobody ran. And it lands in a human's review
+queue, which is the one part of the pipeline that doesn't parallelize.
 
-**Create worktree → Spin up env → Do work → Verify → PR → Teardown**
+Now try to fix that by running four agents at once:
 
-</div>
+```
+Agent A → needs Postgres, port 3000, a migrated schema
+Agent B → needs Postgres, port 3000, a migrated schema
+Agent C → needs Postgres, port 3000, a migrated schema
+Agent D → needs Postgres, port 3000, a migrated schema
+```
+
+Port 3000 is taken. Agent B drops Agent A's database. Agent C waits. The verification
+loop that was supposed to run in parallel is now sequential, and you're paying for four
+agents to get the throughput of one.
+
+## What ecluse does
+
+One command per agent. Each gets its own slot: its own ports, its own services, its own
+data, torn down cleanly when it's done.
 
 ```bash
 ecluse up feat-foo    # new worktree, isolated ports, isolated services
@@ -45,7 +66,17 @@ ecluse up fix-bar     # parallel session, different slot, zero collisions
 ecluse down feat-foo  # clean teardown, nothing left behind
 ```
 
-> ecluse is French for "canal lock" — each session gets its own chamber, everything is isolated, nothing leaks between them.
+All four agents spin up, run the full loop — build, migrate, test, e2e, hit the real
+endpoints — and tear down independently.
+
+<div align="center">
+
+**Create worktree → Spin up env → Do work → Verify → PR → Teardown**
+
+</div>
+
+> ecluse is French for "canal lock" — each session gets its own chamber, everything is
+> isolated, nothing leaks between them.
 
 ## Install
 
@@ -61,13 +92,14 @@ brew install hefgi/tap/ecluse
 cargo install ecluse
 ```
 
-Then install the agent skill:
+Then install the agent skill, so your agent knows how to drive it:
 
 ```bash
 npx skills add hefgi/ecluse -g
 ```
 
-Requires Rust 1.85+. For container and hybrid modes, [OrbStack](https://orbstack.dev) is recommended over Docker Desktop on macOS — faster, less memory.
+Requires Rust 1.85+. For container and hybrid modes, [OrbStack](https://orbstack.dev) is
+recommended over Docker Desktop on macOS — faster, less memory.
 
 ## Get started
 
@@ -79,7 +111,7 @@ ecluse shell feat-foo    # drops into worktree with env loaded
 npm run dev              # PORT already set — app binds to its own port
 ```
 
-`ecluse init` writes a `.ecluse.toml` at repo root. Here's what a typical one looks like:
+`ecluse init` writes a `.ecluse.toml` at repo root. A typical one:
 
 ```toml
 mode = "hybrid"          # container | host | hybrid
@@ -100,7 +132,17 @@ run = "docker"
 base_port = 6379         # slot 1 → ECLUSE_REDIS_PORT=6380, slot 2 → 6381
 ```
 
-Each `ecluse up` picks the next free slot, starts isolated services, and writes all ports to `.env.ecluse` in the worktree. Type `exit` (or `ecluse down`) to tear everything down.
+Each `ecluse up` picks the next free slot, starts isolated services, and writes all ports
+to `.env.ecluse` in the worktree. Type `exit` (or `ecluse down`) to tear everything down.
+
+Migrations and seeding go in [hooks](https://ecluse.ai/hooks.html) — `post_up` runs with
+the full environment available, so each agent gets a migrated database of its own.
+
+📖 **[Full configuration reference →](https://ecluse.ai/configuration.html)**
+· [Commands](https://ecluse.ai/commands.html)
+· [Port allocation](https://ecluse.ai/ports.html)
+· [Agent workflow](https://ecluse.ai/agent-workflow.html)
+· [Known limits](https://ecluse.ai/limits.html)
 
 ## Choosing a mode
 
@@ -114,18 +156,20 @@ Each `ecluse up` picks the next free slot, starts isolated services, and writes 
 
 ## How it works
 
-The central concept is a **slot** — an integer from 1 to `max_slots`. Every resource is derived from the slot:
+The central concept is a **slot** — an integer from 1 to `max_slots`. Every resource is
+derived from it:
 
-- Per-service port: `base_port + slot` (e.g. `api` at `base_port=3000`, slot 1 → 3001, slot 2 → 3002)
+- Per-service port: `base_port + slot` (`api` at `base_port=3000` → slot 1 gets 3001, slot 2 gets 3002)
 - Compose project name: `<prefix>_<slug>`
 - Named volumes: `<volume>_<prefix>_<slug>`
 
-Three thin mode implementations share this slot primitive. Mode is selected once at `init` time and stored in `.ecluse.toml`.
+Three thin mode implementations share this one primitive. Mode is selected once at `init`
+time and stored in `.ecluse.toml`.
 
-**How services are started depends on mode:**
+**How services start depends on mode:**
 
 - `container` — everything runs via Docker Compose. ecluse generates a per-slot overlay and calls `docker compose up`.
-- `host` / `hybrid` — native services are spawned using your system's process manager. ecluse uses **tmux** if available (one detached session per slot, one window per service), falling back to **nohup** otherwise (background processes with logs at `.ecluse/logs/<slug>/`). Docker data services in hybrid mode still go through Compose. Set `command` on a `[[services]]` entry to opt in; services without `command` are not spawned.
+- `host` / `hybrid` — native services are spawned using your system's process manager: **tmux** if available (one detached session per slot, one window per service), falling back to **nohup** (logs at `.ecluse/logs/<slug>/`). Docker data services in hybrid mode still go through Compose. Set `command` on a `[[services]]` entry to opt in; services without `command` are not spawned.
 
 ## Commands
 
@@ -143,12 +187,12 @@ ecluse validate [--ports]
 ecluse status [<slug>] [--json] [--quiet]
 ```
 
-**Env** — get the worktree path and all env vars for a running session as JSON:
+`ecluse up` is idempotent, auto-detects the slug from your cwd, auto-registers existing
+worktrees, and accepts branch names directly (`ecluse up feat/add-auth`). `ecluse env`
+emits the worktree path and every `ECLUSE_*` variable as JSON, which is how agents
+discover their own environment.
 
-```bash
-ecluse env feat-foo          # full JSON: worktree_path, slot, all ECLUSE_* vars
-ecluse env                   # auto-detects session if run from inside a worktree
-```
+📖 **[Full command reference →](https://ecluse.ai/commands.html)**
 
 **Port discovery** — `ecluse ls` and `ecluse status` also report the port each service is
 *actually* listening on next to the one ecluse assigned, so a service that bound the wrong
@@ -168,25 +212,6 @@ Assignment stays the source of truth — a discovered port is reported, never wr
 over it. Under parallel sessions the process on a neighbouring port is almost always
 another agent's working service, so the remedy is `down --keep-worktree` + `up`, not `kill`.
 
-**Branch names as argument** — pass your git branch name directly; ecluse sanitizes it to a valid slug and uses the original as the branch:
-
-```bash
-ecluse up feat/add-auth   # slug=feat-add-auth, branch=feat/add-auth
-ecluse up                 # inside a git worktree → auto-detects branch from cwd
-ecluse up                 # in repo root / main worktree → prompts for branch name
-```
-
-**Auto-register existing worktrees** — running `ecluse up` from inside any git worktree (even one not created by ecluse) auto-detects the branch, registers the session, and starts services. No `--reuse-worktree` flag needed.
-
-**Idempotent up** — `ecluse up` is safe to run on an existing session. It reuses the worktree and slot, checks which services are running, and starts only the ones that are down. Slug is auto-detected from cwd:
-
-```bash
-ecluse up feat-foo    # existing session: starts only downed services, skips running ones
-ecluse up             # same, slug auto-detected from cwd
-ecluse up --force     # kill all running services on allocated ports, restart all
-ecluse up --skip api  # skip api; start everything else
-```
-
 **Soft restart** — tear down services without losing your worktree, then spin them up fresh:
 
 ```bash
@@ -196,121 +221,61 @@ ecluse up feat-foo                      # resumes at the same slot; ports are re
 
 A stopped session keeps its slot until its worktree is deleted. Running `--keep-worktree` again does not free it. If you hit "all N slots are in use", check `ecluse ls` for `(stopped)` sessions and run `ecluse down <slug> --delete-worktree` on the ones you no longer need. When you are done with a branch, use `--delete-worktree` rather than `--keep-worktree`.
 
-**Port override** — pin a specific service to a port for this session (useful when the auto-assigned port conflicts with something ecluse can't detect):
+## How ecluse compares
 
-```bash
-ecluse up feat-foo --port api=4001 --port postgres=5444
-```
+There's a healthy ecosystem of tools for running coding agents in parallel. Most of them
+solve *orchestration* — giving each agent a directory, a terminal, a session. ecluse
+solves the layer underneath: giving each agent a **running system** to verify against.
 
-## Configuration
+| | Worktree per agent | Isolated ports | Isolated services + DB | Clean teardown | Cross-platform |
+|---|---|---|---|---|---|
+| **ecluse** | ✅ | ✅ | ✅ | ✅ | ✅ macOS/Linux/WSL2 |
+| [Superset](https://github.com/superset-sh/superset) | ✅ | ✅ detection | ⚠️ setup scripts | — | macOS (Linux exp.) |
+| [claude-squad](https://github.com/smtg-ai/claude-squad) | ✅ | — | — | — | ✅ |
+| [Gastown](https://github.com/gastownhall/gastown) | ✅ | — | — | — | ✅ |
+| [ccmanager](https://github.com/kbwo/ccmanager) | ✅ | — | — | — | ✅ |
+| [cmux](https://github.com/craigsc/cmux) | ✅ | — | — | — | macOS |
+| plain `git worktree` | ✅ | — | — | — | ✅ |
 
-`.ecluse.toml` lives at repo root, written by `ecluse init`:
+**They're complements, not competitors** — and ecluse is designed to compose with them:
 
-```toml
-mode = "hybrid"
-max_slots = 8
-prefix = "ecluse"
-worktree_dir = ".ecluse/worktrees"
+- **[Superset](https://github.com/superset-sh/superset)** gives you a polished agentic IDE with a diff viewer, in-app browser, and 100+ parallel agents. It detects ports but leaves service and database provisioning to your own setup scripts. Point those scripts at `ecluse up` and each workspace gets a real stack.
+- **[Gastown](https://github.com/gastownhall/gastown)** coordinates 20–30 agents with git-backed work tracking. ecluse uses tmux as a process manager too, so the two sit naturally side by side.
+- **[cmux](https://github.com/craigsc/cmux)**'s docs recommend pairing it with a worktree manager. That's this.
+- **[nono](https://github.com/nolabs-ai/nono)** confines what an agent is *allowed* to touch, at the kernel. ecluse provisions what an agent *needs to run*. Security and capability are different problems — use both.
 
-# Env file inheritance — materialized from repo root into each worktree (default: both symlinked)
-# inherit_env = [".env", ".env.local"]   # set to [] to opt out
-# inherit_env = [".env", { file = ".env.local", mode = "copy" }]  # .env.local copied once,
-#                                                                  # per-worktree edits stay local
-
-# Port collision handling (both optional)
-# strict_port = false        # default: search for a free port on collision
-# port_search_range = 10     # how many alternatives to try (bump by max_slots each time)
-
-# One [[services]] block per service. port = base_port + slot.
-# Native services run on the host; docker services run in containers.
-# The first native entry also sets the PORT alias for framework compatibility.
-# Add command = "..." to have ecluse spawn the process on ecluse up.
-
-[[services]]
-name = "api"
-base_port = 3000             # slot 1 → ECLUSE_API_PORT=3001 + PORT, slot 2 → 3002
-command = "npm run dev"      # optional — ecluse spawns this on ecluse up
-                             # omit for port-allocation-only (start process yourself)
-# port_env = "DJANGO_PORT"  # also inject the port under a custom var name
-# port_env = ["DJANGO_PORT", "APP_PORT"]  # or multiple aliases
-
-[[services]]
-name = "postgres"
-run = "docker"
-base_port = 5432             # slot 1 → ECLUSE_POSTGRES_PORT=5433, slot 2 → 5434
-
-# Optional: lifecycle hooks — shell commands run in the worktree.
-# Order: pre_up (nothing exists yet, no env) → pre_spawn (env written,
-# services not started) → post_up (everything up) → pre_down (before
-# teardown) → post_down (after teardown).
-[hooks]
-post_up = "npx prisma migrate deploy"        # full ECLUSE_* env available
-pre_down = "npx prisma migrate reset --force"
-```
-
-`ecluse init` writes `~/.config/ecluse/config.toml` with the detected process manager (`tmux` if installed, otherwise `nohup`). Services with `command` are spawned on `ecluse up` and killed on `ecluse down`. Set `process_manager = "none"` to opt out.
-
-**`[[services]]` for monorepos and multi-service stacks:** define one block per service. Each gets a stable, collision-free port per slot (`base_port + slot`). Omit `[[services]]` entirely for single-service projects — ecluse falls back to a single `PORT = 3000 + slot`.
-
-**Multiple compose files in a monorepo:** point each docker service at its own compose file with the `compose` field (path relative to repo root). Services without `compose` fall back to the root compose file. ecluse generates one overlay per compose file and brings them all up under the same project name.
-
-```toml
-[[services]]
-name = "api"
-base_port = 3000               # native — no compose needed
-
-[[services]]
-name = "postgres"
-run = "docker"
-base_port = 5432               # uses root docker-compose.yml (default)
-
-[[services]]
-name = "worker-queue"
-run = "docker"
-base_port = 6379
-compose = "services/worker/docker-compose.yml"   # its own compose file
-```
-
-**Port collision handling** — by default ecluse searches for a free port if the nominal one is taken, trying `nominal + i × max_slots` to stay out of other slots' territory. Set `strict_port = true` to fail immediately instead. Run `ecluse validate` to check your config and preview the full port allocation table.
-
-Hooks run as shell commands with all `.env.ecluse` variables pre-loaded (except `pre_up`, which runs before any env exists). `pre_up` and `post_down` run from the repo root, the rest inside the worktree. Use them for migrations, seeding, or teardown. ecluse doesn't manage databases directly — your app's own tooling handles that via `pre_spawn` (if the app needs the schema at boot) or `post_up`. The old `on_up`/`on_down` names still work as deprecated aliases for `pre_up`/`pre_down`.
+If you want a GUI, agent orchestration, or session multiplexing, use one of the above.
+Use ecluse when you need the agents to have somewhere real to verify.
 
 ## Known limits
 
-**Ports are checked, not reserved.** ecluse finds a free port at `ecluse up` time and writes it to `.env.ecluse`. There is a small window between the check and when your process actually binds — if something else takes the port in between, the port in `.env.ecluse` will be wrong. The fix is to tear down and recreate the session:
+Three things worth knowing before you rely on this:
 
-```bash
-ecluse down feat-foo --keep-worktree   # session shows as `feat-foo (stopped)` in `ecluse ls` until the next up
-ecluse up feat-foo                      # resumes the stopped session and re-probes for free ports
-```
+**Ports are checked, not reserved.** ecluse finds a free port at `ecluse up` time and
+writes it to `.env.ecluse`. There's a small window before your process binds — if
+something else takes the port in between, the value in `.env.ecluse` is wrong. Fix by
+recreating the session (`ecluse down --keep-worktree && ecluse up`) or pinning
+(`ecluse up feat-foo --port api=4001`).
 
-Or pin a specific port manually:
+**Process management is spawn-and-kill only.** Services with `command` are spawned on
+`up` and killed on `down`. ecluse doesn't monitor or restart crashed processes, though
+`ecluse ls` warns if a nohup-managed process has died.
 
-```bash
-ecluse up feat-foo --port api=4001
-```
+**`command` only works if your app reads its port from the environment.** ecluse injects
+the full `.env.ecluse` into the spawned process, but it can't help if the port is
+hardcoded in source or set in a config file. Use `port_env` for custom variable names, or
+pass it through the command (`command = "next dev --port $PORT"`).
 
-**Process management is spawn-and-kill only.** For `host` and `hybrid` modes, services with `command` are spawned on `up` and killed on `down`. ecluse does not monitor or restart crashed processes — `ecluse ls` warns if a nohup-managed process has died. For a fresh start, use `ecluse down feat-foo --keep-worktree && ecluse up feat-foo` (the stopped session is auto-detected on the next `up`).
-
-**`command` only works if the app reads its port from the environment.** ecluse injects the full `.env.ecluse` contents (all `ECLUSE_*` vars, `PORT`, `port_env` aliases) directly into the spawned process environment — no separate sourcing needed. It cannot help if:
-- The port is **hardcoded in source code** — the app must be changed to read `$PORT`.
-- The port is **set in a config file** (e.g. `config/puma.rb`, `vite.config.ts`, `.env`) — ecluse does not modify app config files; update the config to read from the environment instead.
-
-If the app reads a custom env var, use `port_env` to inject it under that name:
-```toml
-port_env = "DJANGO_PORT"                  # single alias
-port_env = ["DJANGO_PORT", "APP_PORT"]    # multiple aliases
-```
-
-If the framework accepts a CLI flag, pass the var through the command:
-```toml
-command = "next dev --port $PORT"
-command = "bundle exec rails s -p $PORT"
-```
+📖 **[Full details and workarounds →](https://ecluse.ai/limits.html)**
 
 ## Contributing
 
-Issues and PRs are welcome. Check the [open issues](https://github.com/hefgi/ecluse/issues) for ideas — good first issues are tagged. If you're adding a new isolation mode or provider, open an issue first to discuss the approach.
+Issues and PRs are welcome — check the [open issues](https://github.com/hefgi/ecluse/issues),
+where good first issues are tagged. If you're adding an isolation mode or an execution
+provider, open an issue first so we can talk through the approach.
+
+Questions and ideas are welcome in
+[Discussions](https://github.com/hefgi/ecluse/discussions).
 
 ## License
 
