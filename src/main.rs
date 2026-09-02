@@ -2,6 +2,7 @@ mod cli;
 mod compose;
 mod config;
 mod detect;
+mod discover;
 mod docker;
 mod env;
 mod error;
