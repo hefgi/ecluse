@@ -1055,16 +1055,24 @@ mod tests {
         )
         .unwrap();
 
+        // Wait for the pid to be readable, not merely for the file to exist:
+        // the shell creates the file on redirect and writes to it a moment
+        // later, so an existence-only wait can read an empty file and panic on
+        // parse. Under full-suite load that window is wide enough to hit.
+        let read_child_pid = || -> Option<u32> {
+            std::fs::read_to_string(&child_pid_file)
+                .ok()?
+                .trim()
+                .parse()
+                .ok()
+        };
         assert!(
-            wait_until(std::time::Duration::from_secs(5), || child_pid_file
-                .exists()),
-            "child pid file never appeared"
+            wait_until(std::time::Duration::from_secs(5), || read_child_pid()
+                .is_some()),
+            "child pid never appeared in {}",
+            child_pid_file.display()
         );
-        let child_pid: u32 = std::fs::read_to_string(&child_pid_file)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        let child_pid = read_child_pid().expect("child pid readable after wait");
         assert!(pid_alive(child_pid), "background child should be running");
 
         kill_services(&ProcessManager::Nohup, &result);
