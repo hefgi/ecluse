@@ -1,0 +1,78 @@
+name: Bug report
+description: Something doesn't work the way the docs say it should
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing. The most useful thing you can include is the output of
+        `ecluse validate` and `ecluse ls --json` — most issues are visible there.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ecluse init --mode hybrid
+        2. ecluse up feat-foo
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: .ecluse.toml
+      description: Redact anything sensitive.
+      render: toml
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Output of `ecluse validate` and `ecluse ls --json`.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: ecluse version
+      description: Output of `ecluse --version`
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+        - Windows (WSL2)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Container runtime
+      options:
+        - OrbStack
+        - Docker Desktop
+        - Colima
+        - Podman
+        - Native Docker (Linux)
+        - None (host mode)
+    validations:
+      required: true
