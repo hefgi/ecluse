@@ -592,7 +592,7 @@ fn kill_tmux(result: &SpawnResult) {
 }
 
 /// All pane PIDs across all windows of `session`. Empty on any tmux failure.
-fn tmux_session_pane_pids(session: &str) -> Vec<u32> {
+pub fn tmux_session_pane_pids(session: &str) -> Vec<u32> {
     let Ok(out) = Command::new("tmux")
         .args(["list-panes", "-s", "-t", session, "-F", "#{pane_pid}"])
         .output()

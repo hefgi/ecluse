@@ -203,6 +203,27 @@ impl PortSnapshot {
     }
 }
 
+/// Which slot a port belongs to under the configured allocation scheme.
+///
+/// `port = base_port + slot × stride` inverts to `slot = (port - base) / stride`
+/// when the remainder is zero. Reporting this is what turns "a process is on a
+/// port near mine" — the inference that started the 2026-06-09 kill spiral —
+/// into "that port is slot 3's, owned by session X, do not kill it".
+pub fn owning_slot(port: u16, base_port: u16, slot_stride: u8, max_slots: u8) -> Option<u8> {
+    let stride = slot_stride.max(1) as u16;
+    let offset = port.checked_sub(base_port)?;
+    if offset % stride != 0 {
+        return None;
+    }
+    let slot = offset / stride;
+    // Slot 0 is not a valid allocation (slots are 1..=max_slots), and a port
+    // beyond max_slots' territory belongs to nobody.
+    if slot == 0 || slot > max_slots as u16 {
+        return None;
+    }
+    Some(slot as u8)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,6 +406,53 @@ n[::]:27017
         assert_eq!(s.listener_pid(3000), None);
         assert_eq!(s.listener_pid(3001), Some(50));
         assert_eq!(s.tree_pids(60), vec![60]);
+    }
+
+    // ── owning_slot ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn owning_slot_identifies_own_slot_stride_1() {
+        assert_eq!(owning_slot(3001, 3000, 1, 8), Some(1));
+        assert_eq!(owning_slot(3004, 3000, 1, 8), Some(4));
+    }
+
+    #[test]
+    fn owning_slot_identifies_slot_with_stride_10() {
+        assert_eq!(owning_slot(3010, 3000, 10, 8), Some(1));
+        assert_eq!(owning_slot(3030, 3000, 10, 8), Some(3));
+    }
+
+    // An auto-bumped port that lands between slots belongs to no slot — this
+    // is the benign case that must NOT be reported as cross-slot theft.
+    #[test]
+    fn owning_slot_none_when_not_on_stride_boundary() {
+        assert_eq!(owning_slot(3015, 3000, 10, 8), None);
+    }
+
+    #[test]
+    fn owning_slot_none_for_base_port_itself() {
+        // base_port is slot 0 — never a valid allocation.
+        assert_eq!(owning_slot(3000, 3000, 1, 8), None);
+    }
+
+    #[test]
+    fn owning_slot_none_beyond_max_slots() {
+        assert_eq!(owning_slot(3009, 3000, 1, 8), None);
+    }
+
+    #[test]
+    fn owning_slot_none_below_base_port() {
+        assert_eq!(owning_slot(2999, 3000, 1, 8), None);
+    }
+
+    #[test]
+    fn owning_slot_handles_last_valid_slot() {
+        assert_eq!(owning_slot(3008, 3000, 1, 8), Some(8));
+    }
+
+    #[test]
+    fn owning_slot_treats_zero_stride_as_one() {
+        assert_eq!(owning_slot(3002, 3000, 0, 8), Some(2));
     }
 
     // Guards against a real-world regression: a live snapshot must find the
