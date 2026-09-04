@@ -566,6 +566,21 @@ Persistent conflict: change `base_port` in the relevant `[[services]]` block, or
 
 **Root cause:** an external task runner (`task`, `make`, `npm run`, `bin/dev`) was used as the service entry point instead of `command = "..."` in `.ecluse.toml`. External runners re-read `.env.local` and inherit the spawning shell's env — neither knows about `.env.ecluse`. Under parallel sessions the spawning shell can carry env from a *different* worktree's `source .env.ecluse`, so services bind to the wrong slot's ports. Agents then see "a process on a port adjacent to mine" and kill it, believing it's their own stale leftover.
 
+**Detection:** `ecluse status` compares the port ecluse assigned against the port the service is actually listening on, and names the slot that owns the wrong one:
+
+```
+SERVICE  TYPE     EXPECTED  ACTUAL  STATUS
+api      native   4010      4020    ✗ wrong port 4020 (slot 2)
+
+warning: service 'api' is listening on 4020 but ecluse assigned 4010; 4020 belongs
+to slot 2 (session 'feat-b') — do not kill it, run: ecluse down feat-a
+--keep-worktree && ecluse up feat-a
+```
+
+`ecluse ls` shows the same thing per session: a `LISTENING` column with a trailing `!` when an assigned port isn't being listened on.
+
+**When you see this, do NOT kill the process on the ACTUAL port.** It belongs to another session. Run the recovery below — it only touches your own services.
+
 **Recovery (do this in each affected session):**
 
 ```bash
