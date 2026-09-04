@@ -185,6 +185,7 @@ ecluse flush [--yes]
 ecluse ls [--json]
 ecluse validate [--ports]
 ecluse status [<slug>] [--json] [--quiet]
+ecluse whose-pid <pid> [--json]
 ```
 
 `ecluse up` is idempotent, auto-detects the slug from your cwd, auto-registers existing
