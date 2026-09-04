@@ -80,6 +80,28 @@ Pin a specific service to a port for a session (useful when the auto-assigned po
 ecluse up feat-foo --port api=4001 --port postgres=5444
 ```
 
+## Discovery: what is actually listening
+
+Assignment answers "which port should this service use". Discovery answers "which port is it really on". `ecluse ls` and `ecluse status` report both, so a service that bound the wrong port is visible instead of just looking down.
+
+Discovery runs when you invoke a command — there is no background daemon. It takes one snapshot of every listening TCP socket plus the process table (two subprocess calls total, regardless of how many sessions exist), then attributes each listener to the session whose process tree owns it.
+
+```
+$ ecluse status feat-a
+SERVICE  TYPE     EXPECTED  ACTUAL  STATUS
+api      native   4010      4020    ✗ wrong port 4020 (slot 2)
+```
+
+Because ports are derived from the slot, the formula inverts: a discovered port can be mapped back to the slot that owns it. When the wrong port belongs to another slot, ecluse names that slot and its session, and says explicitly not to kill it — under parallel sessions the process on a neighbouring port is almost always another agent's working service.
+
+**Discovery never overwrites assignment.** `state.json` remains the source of truth. A discovered port that disagrees with the assigned one is evidence of a bug — typically an external task runner (`task`, `make`, `npm run`) that re-read `.env.local` instead of `.env.ecluse` — not a better value to adopt. Trusting discovery is what once hid a wrong-slot spawn behind a green check while three agents killed each other's services. The fix for a mismatch is always:
+
+```bash
+ecluse down <slug> --keep-worktree && ecluse up <slug>
+```
+
+Only a *missing* assigned port counts as a mismatch. The extra sockets a dev server opens (HMR, debug, inspector) show up in the discovered set without flagging anything.
+
 ## Known limitation
 
 Ports are checked, not reserved. ecluse finds a free port at `ecluse up` time and writes it to `.env.ecluse`. There is a small window between the check and when your process actually binds — if something else takes the port in between, the port in `.env.ecluse` will be wrong. The fix:

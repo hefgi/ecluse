@@ -150,6 +150,16 @@ Lists active sessions. Use `--json` for machine-readable output.
 
 The table shows all allocated ports in a `PORTS` column as `name=value` pairs (e.g. `api=4445 postgres=5433 redis=6380`). A `TMUX` column appears when at least one session uses tmux — the value is the session name you can pass to `tmux attach -t <name>` or `ecluse shell <slug>`.
 
+A `LISTENING` column shows the ports each session's processes are *actually* bound to, discovered at invocation time (no background daemon). A trailing `!` means an assigned port is not being listened on — usually a service that bound the wrong port. Run `ecluse status <slug>` for the per-service breakdown:
+
+```
+SLUG     MODE  SLOT  PORTS      LISTENING   BRANCH
+feat-a   host  1     api=4010   4020 !      feat-a
+feat-b   host  2     api=4020   4020        feat-b
+```
+
+Extra sockets a dev server opens (HMR, debug, inspector) appear in `LISTENING` but do not trigger the `!` — only a missing assigned port does. `--json` adds `listening_ports` and `port_mismatch` per session.
+
 ## ecluse validate
 
 Validates port ranges in `.ecluse.toml` and checks for gaps or collisions. Use `--ports` to preview the full port allocation table across all slots. Also checks that the configured `process_manager` binary is installed (e.g. tmux or nohup).
@@ -170,6 +180,21 @@ ecluse status                   # auto-detect slug from cwd (must be inside a wo
 ```
 
 For native services, ecluse matches running processes in the worktree by their command line. For docker services, it queries `docker ps` by container name.
+
+The `EXPECTED` column is the port ecluse allocated; `ACTUAL` is the port the service's process tree is really listening on, shown only when the two differ. A service alive on the wrong port reads `✗ wrong port <n>` rather than a bare `✗ down`, and when that port falls inside another slot's territory the warning names the owning slot and session:
+
+```
+SERVICE  TYPE     EXPECTED  ACTUAL  STATUS
+api      native   4010      4020    ✗ wrong port 4020 (slot 2)
+
+warning: service 'api' is listening on 4020 but ecluse assigned 4010; 4020 belongs
+to slot 2 (session 'feat-b') — do not kill it, run: ecluse down feat-a
+--keep-worktree && ecluse up feat-a
+```
+
+Discovery is read-only: `state.json` stays the source of truth and a discovered port is never written back over the assigned one. A mismatch means something bound the wrong port (usually an external task runner that read `.env.local` instead of `.env.ecluse`) — the fix is `down --keep-worktree` + `up`, never `kill`. `--json` adds `actual_port`, `port_mismatch`, `conflicting_slot`, and `hint` per service.
+
+Docker services are excluded from process-tree discovery: the daemon publishes their ports, so `docker ps` already reports the real mapping.
 
 The last column and the session header adapt to the process manager:
 

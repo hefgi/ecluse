@@ -150,6 +150,24 @@ ecluse env feat-foo          # full JSON: worktree_path, slot, all ECLUSE_* vars
 ecluse env                   # auto-detects session if run from inside a worktree
 ```
 
+**Port discovery** — `ecluse ls` and `ecluse status` also report the port each service is
+*actually* listening on next to the one ecluse assigned, so a service that bound the wrong
+port shows up as wrong rather than merely down. Discovery runs on invocation; there's no daemon.
+
+```
+$ ecluse status feat-a
+SERVICE  TYPE     EXPECTED  ACTUAL  STATUS
+api      native   4010      4020    ✗ wrong port 4020 (slot 2)
+
+warning: service 'api' is listening on 4020 but ecluse assigned 4010; 4020 belongs
+to slot 2 (session 'feat-b') — do not kill it, run: ecluse down feat-a
+--keep-worktree && ecluse up feat-a
+```
+
+Assignment stays the source of truth — a discovered port is reported, never written back
+over it. Under parallel sessions the process on a neighbouring port is almost always
+another agent's working service, so the remedy is `down --keep-worktree` + `up`, not `kill`.
+
 **Branch names as argument** — pass your git branch name directly; ecluse sanitizes it to a valid slug and uses the original as the branch:
 
 ```bash
