@@ -541,6 +541,28 @@ mod tests {
     }
 
     #[test]
+    fn ensure_session_settled_allows_active() {
+        let s = session_with_status(state::SessionStatus::Active);
+        assert!(ensure_session_settled(&s).is_ok());
+    }
+
+    #[test]
+    fn ensure_session_settled_rejects_pending() {
+        let s = session_with_status(state::SessionStatus::Pending);
+        let err = ensure_session_settled(&s).unwrap_err().to_string();
+        assert!(err.contains("in progress"), "got: {err}");
+    }
+
+    #[test]
+    fn ensure_session_settled_rejects_stopped_with_up_hint() {
+        let s = session_with_status(state::SessionStatus::Stopped);
+        let err = ensure_session_settled(&s).unwrap_err().to_string();
+        assert!(err.contains("stopped"), "got: {err}");
+        // Actionable: points the user at the command that revives it.
+        assert!(err.contains("ecluse up"), "got: {err}");
+    }
+
+    #[test]
     fn teardown_skips_bring_down_for_stopped_and_keeps_worktree() {
         // keep_worktree=true on a Stopped session: no bring_down, no removal,
         // just Ok — the worktree stays on disk untouched.
@@ -687,16 +709,25 @@ fn resolve_slug_and_branch(
     Ok((slug, branch, false, None))
 }
 
-/// Error when the session is mid-operation — its env and services are in flux.
+/// Error unless the session is `Active` — its env and services are only
+/// meaningful then. `Pending` means an op is in flight; `Stopped` means the
+/// worktree was kept but services are down, so reading its env/status/shell
+/// would surface stale slot values for services that are no longer running.
 fn ensure_session_settled(session: &state::Session) -> Result<()> {
-    if session.status == state::SessionStatus::Pending {
-        return Err(anyhow::anyhow!(
+    match session.status {
+        state::SessionStatus::Active => Ok(()),
+        state::SessionStatus::Pending => Err(anyhow::anyhow!(
             "session '{}' has an up/down operation in progress; retry when it finishes, or run `ecluse down {}` if it crashed",
             session.slug,
             session.slug
-        ));
+        )),
+        state::SessionStatus::Stopped => Err(anyhow::anyhow!(
+            "session '{}' is stopped (worktree kept at {}); run `ecluse up {}` to restart it",
+            session.slug,
+            session.worktree_path,
+            session.slug
+        )),
     }
-    Ok(())
 }
 
 fn resolve_slug_from_args(arg: Option<&str>, state: &state::State, hint: &str) -> Result<String> {
