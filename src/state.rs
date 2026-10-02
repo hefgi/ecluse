@@ -76,11 +76,18 @@ pub struct PendingOp {
 }
 
 /// Fresh operation id: unique enough to distinguish two concurrent commands.
+///
+/// `pid` disambiguates across processes; the process-local counter guarantees
+/// two ids minted in the same process (even within one nanosecond) never
+/// collide, and the timestamp keeps ids human-readable / ordered.
 pub fn new_op_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     format!(
-        "{}-{}",
+        "{}-{}-{}",
         std::process::id(),
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
     )
 }
 
