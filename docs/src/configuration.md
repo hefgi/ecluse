@@ -108,8 +108,9 @@ Run `ecluse validate` to check the configured binary is installed.
 | Field | When it runs | Env vars |
 |---|---|---|
 | `pre_up` | Before any infrastructure is created | None (runs from repo root) |
-| `post_up` | After all services are up and `.env.ecluse` is written | All `ECLUSE_*` + `PORT` |
+| `pre_spawn` | After docker services are up and `.env.ecluse` is written, before native services spawn | All `ECLUSE_*` + `PORT` |
+| `post_up` | After all services are up | All `ECLUSE_*` + `PORT` |
 | `pre_down` | Before services are stopped | All `ECLUSE_*` + `PORT` |
 | `post_down` | After all services are stopped and worktree is removed | All `ECLUSE_*` + `PORT` |
 
-Use `post_up` for migrations and seeding, `pre_down` for teardown that needs a live database. See the [Hooks](hooks.md) page for full details and examples.
+Use `pre_spawn` for anything a native service reads at boot (per-slot env files, migrations the app needs at startup), `post_up` for post-boot actions like seeding or health checks, and `pre_down` for teardown that needs a live database. See the [Hooks](hooks.md) page for full details and examples.

@@ -879,17 +879,23 @@ process_manager = "tmux"   # "tmux" | "nohup" | "none"
 
 `ecluse init` auto-detects: tmux if present, otherwise nohup. `ecluse validate` checks the binary is installed. This is per-machine, not per-repo.
 
-Hooks run as shell commands inside the worktree directory. Five lifecycle points are available:
+Hooks run as shell commands — `pre_up` and `post_down` from the repo root, the others inside the worktree. Five lifecycle points are available:
 
 | Hook | When | Env | Typical use |
 |---|---|---|---|
 | `pre_up` | before any infrastructure exists | none | pre-flight checks that don't need slot info (`command -v pnpm`, disk space) |
-| `pre_spawn` | after `.env.ecluse` written, **before native services boot** | full `ECLUSE_*` + `PORT` | write per-slot `.env.local` / `.dev.vars` with derived URLs, wait for postgres, run `prisma generate` / `pnpm install`, apply migrations that services need at boot |
+| `pre_spawn` | after `.env.ecluse` written, **before native services boot** | full `ECLUSE_*` + `PORT` | write a per-slot env file (e.g. `.env.development.local`, `.dev.vars`) with derived URLs, wait for postgres, run `prisma generate` / `pnpm install`, apply migrations that services need at boot |
 | `post_up` | after all services are running | full `ECLUSE_*` + `PORT` | migrations the app tolerates racing against, curl a health endpoint, warm a cache, send a notification |
 | `pre_down` | before services are stopped | full `ECLUSE_*` + `PORT` | drain connections, wipe DB state while it's still running |
 | `post_down` | after worktree removed | full `ECLUSE_*` + `PORT` | cleanup, CI status updates |
 
-**Rule of thumb:** if a service reads the thing you're setting up at boot, use `pre_spawn`. Otherwise `post_up`. Injecting `NEXT_PUBLIC_API_URL=http://localhost:$ECLUSE_API_PORT` into `.env.local`, waiting for postgres, or generating a Prisma client all belong in `pre_spawn` — using `post_up` for these fires too late, and the service boots against stale env / missing artifacts.
+**Rule of thumb:** if a service reads the thing you're setting up at boot, use `pre_spawn`. Otherwise `post_up`. Injecting `NEXT_PUBLIC_API_URL=http://localhost:$ECLUSE_API_PORT` into `.env.development.local`, waiting for postgres, or generating a Prisma client all belong in `pre_spawn` — using `post_up` for these fires too late, and the service boots against stale env / missing artifacts.
+
+Hook pitfalls:
+- **Don't overwrite a symlinked or copied env file** with `cat >` / `echo >` — a symlinked `.env.local` writes through to the repo root (every worktree sees it), and a copied one loses the user's secrets. Generate a separate file nothing else owns (`.env.development.local` for Next.js) or edit keys in place.
+- **The Prisma CLI only reads `.env`** (and the process env), not `.env.local`. Export `DATABASE_URL` in the hook before `prisma migrate deploy`, or it migrates whatever database `.env` points at.
+- **Container mode:** every container, the app included, is up before `pre_spawn` runs, so it can't prepare anything for the app's boot. Use the image entrypoint for that.
+- `PORT` is only set when the config has a native service.
 
 ecluse does not manage databases directly — use `pre_spawn` or `post_up` for migrations and `pre_down` for teardown.
 

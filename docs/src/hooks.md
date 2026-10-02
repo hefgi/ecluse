@@ -5,8 +5,8 @@ Hooks run shell commands at lifecycle points. Define them in `.ecluse.toml`:
 ```toml
 [hooks]
 pre_up    = "echo starting"
-pre_spawn = "envsubst < .env.template > .env.local"
-post_up   = "npx prisma migrate deploy"
+pre_spawn = "envsubst < .env.template > .env.development.local"
+post_up   = "curl -fsS http://localhost:$PORT/health"
 pre_down  = "npx prisma migrate reset --force"
 post_down = "echo done"
 ```
@@ -30,9 +30,9 @@ ecluse down
 
 ## pre_up
 
-Runs before any infrastructure is created. Working directory is the repo root. **No `ECLUSE_*` variables are available yet** — ports haven't been allocated, the worktree doesn't exist, no docker containers are up.
+Runs before any infrastructure is created. Working directory is the repo root. **No `ECLUSE_*` variables are available yet** — the slot is reserved, but the env hasn't been generated, the worktree doesn't exist, and no docker containers are up. If `pre_up` fails, the reservation is released.
 
-Use it for: pre-flight checks that don't need slot info (`command -v pnpm`, disk-space checks, image pulls that should happen before slot reservation).
+Use it for: pre-flight checks that don't need slot info (`command -v pnpm`, disk-space checks, image pulls).
 
 ## pre_spawn
 
@@ -48,6 +48,8 @@ Use it for:
 - Generating client code (`prisma generate`) that services import at boot
 - Installing dependencies (`pnpm install`) before services try to resolve them
 - Setting up symlinks / overlay files that services read at startup
+
+**Container mode:** there are no native services, and the app runs in a container. ecluse brings up every container (the app included) before `pre_spawn`, so in container mode it runs *after* the app has booted, just like `post_up`. Bake boot-time setup into the image entrypoint instead.
 
 **Why not just use `post_up`?** Because a service that reads its config once at startup (Cloudflare vite plugin, most `dotenv` loaders, any framework using `sh -c 'export ... && ...'`) will see whatever the file contained before the hook ran — and then never re-read it. `post_up` fires after that point.
 
@@ -82,16 +84,18 @@ Use it for: cleanup that should happen after everything is gone (notifications, 
 | Hook | Working dir | Env vars | Services state |
 |---|---|---|---|
 | `pre_up` | repo root | none | nothing exists yet |
-| `pre_spawn` | worktree root | all `ECLUSE_*` + `PORT` | docker up, native not started |
-| `post_up` | worktree root | all `ECLUSE_*` + `PORT` | everything running |
-| `pre_down` | worktree root | all `ECLUSE_*` + `PORT` | everything still running |
-| `post_down` | repo root | all `ECLUSE_*` + `PORT` | everything torn down |
+| `pre_spawn` | worktree root | all `ECLUSE_*` + `PORT`¹ | docker up, native not started |
+| `post_up` | worktree root | all `ECLUSE_*` + `PORT`¹ | everything running |
+| `pre_down` | worktree root | all `ECLUSE_*` + `PORT`¹ | everything still running |
+| `post_down` | repo root | all `ECLUSE_*` + `PORT`¹ | everything torn down |
+
+¹ `PORT` is only set when the config has a native service; container-mode sessions don't get it.
 
 ## Examples
 
 ### Prisma migrations
 
-Migrations don't affect service startup env, so `post_up` is fine:
+If the app tolerates a missing schema at boot, `post_up` is fine. If it queries tables at startup, run the migration in `pre_spawn` instead (see below).
 
 ```toml
 [hooks]
@@ -99,9 +103,11 @@ post_up  = "npx prisma migrate deploy"
 pre_down = "npx prisma migrate reset --force"
 ```
 
+The Prisma CLI reads `DATABASE_URL` from the process env or `.env` only — not `.env.local` or `.env.development.local`. If your slot-specific URL lives in one of those, export it in the hook: `DATABASE_URL="postgres://...:$ECLUSE_POSTGRES_PORT/app" npx prisma migrate deploy`.
+
 ### Injecting slot-specific URLs before service boot
 
-A frontend that reads `VITE_API_URL` at boot (Vite, Next.js, Cloudflare workers): the URL depends on the api service's allocated port, which only exists once ports are reserved. Write the file in `pre_spawn` so the frontend picks it up:
+A Vite frontend that reads `VITE_API_URL` at boot (for Next.js the equivalent is `NEXT_PUBLIC_API_URL`): the URL depends on the api service's allocated port, which only exists once ports are reserved. Write the file in `pre_spawn` so the frontend picks it up:
 
 ```toml
 [[services]]
@@ -138,6 +144,7 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
   if pg_isready -h localhost -p "$ECLUSE_POSTGRES_PORT" -U app >/dev/null 2>&1; then break; fi
   sleep 1
 done
+pg_isready -h localhost -p "$ECLUSE_POSTGRES_PORT" -U app   # fail the up if still not ready
 npx prisma migrate deploy
 npx prisma generate
 """
