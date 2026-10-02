@@ -580,10 +580,8 @@ mod tests {
 
     #[test]
     fn teardown_removes_worktree_for_stopped_when_not_kept() {
-        // keep_worktree=false on a Stopped session: bring_down is skipped but the
-        // worktree removal still runs. Use a real git repo + registered worktree
-        // so WorktreeManager::remove succeeds and the directory is deleted —
-        // guarding against the --delete-worktree-orphans-directory regression.
+        // keep_worktree=false on a Stopped session: bring_down is skipped but
+        // the worktree must still be removed. Needs a real registered worktree.
         let dir = tempfile::TempDir::new().unwrap();
         let root = dir.path();
         let git = |args: &[&str]| {
@@ -684,9 +682,7 @@ fn resolve_slug_and_branch(
     let cwd = std::env::current_dir().context("could not determine current directory")?;
 
     // 1. Inside an ecluse-registered worktree → reuse stored slug/branch.
-    // Includes Stopped sessions so `ecluse up` from inside a kept worktree
-    // auto-detects the slug and resumes at the same slot — do not filter to
-    // Active here or the stopped-session resume flow breaks.
+    // Includes Stopped sessions, so `up` from a kept worktree resumes its slot.
     if let Some(session) = state
         .sessions
         .iter()
@@ -739,10 +735,7 @@ fn resolve_slug_from_args(arg: Option<&str>, state: &state::State, hint: &str) -
         None => {
             let cwd = std::env::current_dir().context("could not determine current directory")?;
 
-            // Inside any known ecluse session — use it. Includes Stopped
-            // sessions so `ecluse up`/`down` resolve the slug from inside a
-            // kept worktree (read commands then reject Stopped via
-            // ensure_session_settled).
+            // Inside any known ecluse session (Stopped included) — use it.
             if let Some(session) = state
                 .sessions
                 .iter()
@@ -1137,11 +1130,8 @@ fn cmd_up_resume(
             Ok(())
         }
         Ok(None) => {
-            // Nothing to start (all services already running). Only an Active
-            // session can reach here: resume_provision short-circuits Ok(None)
-            // for Stopped sessions (`!resuming_stopped`), routing them through
-            // bring_up instead so their ports get re-probed. So `existing` is
-            // already Active — just clear any stale pending_op and re-add it.
+            // All services already running. Stopped sessions never get here
+            // (resume_provision sends them through bring_up).
             let mut restored = existing.clone();
             restored.status = state::SessionStatus::Active;
             restored.pending_op = None;

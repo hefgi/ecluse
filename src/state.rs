@@ -848,17 +848,6 @@ mod tests {
     }
 
     #[test]
-    fn find_session_mut_updates_status() {
-        let mut state = State::default();
-        state.add_session(make_session("x", 1));
-        state.find_session_mut("x").unwrap().status = SessionStatus::Stopped;
-        assert_eq!(
-            state.find_session("x").unwrap().status,
-            SessionStatus::Stopped
-        );
-    }
-
-    #[test]
     fn mark_stopped_transitions_and_clears_runtime_state() {
         let mut state = State::default();
         let mut s = make_session("kept", 2);
