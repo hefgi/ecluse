@@ -721,6 +721,119 @@ mod tests {
         assert!(hint.contains("slot 4's territory"));
     }
 
+    // ── listening_summary ─────────────────────────────────────────────────────
+
+    #[test]
+    fn listening_summary_dash_when_nothing_listening() {
+        assert_eq!(listening_summary(&[3001], &[]), "-");
+    }
+
+    #[test]
+    fn listening_summary_no_marker_when_all_expected_present() {
+        assert_eq!(listening_summary(&[3001, 5433], &[3001, 5433]), "3001 5433");
+    }
+
+    #[test]
+    fn listening_summary_marks_missing_expected_port() {
+        assert_eq!(listening_summary(&[3001], &[3005]), "3005 !");
+    }
+
+    // Extra sockets (HMR, debug, inspector) are normal and must not be
+    // reported as a mismatch — only a MISSING assigned port is.
+    #[test]
+    fn listening_summary_tolerates_extra_ports() {
+        assert_eq!(
+            listening_summary(&[3001], &[3001, 24678]),
+            "3001 24678",
+            "extra HMR socket must not flag a mismatch"
+        );
+    }
+
+    #[test]
+    fn listening_summary_marks_partial_match() {
+        assert_eq!(listening_summary(&[3001, 5433], &[3001]), "3001 !");
+    }
+
+    // ── expected_native_ports / port_mismatch ─────────────────────────────────
+
+    fn hybrid_config() -> config::Config {
+        toml::from_str(
+            r#"
+mode = "hybrid"
+
+[[services]]
+name = "api"
+run = "native"
+base_port = 3000
+command = "pnpm dev"
+
+[[services]]
+name = "worker"
+run = "native"
+base_port = 9000
+
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432
+"#,
+        )
+        .unwrap()
+    }
+
+    fn session_with_ports(ports: &[(&str, u16)]) -> state::Session {
+        let overrides: std::collections::HashMap<String, u16> =
+            ports.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        serde_json::from_value(serde_json::json!({
+            "slug": "feat-a",
+            "mode": "hybrid",
+            "slot": 1,
+            "branch": "feat-a",
+            "worktree_path": "/tmp/feat-a",
+            "compose_project": null,
+            "overlay_file": null,
+            "app_port": null,
+            "started_at": "2026-01-01T00:00:00Z",
+            "port_overrides": overrides,
+        }))
+        .unwrap()
+    }
+
+    // Hybrid sessions keep Docker service ports in port_overrides. Those are
+    // held by the Docker daemon, never by the session's process tree, so they
+    // must not count as "expected" — otherwise every hybrid session shows `!`.
+    #[test]
+    fn expected_native_ports_excludes_docker_services_in_hybrid() {
+        let config = hybrid_config();
+        let session = session_with_ports(&[("api", 3001), ("worker", 9001), ("postgres", 5433)]);
+        let expected = expected_native_ports(&config, &session);
+        assert_eq!(expected, vec![3001], "only spawned native services count");
+        assert!(!port_mismatch(&expected, &[3001]));
+        assert_eq!(listening_summary(&expected, &[3001]), "3001");
+    }
+
+    #[test]
+    fn expected_native_ports_falls_back_to_nominal_port() {
+        let config = hybrid_config();
+        let session = session_with_ports(&[("postgres", 5433)]);
+        assert_eq!(expected_native_ports(&config, &session), vec![3001]);
+    }
+
+    #[test]
+    fn port_mismatch_false_when_nothing_listening() {
+        assert!(!port_mismatch(&[3001], &[]));
+    }
+
+    #[test]
+    fn port_mismatch_true_when_assigned_port_missing() {
+        assert!(port_mismatch(&[3001], &[3005]));
+    }
+
+    #[test]
+    fn port_mismatch_ignores_extra_ports() {
+        assert!(!port_mismatch(&[3001], &[3001, 24678]));
+    }
+
     // ── discover_service ──────────────────────────────────────────────────────
 
     // Two tmux panes: 100 (service A, nothing listening) and 200 (service B,
@@ -1981,12 +2094,85 @@ struct SessionRow {
     slot: u8,
     #[tabled(rename = "PORTS")]
     ports: String,
+    /// Ports actually being listened on by this session's process trees.
+    /// `!` marks a set that differs from PORTS — see `listening_summary`.
+    #[tabled(rename = "LISTENING")]
+    listening: String,
     #[tabled(rename = "TMUX")]
     tmux: String,
     #[tabled(rename = "BRANCH")]
     branch: String,
     #[tabled(rename = "STARTED")]
     started: String,
+}
+
+/// Root PIDs whose process trees belong to `session`: the token-verified pid
+/// files written at spawn, plus tmux pane PIDs for tmux-managed sessions.
+///
+/// A pid whose start token no longer matches was recycled by an unrelated
+/// process; attributing its ports to this session would be a misattribution of
+/// exactly the kind `whose_pid` guards against.
+fn session_root_pids(root: &Path, session: &state::Session) -> Vec<u32> {
+    let mut pids = Vec::new();
+
+    let pid_dir = root.join(".ecluse").join("pids").join(&session.slug);
+    if let Ok(entries) = std::fs::read_dir(&pid_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("pid") {
+                continue;
+            }
+            if let Some((pid, token)) = process::read_pid_file(&path) {
+                if process::pid_file_alive(pid, &token) {
+                    pids.push(pid);
+                }
+            }
+        }
+    }
+
+    if let Some(ref tmux_session) = session.tmux_session {
+        pids.extend(process::tmux_session_pane_pids(tmux_session));
+    }
+
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+/// Ports this session's process trees are actually listening on.
+fn discovered_ports(
+    root: &Path,
+    session: &state::Session,
+    snap: &discover::PortSnapshot,
+) -> Vec<u16> {
+    let mut ports: Vec<u16> = Vec::new();
+    for pid in session_root_pids(root, session) {
+        for port in snap.ports_for_tree(pid) {
+            if !ports.contains(&port) {
+                ports.push(port);
+            }
+        }
+    }
+    ports.sort_unstable();
+    ports
+}
+
+/// Ports a session's own process trees are expected to hold: the assigned
+/// ports of the native services ecluse spawns (those with a `command`).
+///
+/// `port_overrides` can't be used wholesale: in hybrid mode it also carries the
+/// Docker service ports, which are held by the Docker daemon/proxy and never by
+/// the session's process tree, so they would always look missing.
+fn expected_native_ports(config: &config::Config, session: &state::Session) -> Vec<u16> {
+    let mut ports: Vec<u16> = config
+        .services
+        .iter()
+        .filter(|svc| svc.run == config::ServiceRun::Native && svc.command.is_some())
+        .filter_map(|svc| native_expected_port(config, session, svc))
+        .collect();
+    ports.sort_unstable();
+    ports.dedup();
+    ports
 }
 
 /// The port ecluse assigned to a native service in `session`.
@@ -2007,8 +2193,36 @@ fn native_expected_port(
     })
 }
 
+/// True when the session is listening on something, but not on every port
+/// ecluse assigned. Extra ports beyond the assigned set are normal (HMR, debug,
+/// inspector) and never count as a mismatch.
+fn port_mismatch(expected: &[u16], discovered: &[u16]) -> bool {
+    !discovered.is_empty() && expected.iter().any(|e| !discovered.contains(e))
+}
+
+/// Render the LISTENING column: the discovered ports, with a trailing `!` when
+/// they don't match what ecluse assigned.
+///
+/// Only ports ecluse allocated participate in the comparison. A dev server that
+/// also opens an HMR or debug socket would otherwise show a permanent mismatch.
+fn listening_summary(expected: &[u16], discovered: &[u16]) -> String {
+    if discovered.is_empty() {
+        return "-".into();
+    }
+    let rendered = discovered
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if port_mismatch(expected, discovered) {
+        format!("{} !", rendered)
+    } else {
+        rendered
+    }
+}
+
 fn cmd_ls(args: cli::LsArgs) -> Result<()> {
-    let (_, root) = config::Config::find_and_load()?;
+    let (config, root) = config::Config::find_and_load()?;
     let guard = state::StateGuard::acquire_shared(&root)?;
 
     if guard.state.sessions.is_empty() {
@@ -2016,9 +2230,31 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
         return Ok(());
     }
 
+    // One listener/process-table snapshot shared by every session.
+    let snap = discover::snapshot();
+
     if args.json {
-        let json = serde_json::to_string_pretty(&guard.state.sessions)?;
-        println!("{}", json);
+        // Sessions serialize as-is, plus the discovered view alongside the
+        // assigned one. Never merged into port_overrides: state stays truth.
+        let sessions_json: Vec<serde_json::Value> = guard
+            .state
+            .sessions
+            .iter()
+            .map(|s| {
+                let expected = expected_native_ports(&config, s);
+                let listening = discovered_ports(&root, s, &snap);
+                let mut value = serde_json::to_value(s)?;
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("listening_ports".into(), serde_json::json!(listening));
+                    obj.insert(
+                        "port_mismatch".into(),
+                        serde_json::json!(port_mismatch(&expected, &listening)),
+                    );
+                }
+                Ok(value)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        println!("{}", serde_json::to_string_pretty(&sessions_json)?);
         return Ok(());
     }
 
@@ -2038,7 +2274,10 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
             } else {
                 pairs.join(" ")
             };
+            let expected = expected_native_ports(&config, s);
+            let listening = listening_summary(&expected, &discovered_ports(&root, s, &snap));
             SessionRow {
+                listening,
                 slug: match s.status {
                     state::SessionStatus::Pending => format!("{} (pending)", s.slug),
                     state::SessionStatus::Stopped => format!("{} (stopped)", s.slug),
@@ -2069,12 +2308,15 @@ fn cmd_ls(args: cli::LsArgs) -> Result<()> {
         use tabled::settings::{Modify, Width};
         // Truncate PORTS (col 3) to 40 chars so long port lists don't wrap the header.
         table.with(Modify::new(Columns::single(3)).with(Width::truncate(40).suffix("…")));
+        // Same for LISTENING (col 4).
+        table.with(Modify::new(Columns::single(4)).with(Width::truncate(40).suffix("…")));
     }
     if !any_tmux {
         use tabled::settings::object::Columns;
         use tabled::settings::Disable;
-        // TMUX is column index 4 (SLUG=0, MODE=1, SLOT=2, PORTS=3, TMUX=4)
-        table.with(Disable::column(Columns::single(4)));
+        // TMUX is column index 5
+        // (SLUG=0, MODE=1, SLOT=2, PORTS=3, LISTENING=4, TMUX=5)
+        table.with(Disable::column(Columns::single(5)));
     }
     println!("{}", table);
 
@@ -2779,7 +3021,8 @@ struct ServiceDiscovery {
 ///
 /// The service's pid file wins when it exists, and its pid counts only if the
 /// recorded start token still matches — a recycled pid belongs to an unrelated
-/// process whose ports must not be attributed to this service. Legacy tmux sessions without pid files fall back to
+/// process whose ports must not be attributed to this service (same check as
+/// `session_root_pids`). Legacy tmux sessions without pid files fall back to
 /// the pane pid of the service's own window — never every pane in the session,
 /// which would blame one service for a sibling's port.
 fn service_tree_root(pid_file: &Path, tmux_session: Option<&str>, window: &str) -> Option<u32> {
@@ -2797,7 +3040,7 @@ fn service_tree_root(pid_file: &Path, tmux_session: Option<&str>, window: &str) 
 /// "Wrong port" is reported only when the tree does NOT hold the assigned port
 /// and does listen on something else. When the assigned port is held, extra
 /// sockets are normal and are reported in `tree_ports` without flagging
-/// anything.
+/// anything — the same rule `ecluse ls` applies.
 fn discover_service(
     snap: &discover::PortSnapshot,
     root: Option<u32>,
