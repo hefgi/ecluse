@@ -8,7 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
-- `ecluse down --keep-worktree` (and `shutdown --keep-worktrees`) no longer drops the session from state — it marks it `Stopped`, keeping the slot reserved so the next `ecluse up` resumes at the same slot instead of allocating a new one (which would change all ports). `ecluse up <slug>` auto-detects a stopped session and resumes it (no `--reuse-worktree` needed), re-probing for free ports. `ecluse ls` shows `<slug> (stopped)`. While stopped, `ecluse env`/`shell`/`status`/`sync` error with a hint to run `ecluse up`, instead of surfacing stale, no-longer-running port values.
+- `ecluse down --keep-worktree` and `shutdown --keep-worktrees` now mark the session `Stopped` instead of dropping it from state. The slot stays reserved, so the next `ecluse up` resumes at the same slot and ports. (#32)
+- `ecluse up <slug>`, or a bare `ecluse up` from inside the kept worktree, detects a stopped session and resumes it, re-probing for free ports. `--reuse-worktree` is no longer needed.
+- `ecluse ls` shows stopped sessions as `<slug> (stopped)`.
+- `ecluse env`, `shell`, `status`, and `sync` reject a stopped session with a hint to run `ecluse up`, so they no longer report ports for services that aren't running.
+- Stopped sessions hold their slot until the worktree is deleted. The `SlotsExhausted` error now points to `ecluse down <slug> --delete-worktree`.
+- `state.json` files that contain stopped sessions can't be read by older ecluse versions.
 
 ### Fixed
 - `ecluse down` in tmux mode now kills the entire pane process group, not just the pane's foreground shell. Previously, multi-level child chains (`sh → pnpm → node → vite`, plus anything that calls `setsid()` like Cloudflare workerd) survived as orphans adopted by `launchd`/`init`, holding their ports indefinitely. Each orphan held 4-8 ports; after a few `up`/`down` cycles the next `ecluse up` would silently land on a port already held by a zombie, serving a different worktree's content. The same TERM→KILL grace pattern that was applied to the nohup path in PR #18 now applies to tmux. (#30)
