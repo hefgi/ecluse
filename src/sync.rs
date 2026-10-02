@@ -311,7 +311,7 @@ pub(crate) fn child_pids(pid: u32) -> Vec<u32> {
 ///
 /// Returns `None` if tmux is unavailable, the session doesn't exist, or the
 /// window doesn't exist (tmux exits non-zero in all these cases).
-fn tmux_pane_pid(session: &str, window: &str) -> Option<u32> {
+pub(crate) fn tmux_pane_pid(session: &str, window: &str) -> Option<u32> {
     let target = format!("{}:{}", session, window);
     let output = Command::new("tmux")
         .args(["list-panes", "-t", &target, "-F", "#{pane_pid}"])

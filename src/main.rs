@@ -2,6 +2,7 @@ mod cli;
 mod compose;
 mod config;
 mod detect;
+mod discover;
 mod docker;
 mod env;
 mod error;
@@ -20,6 +21,7 @@ mod worktree;
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::io::{self, Write};
+use std::path::Path;
 use tabled::{Table, Tabled};
 
 fn main() {
@@ -456,6 +458,9 @@ mod tests {
             tmux_window: None,
             listener_pid,
             wrong_owner,
+            actual_port: None,
+            conflicting_slot: None,
+            listening_ports: vec![],
         }
     }
 
@@ -608,6 +613,225 @@ mod tests {
 
         teardown_or_skip_stopped(&s, &config, root, false, false, &log).unwrap();
         assert!(!wt.exists(), "worktree must be removed when not kept");
+    }
+
+    // ── status_str: wrong-port (discovery) ────────────────────────────────────
+
+    #[test]
+    fn status_str_wrong_port_shows_discovered_port() {
+        let mut s = svc_status(true, false, false, None);
+        s.actual_port = Some(3005);
+        assert_eq!(status_str(&s), "\u{2717} wrong port 3005");
+    }
+
+    #[test]
+    fn status_str_wrong_port_names_conflicting_slot() {
+        let mut s = svc_status(true, false, false, None);
+        s.actual_port = Some(3003);
+        s.conflicting_slot = Some((3, Some("feat-x".into())));
+        assert_eq!(status_str(&s), "\u{2717} wrong port 3003 (slot 3)");
+    }
+
+    // wrong_owner is a distinct condition (someone ELSE holds our port) and
+    // must keep precedence over "we are on the wrong port".
+    #[test]
+    fn status_str_wrong_owner_takes_precedence_over_wrong_port() {
+        let mut s = svc_status(true, false, true, Some(777));
+        s.actual_port = Some(3005);
+        assert_eq!(status_str(&s), "\u{2717} wrong owner (PID 777)");
+    }
+
+    #[test]
+    fn status_str_unmanaged_ignores_wrong_port() {
+        let mut s = svc_status(false, false, false, None);
+        s.actual_port = Some(3005);
+        assert_eq!(status_str(&s), "\u{2014}");
+    }
+
+    // ── actual_str ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn actual_str_is_dash_when_nothing_listening() {
+        let s = svc_status(true, false, false, None);
+        assert_eq!(actual_str(&s), "\u{2014}");
+    }
+
+    #[test]
+    fn actual_str_is_dash_when_only_assigned_port_listening() {
+        let mut s = svc_status(true, true, false, None);
+        s.listening_ports = vec![3001];
+        assert_eq!(actual_str(&s), "\u{2014}");
+    }
+
+    #[test]
+    fn actual_str_shows_port_on_mismatch() {
+        let mut s = svc_status(true, false, false, None);
+        s.actual_port = Some(3005);
+        s.listening_ports = vec![3005];
+        assert_eq!(actual_str(&s), "3005");
+    }
+
+    // A healthy service with an HMR socket lists both ports, but status_str
+    // stays "up" because actual_port (the wrong-port signal) is unset.
+    #[test]
+    fn actual_str_lists_extra_sockets_without_flagging() {
+        let mut s = svc_status(true, true, false, None);
+        s.listening_ports = vec![3001, 24678];
+        assert_eq!(actual_str(&s), "3001 24678");
+        assert_eq!(status_str(&s), "\u{2713} up");
+    }
+
+    // ── mismatch_hint ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn mismatch_hint_none_without_discovered_port() {
+        let s = svc_status(true, false, false, None);
+        assert!(mismatch_hint("feat-a", &s).is_none());
+    }
+
+    #[test]
+    fn mismatch_hint_points_at_down_up_not_kill() {
+        let mut s = svc_status(true, false, false, None);
+        s.actual_port = Some(3005);
+        let hint = mismatch_hint("feat-a", &s).unwrap();
+        assert!(hint.contains("ecluse down feat-a --keep-worktree"));
+        assert!(hint.contains("ecluse up feat-a"));
+        assert!(!hint.contains("kill"));
+    }
+
+    // The single most important message in the feature: an agent that reads
+    // this must not kill the sibling session's process.
+    #[test]
+    fn mismatch_hint_names_owning_session_and_forbids_kill() {
+        let mut s = svc_status(true, false, false, None);
+        s.actual_port = Some(3003);
+        s.conflicting_slot = Some((3, Some("feat-x".into())));
+        let hint = mismatch_hint("feat-a", &s).unwrap();
+        assert!(hint.contains("slot 3"));
+        assert!(hint.contains("feat-x"));
+        assert!(hint.contains("do not kill"));
+    }
+
+    #[test]
+    fn mismatch_hint_reports_unowned_slot_territory() {
+        let mut s = svc_status(true, false, false, None);
+        s.actual_port = Some(3004);
+        s.conflicting_slot = Some((4, None));
+        let hint = mismatch_hint("feat-a", &s).unwrap();
+        assert!(hint.contains("slot 4's territory"));
+    }
+
+    // ── discover_service ──────────────────────────────────────────────────────
+
+    // Two tmux panes: 100 (service A, nothing listening) and 200 (service B,
+    // whose child 201 listens on 3002). 999 is unrelated and holds 3001.
+    const PS_TWO_PANES: &str = "100 1\n200 1\n201 200\n999 1\n";
+
+    #[test]
+    fn discover_service_does_not_blame_sibling_pane_port() {
+        let snap = discover::parse_snapshot("p201\nn*:3002\n", PS_TWO_PANES);
+        let a = discover_service(&snap, Some(100), true, Some(3001));
+        assert!(!a.healthy);
+        assert!(a.tree_ports.is_empty());
+        assert_eq!(a.wrong_port, None, "B's port must not be reported for A");
+        let b = discover_service(&snap, Some(200), true, Some(3002));
+        assert!(b.healthy);
+        assert_eq!(b.wrong_port, None);
+        assert!(!b.wrong_owner);
+    }
+
+    #[test]
+    fn discover_service_reports_wrong_port_when_assigned_missing() {
+        let snap = discover::parse_snapshot("p201\nn*:3005\n", PS_TWO_PANES);
+        let d = discover_service(&snap, Some(200), true, Some(3002));
+        assert!(!d.healthy);
+        assert_eq!(d.wrong_port, Some(3005));
+        assert_eq!(d.tree_ports, vec![3005]);
+    }
+
+    // Extra sockets while the assigned port is held are not a wrong port —
+    // same rule as `ecluse ls`.
+    #[test]
+    fn discover_service_tolerates_extra_sockets() {
+        let snap = discover::parse_snapshot("p201\nn*:3002\nn*:24678\n", PS_TWO_PANES);
+        let d = discover_service(&snap, Some(200), true, Some(3002));
+        assert!(d.healthy);
+        assert_eq!(d.wrong_port, None);
+        assert_eq!(d.tree_ports, vec![3002, 24678]);
+    }
+
+    #[test]
+    fn discover_service_flags_foreign_listener_as_wrong_owner() {
+        let snap = discover::parse_snapshot("p999\nn*:3001\n", PS_TWO_PANES);
+        let d = discover_service(&snap, Some(100), true, Some(3001));
+        assert!(d.wrong_owner);
+        assert_eq!(d.listener_pid, Some(999));
+        assert!(!d.healthy);
+    }
+
+    #[test]
+    fn discover_service_descendant_listener_is_not_wrong_owner() {
+        let snap = discover::parse_snapshot("p201\nn*:3002\n", PS_TWO_PANES);
+        let d = discover_service(&snap, Some(200), true, Some(3002));
+        assert_eq!(d.listener_pid, Some(201));
+        assert!(!d.wrong_owner);
+    }
+
+    // A recycled pid yields no root: nothing is attributed to the service,
+    // but a listener on its port is still somebody else's.
+    #[test]
+    fn discover_service_without_root_attributes_nothing() {
+        let snap = discover::parse_snapshot("p201\nn*:3002\n", PS_TWO_PANES);
+        let d = discover_service(&snap, None, true, Some(3002));
+        assert!(!d.healthy);
+        assert!(d.tree_ports.is_empty());
+        assert_eq!(d.wrong_port, None);
+        assert!(d.wrong_owner);
+    }
+
+    #[test]
+    fn discover_service_alive_without_port_is_healthy() {
+        let snap = discover::parse_snapshot("", PS_TWO_PANES);
+        let d = discover_service(&snap, Some(100), true, None);
+        assert!(d.healthy);
+        assert_eq!(d.listener_pid, None);
+    }
+
+    #[test]
+    fn discover_service_skips_owner_check_without_recorded_process() {
+        let snap = discover::parse_snapshot("p999\nn*:3001\n", PS_TWO_PANES);
+        let d = discover_service(&snap, None, false, Some(3001));
+        assert_eq!(d.listener_pid, None);
+        assert!(!d.wrong_owner);
+    }
+
+    // ── service_tree_root ─────────────────────────────────────────────────────
+
+    #[test]
+    fn service_tree_root_accepts_live_token_verified_pid() {
+        let dir = TempDir::new().unwrap();
+        let pid_file = dir.path().join("api.pid");
+        let me = std::process::id();
+        process::write_pid_file_with_token(&pid_file, me).unwrap();
+        assert_eq!(service_tree_root(&pid_file, None, "api"), Some(me));
+    }
+
+    // The pid is alive but its start token doesn't match: the pid was recycled
+    // by an unrelated process, so its ports must not be attributed.
+    #[test]
+    fn service_tree_root_rejects_recycled_pid() {
+        let dir = TempDir::new().unwrap();
+        let pid_file = dir.path().join("api.pid");
+        let me = std::process::id();
+        std::fs::write(&pid_file, format!("{me}\nnot-the-real-start-time\n")).unwrap();
+        assert_eq!(service_tree_root(&pid_file, None, "api"), None);
+    }
+
+    #[test]
+    fn service_tree_root_none_without_pid_file_or_tmux() {
+        let dir = TempDir::new().unwrap();
+        let pid_file = dir.path().join("api.pid");
+        assert_eq!(service_tree_root(&pid_file, None, "api"), None);
     }
 }
 
@@ -1765,6 +1989,24 @@ struct SessionRow {
     started: String,
 }
 
+/// The port ecluse assigned to a native service in `session`.
+///
+/// `port_overrides` is the source of truth; old state files without an entry
+/// for a native service fall back to the nominal port computed from config.
+fn native_expected_port(
+    config: &config::Config,
+    session: &state::Session,
+    svc: &config::ServiceConfig,
+) -> Option<u16> {
+    session.port_overrides.get(&svc.name).copied().or_else(|| {
+        if svc.base_port == 0 {
+            None
+        } else {
+            Some(svc.port(session.slot, config.slot_stride))
+        }
+    })
+}
+
 fn cmd_ls(args: cli::LsArgs) -> Result<()> {
     let (_, root) = config::Config::find_and_load()?;
     let guard = state::StateGuard::acquire_shared(&root)?;
@@ -2504,6 +2746,148 @@ struct ServiceStatus {
     /// hijacking the port — `ecluse status` reports the service as down
     /// even though something IS responding to requests.
     wrong_owner: bool,
+    /// The port this service's process tree is *actually* listening on, when
+    /// it differs from the assigned `port`. Populated by discovery; never
+    /// written back to state — a mismatch is a bug to report, not a value to
+    /// adopt (see `incidents/2026-06-09-rubbr-cross-agent-kill-spiral`).
+    actual_port: Option<u16>,
+    /// Set when `actual_port` falls inside another slot's territory. Names the
+    /// slot and, when a session holds it, that session's slug — the one fact
+    /// that stops an agent from killing a sibling's service.
+    conflicting_slot: Option<(u8, Option<String>)>,
+    /// Every port this service's own process tree is listening on, from the
+    /// shared snapshot. Includes extra sockets (HMR, debug, inspector).
+    listening_ports: Vec<u16>,
+}
+
+/// What the shared port snapshot says about one native service.
+#[derive(Debug, Default, PartialEq)]
+struct ServiceDiscovery {
+    /// The service's tree is alive and (when a port is assigned) holds it.
+    healthy: bool,
+    /// Every port the service's tree is listening on.
+    tree_ports: Vec<u16>,
+    /// Whoever holds the assigned port, if anyone.
+    listener_pid: Option<u32>,
+    /// The assigned port is held by a process outside the service's tree.
+    wrong_owner: bool,
+    /// The tree does not hold the assigned port but listens on this one.
+    wrong_port: Option<u16>,
+}
+
+/// Root pid of one native service's process tree.
+///
+/// The service's pid file wins when it exists, and its pid counts only if the
+/// recorded start token still matches — a recycled pid belongs to an unrelated
+/// process whose ports must not be attributed to this service. Legacy tmux sessions without pid files fall back to
+/// the pane pid of the service's own window — never every pane in the session,
+/// which would blame one service for a sibling's port.
+fn service_tree_root(pid_file: &Path, tmux_session: Option<&str>, window: &str) -> Option<u32> {
+    if let Some((pid, token)) = process::read_pid_file(pid_file) {
+        return process::pid_file_alive(pid, &token).then_some(pid);
+    }
+    tmux_session.and_then(|t| sync::tmux_pane_pid(t, window))
+}
+
+/// Classify one native service against the shared snapshot.
+///
+/// `expect_owner` is true when ecluse recorded a process for this service, so
+/// a foreign listener on the assigned port means someone else holds it.
+///
+/// "Wrong port" is reported only when the tree does NOT hold the assigned port
+/// and does listen on something else. When the assigned port is held, extra
+/// sockets are normal and are reported in `tree_ports` without flagging
+/// anything.
+fn discover_service(
+    snap: &discover::PortSnapshot,
+    root: Option<u32>,
+    expect_owner: bool,
+    port: Option<u16>,
+) -> ServiceDiscovery {
+    let tree_ports = root.map(|r| snap.ports_for_tree(r)).unwrap_or_default();
+    let healthy = match (root, port) {
+        (None, _) => false,
+        (Some(_), None) => true,
+        (Some(_), Some(p)) => tree_ports.contains(&p),
+    };
+    let listener_pid = if expect_owner {
+        port.and_then(|p| snap.listener_pid(p))
+    } else {
+        None
+    };
+    let wrong_owner = match listener_pid {
+        Some(actual) => root.is_none_or(|r| actual != r && !snap.is_descendant(r, actual)),
+        None => false,
+    };
+    let wrong_port = match port {
+        Some(p) if !tree_ports.contains(&p) => tree_ports.first().copied(),
+        _ => None,
+    };
+    ServiceDiscovery {
+        healthy,
+        tree_ports,
+        listener_pid,
+        wrong_owner,
+        wrong_port,
+    }
+}
+
+/// Human-readable ACTUAL column: every port the service's tree is listening
+/// on, or `—` when that is nothing or exactly the assigned port (nothing
+/// interesting to report).
+fn actual_str(s: &ServiceStatus) -> String {
+    let only_assigned = s.port.is_some_and(|p| s.listening_ports == [p]);
+    if s.listening_ports.is_empty() || only_assigned {
+        return "\u{2014}".into();
+    }
+    s.listening_ports
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The remediation hint for a wrong-port service.
+///
+/// Always points at `down --keep-worktree` + `up`, which is idempotent, only
+/// touches this session's own services, and re-probes ports. Never suggests
+/// `kill`: under parallel sessions the process on a neighbouring port is
+/// almost always another agent's working service.
+fn mismatch_hint(slug: &str, s: &ServiceStatus) -> Option<String> {
+    let actual = s.actual_port?;
+    let reset = format!(
+        "run: ecluse down {} --keep-worktree && ecluse up {}",
+        slug, slug
+    );
+    Some(match &s.conflicting_slot {
+        Some((slot, Some(owner))) => format!(
+            "service '{}' is listening on {} but ecluse assigned {}; {} belongs to slot {} \
+             (session '{}') — do not kill it, {}",
+            s.name,
+            actual,
+            s.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+            actual,
+            slot,
+            owner,
+            reset
+        ),
+        Some((slot, None)) => format!(
+            "service '{}' is listening on {} but ecluse assigned {}; {} is slot {}'s territory — {}",
+            s.name,
+            actual,
+            s.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+            actual,
+            slot,
+            reset
+        ),
+        None => format!(
+            "service '{}' is listening on {} but ecluse assigned {}; {}",
+            s.name,
+            actual,
+            s.port.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+            reset
+        ),
+    })
 }
 
 /// Human-readable status string for a service row. Extracted from cmd_status
@@ -2519,6 +2903,14 @@ fn status_str(s: &ServiceStatus) -> String {
             Some(pid) => format!("\u{2717} wrong owner (PID {})", pid),
             None => "\u{2717} wrong owner".into(),
         }
+    } else if let Some(actual) = s.actual_port {
+        // Discovery found the service alive on a different port than the one
+        // ecluse assigned. Reporting a bare "down" here is what left agents
+        // guessing (and reaching for `kill`) in the 2026-06-09 incident.
+        match &s.conflicting_slot {
+            Some((slot, _)) => format!("\u{2717} wrong port {} (slot {})", actual, slot),
+            None => format!("\u{2717} wrong port {}", actual),
+        }
     } else if s.healthy {
         "\u{2713} up".into()
     } else {
@@ -2532,8 +2924,10 @@ struct StatusRowTmux {
     service: String,
     #[tabled(rename = "TYPE")]
     kind: String,
-    #[tabled(rename = "PORT")]
+    #[tabled(rename = "EXPECTED")]
     port: String,
+    #[tabled(rename = "ACTUAL")]
+    actual: String,
     #[tabled(rename = "STATUS")]
     status: String,
     #[tabled(rename = "WINDOW")]
@@ -2546,8 +2940,10 @@ struct StatusRowNohup {
     service: String,
     #[tabled(rename = "TYPE")]
     kind: String,
-    #[tabled(rename = "PORT")]
+    #[tabled(rename = "EXPECTED")]
     port: String,
+    #[tabled(rename = "ACTUAL")]
+    actual: String,
     #[tabled(rename = "STATUS")]
     status: String,
     #[tabled(rename = "PID")]
@@ -2560,8 +2956,10 @@ struct StatusRowNone {
     service: String,
     #[tabled(rename = "TYPE")]
     kind: String,
-    #[tabled(rename = "PORT")]
+    #[tabled(rename = "EXPECTED")]
     port: String,
+    #[tabled(rename = "ACTUAL")]
+    actual: String,
     #[tabled(rename = "STATUS")]
     status: String,
 }
@@ -2601,6 +2999,16 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
         vec![]
     };
 
+    // One snapshot shared by every service row.
+    let snap = discover::snapshot();
+    // Slot → slug, so a cross-slot port can name the session that owns it.
+    let slot_owners: std::collections::HashMap<u8, String> = guard
+        .state
+        .sessions
+        .iter()
+        .map(|s| (s.slot, s.slug.clone()))
+        .collect();
+
     let mut statuses: Vec<ServiceStatus> = Vec::new();
 
     for svc in &native_svcs {
@@ -2609,28 +3017,21 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
         // if the process tree contains a listener on a different port (e.g. a
         // child task spawned its own server), trusting that port would make
         // `status` lie about what's actually wired up.
-        let expected_port: Option<u16> =
-            session.port_overrides.get(&svc.name).copied().or_else(|| {
-                // Fallback for old state.json files that don't have port_overrides
-                // for native services — compute the nominal port from config.
-                if svc.base_port == 0 {
-                    None
-                } else {
-                    Some(svc.port(session.slot, config.slot_stride))
-                }
-            });
+        let expected_port = native_expected_port(&config, &session, svc);
 
         // Identity first: the session's own pid file (token-verified) or tmux
-        // window decides health — never an lsof scan that can misattribute a
-        // neighbor's process.
+        // window decides health — never a host-wide scan that can misattribute
+        // a neighbor's process. `recorded_pid` is what the pid file says (shown
+        // in the PID column); `root` is that pid only if it is still the same
+        // process incarnation, so a recycled pid never has ports attributed.
         let pid_file = root
             .join(".ecluse")
             .join("pids")
             .join(&session.slug)
             .join(format!("{}.pid", svc.name));
         let recorded_pid = process::read_pid_file(&pid_file).map(|(pid, _)| pid);
-        let healthy = sync::native_service_running(&root, &session, &svc.name, expected_port);
-        let (healthy, pid, port) = (healthy, recorded_pid, expected_port);
+        let tree_root = service_tree_root(&pid_file, session.tmux_session.as_deref(), &svc.name);
+        let (pid, port) = (recorded_pid, expected_port);
         let tmux_window = if matches!(session.process_manager, Some(process::ProcessManager::Tmux))
         {
             Some(svc.name.clone())
@@ -2641,30 +3042,27 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
         // ecluse — don't report them as down.
         let managed = svc.command.is_some();
 
-        // Listener identity check: if SOME process is bound to the expected
-        // port and it's neither this service's recorded PID nor a descendant
-        // of it, the port is being served by an orphan from a previous
-        // session (or unrelated software). Surface this rather than silently
-        // reporting healthy=true — the service is technically alive but the
-        // user is hitting the wrong process.
-        let (listener_pid, wrong_owner) = if managed {
-            match (port, pid) {
-                (Some(p), Some(stored)) => match validate::port_listener(p) {
-                    Some(actual)
-                        if actual != stored
-                            && actual != 0
-                            && !whose_pid::is_descendant(stored, actual) =>
-                    {
-                        (Some(actual), true)
-                    }
-                    other => (other, false),
-                },
-                _ => (None, false),
-            }
+        let disc = discover_service(&snap, tree_root, pid.is_some() || tree_root.is_some(), port);
+        let wrong_owner = managed && disc.wrong_owner;
+        let listener_pid = if managed { disc.listener_pid } else { None };
+        let healthy_with_owner_check = disc.healthy && !wrong_owner;
+
+        let (actual_port, conflicting_slot) = if managed {
+            let conflict = disc.wrong_port.and_then(|a| {
+                discover::owning_slot(
+                    a,
+                    svc.host_port_base(),
+                    config.slot_stride,
+                    config.max_slots,
+                )
+                .filter(|slot| *slot != session.slot)
+                .map(|slot| (slot, slot_owners.get(&slot).cloned()))
+            });
+            (disc.wrong_port, conflict)
         } else {
-            (None, false)
+            (None, None)
         };
-        let healthy_with_owner_check = healthy && !wrong_owner;
+        let listening_ports = if managed { disc.tree_ports } else { vec![] };
 
         statuses.push(ServiceStatus {
             name: svc.name.clone(),
@@ -2676,6 +3074,9 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
             tmux_window,
             listener_pid,
             wrong_owner,
+            actual_port,
+            conflicting_slot,
+            listening_ports,
         });
     }
 
@@ -2696,6 +3097,12 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
             tmux_window: None,
             listener_pid: None,
             wrong_owner: false,
+            // Docker publishes ports through the daemon, not a host process
+            // tree, so process-tree discovery doesn't apply. `find_docker_services`
+            // already reports the real published port.
+            actual_port: None,
+            conflicting_slot: None,
+            listening_ports: vec![],
         });
     }
 
@@ -2715,6 +3122,13 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
                     "tmux_window": s.tmux_window,
                     "listener_pid": s.listener_pid,
                     "wrong_owner": s.wrong_owner,
+                    "actual_port": s.actual_port,
+                    "listening_ports": s.listening_ports,
+                    "port_mismatch": s.actual_port.is_some(),
+                    "conflicting_slot": s.conflicting_slot.as_ref().map(|(slot, owner)| {
+                        serde_json::json!({ "slot": slot, "session": owner })
+                    }),
+                    "hint": mismatch_hint(&session.slug, s),
                 })
             })
             .collect();
@@ -2755,6 +3169,7 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
                             service: s.name.clone(),
                             kind: s.kind.to_string(),
                             port: port_str(s),
+                            actual: actual_str(s),
                             status: status_str(s),
                             window: s.tmux_window.clone().unwrap_or_else(|| "-".into()),
                         })
@@ -2768,6 +3183,7 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
                             service: s.name.clone(),
                             kind: s.kind.to_string(),
                             port: port_str(s),
+                            actual: actual_str(s),
                             status: status_str(s),
                             pid: s.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
                         })
@@ -2781,6 +3197,7 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
                             service: s.name.clone(),
                             kind: s.kind.to_string(),
                             port: port_str(s),
+                            actual: actual_str(s),
                             status: status_str(s),
                         })
                         .collect();
@@ -2796,6 +3213,16 @@ fn cmd_status(args: cli::StatusArgs) -> Result<()> {
                     down_count,
                     if down_count == 1 { "" } else { "s" }
                 );
+            }
+
+            // Explain every wrong-port service and name the safe remedy. This
+            // is the whole point of discovery: an agent that reads "wrong
+            // port, run down/up" doesn't invent a theory and reach for `kill`.
+            let log = log::StepLogger::new(false);
+            for s in &statuses {
+                if let Some(hint) = mismatch_hint(&session.slug, s) {
+                    log.warn(&hint);
+                }
             }
         }
     }
