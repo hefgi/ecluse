@@ -76,6 +76,7 @@ Each `[[services]]` block defines one service. Each gets a stable, collision-fre
 | `name` | string | Service name — becomes `ECLUSE_<NAME>_PORT` |
 | `base_port` | integer | Port formula: `base_port + slot` |
 | `run` | string | `"docker"` to run in a container; omit for native |
+| `compose` | string | Path to the compose file for this service, relative to repo root. Docker services without `compose` use the root compose file. Use in monorepos where services live in separate compose files — ecluse generates one overlay per compose file and brings them all up under the same project name. |
 | `command` | string | Shell command ecluse spawns on `ecluse up` and uses to identify the process during `ecluse sync`. Managed by your global `process_manager` setting. Omit to use **port-allocation-only mode** — ecluse allocates the port and injects env vars; you start the process yourself (e.g. via a task runner). |
 | `port_env` | string or array | Extra env var names to set to this service's allocated port — accepts a single string or an array |
 | `extra_ports` | array | Additional per-slot port allocations. Each entry has `base_port` and `port_env`: `port_env` is set to `base_port + slot` in the process environment and (for docker services) published as a host→container port binding in the compose overlay. Use for debugger ports, auxiliary listeners, and any secondary port a service exposes. Example: `extra_ports = [{ base_port = 9229, port_env = "NODE_INSPECT_PORT" }]` |
@@ -84,6 +85,27 @@ Each `[[services]]` block defines one service. Each gets a stable, collision-fre
 The first native (non-docker) service entry also sets `PORT` for framework compatibility.
 
 Omit `[[services]]` entirely for single-service projects — ecluse falls back to `PORT = 3000 + slot`.
+
+### Monorepos with multiple compose files
+
+Point each docker service at its own compose file with `compose` (path relative to repo root). Services without `compose` fall back to the root compose file. ecluse generates one overlay per compose file and brings them all up under the same project name.
+
+```toml
+[[services]]
+name = "api"
+base_port = 3000                                  # native — no compose needed
+
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432                                  # uses root docker-compose.yml
+
+[[services]]
+name = "worker-queue"
+run = "docker"
+base_port = 6379
+compose = "services/worker/docker-compose.yml"    # its own compose file
+```
 
 ## Global config (`~/.config/ecluse/config.toml`)
 

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or idea
+    url: https://github.com/hefgi/ecluse/discussions
+    about: Questions, workflow ideas, and "how would I do X" go in Discussions.
+  - name: Documentation
+    url: https://ecluse.ai
+    about: Configuration reference, command reference, and known limits.

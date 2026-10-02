@@ -1,0 +1,45 @@
+name: Stack didn't work
+description: ecluse init detected the wrong thing, or your stack needs config it can't express
+labels: ["stack-support"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Detection getting a repo wrong is treated as a bug here, not user error. The more
+        stacks reported, the better detection gets — so these are genuinely welcome.
+
+  - type: input
+    id: stack
+    attributes:
+      label: Stack
+      placeholder: Rails 7 + Postgres + Sidekiq, or Next.js monorepo with Turborepo
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected ecluse to do
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What it actually did
+      description: Include the `ecluse init` output if detection was wrong.
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Generated .ecluse.toml (and your corrected version, if you fixed it)
+      render: toml
+
+  - type: textarea
+    id: compose
+    attributes:
+      label: Relevant docker-compose.yml
+      description: Only the parts that matter. Redact secrets.
+      render: yaml
