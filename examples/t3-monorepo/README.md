@@ -56,9 +56,9 @@ Each app reads its port from the matching env var. Example for `apps/web`:
 const port = process.env.ECLUSE_WEB_PORT ?? 3000;
 ```
 
-And for the API to know where the frontend lives (CORS, redirects):
+Cross-service URLs (`NEXT_PUBLIC_API_URL` for the web, `INTERNAL_API_URL` for the worker) are written into `.env.development.local` by the `pre_spawn` hook, **before** any app boots. Every Next.js service reads these at startup — using `post_up` would fire too late (the apps have already read the file). The file is generated inside each worktree, so the symlinked `.env` / `.env.local` (and their secrets) are never overwritten and sibling worktrees can't clobber each other.
 
-```env
-NEXT_PUBLIC_API_URL=http://localhost:${ECLUSE_API_PORT}
-NEXT_PUBLIC_WEB_URL=http://localhost:${ECLUSE_WEB_PORT}
-```
+## Hooks
+
+- `pre_spawn`: writes `.env.development.local` with slot-derived `DATABASE_URL`, `REDIS_URL`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WEB_URL`, and `INTERNAL_API_URL`; waits for postgres to accept queries; applies Prisma migrations. Everything runs before any app service boots, so every process reads the correct per-slot config and finds the schema in place. The Prisma CLI only reads `.env`, so the hook exports `DATABASE_URL` for it explicitly.
+- `pre_down`: wipes the slot's database on teardown (again passing `DATABASE_URL` explicitly) (drop this if you want to keep data across down/up cycles).

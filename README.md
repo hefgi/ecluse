@@ -253,7 +253,7 @@ compose = "services/worker/docker-compose.yml"   # its own compose file
 
 **Port collision handling** — by default ecluse searches for a free port if the nominal one is taken, trying `nominal + i × max_slots` to stay out of other slots' territory. Set `strict_port = true` to fail immediately instead. Run `ecluse validate` to check your config and preview the full port allocation table.
 
-Hooks run as shell commands inside the worktree directory with all `.env.ecluse` variables pre-loaded (except `pre_up`, which runs before any env exists). Use them for migrations, seeding, or teardown. ecluse doesn't manage databases directly — your app's own tooling handles that via `post_up`. The old `on_up`/`on_down` names still work as deprecated aliases for `pre_up`/`pre_down`.
+Hooks run as shell commands with all `.env.ecluse` variables pre-loaded (except `pre_up`, which runs before any env exists). `pre_up` and `post_down` run from the repo root, the rest inside the worktree. Use them for migrations, seeding, or teardown. ecluse doesn't manage databases directly — your app's own tooling handles that via `pre_spawn` (if the app needs the schema at boot) or `post_up`. The old `on_up`/`on_down` names still work as deprecated aliases for `pre_up`/`pre_down`.
 
 ## Known limits
 

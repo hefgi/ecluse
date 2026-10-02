@@ -39,7 +39,7 @@ src/
 ├── error.rs      EcluseError variants with actionable messages
 ├── detect.rs     mode auto-detection via signal scoring
 ├── worktree.rs   git worktree create/remove wrappers
-├── hooks.rs      pre_up/post_up/pre_down/post_down lifecycle hook execution
+├── hooks.rs      pre_up/pre_spawn/post_up/pre_down/post_down lifecycle hook execution
 ├── compose.rs    docker-compose.yml parsing + overlay generation
 ├── docker.rs     Docker CLI wrappers
 └── modes/        ModeHandler trait + container/host/hybrid impls
