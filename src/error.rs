@@ -15,6 +15,16 @@ mod tests {
     }
 
     #[test]
+    fn slots_exhausted_message_points_at_stopped_sessions() {
+        let msg = EcluseError::SlotsExhausted(8).to_string();
+        assert!(msg.contains("stopped sessions"), "got: {msg}");
+        assert!(
+            msg.contains("ecluse down <slug> --delete-worktree"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
     fn session_exists_message_contains_slug() {
         let e = EcluseError::SessionExists("my-feat".into());
         assert!(e.to_string().contains("my-feat"));
@@ -197,7 +207,9 @@ pub enum EcluseError {
     #[error("invalid slug '{0}': must match ^[a-z0-9][a-z0-9-]{{0,30}}[a-z0-9]$")]
     SlugInvalid(String),
 
-    #[error("all {0} slots are in use; run `ecluse down <slug>` to free one")]
+    #[error(
+        "all {0} slots are in use; run `ecluse down <slug> --delete-worktree` to free one (stopped sessions shown in `ecluse ls` keep their slot until their worktree is deleted)"
+    )]
     SlotsExhausted(u8),
 
     #[error("session '{0}' already exists; use a different slug")]
