@@ -25,11 +25,13 @@ Postgres runs in a Docker container managed by ecluse. Next.js runs natively. Ea
 
 ## Hooks
 
-- `pre_spawn`: writes `.env.local` with the slot's `DATABASE_URL`, waits for postgres to accept queries, then applies migrations. All of this must complete **before** Next.js boots — Prisma reads `DATABASE_URL` once at startup, and the app queries tables that must already exist. Using `post_up` here would mean the app boots against stale env / a missing schema and crashes.
+- `pre_spawn`: writes `.env.development.local` with the slot's `DATABASE_URL`, waits for postgres to accept queries, then applies migrations. All of this must complete **before** Next.js boots — Next.js reads its env files once at startup, and the app queries tables that must already exist. Using `post_up` here would mean the app boots against stale env / a missing schema and crashes.
 
-## Why `.env.local` is copied, not symlinked
+## Why `.env.development.local`
 
-`inherit_env` defaults to symlinking `.env` and `.env.local` from the repo root into each worktree. That works for shared secrets (`.env`), but breaks for `.env.local` here: `pre_spawn` rewrites `.env.local` with the current slot's `DATABASE_URL`, and if the file were a symlink, every `ecluse up` in a different worktree would overwrite the single shared file — last writer wins, all other worktrees end up pointing at the wrong slot's postgres. Setting `mode = "copy"` gives each worktree its own real `.env.local`.
+`.env` and `.env.local` stay symlinked from the repo root (the `inherit_env` default), so shared secrets are the same in every worktree and never overwritten. Slot-specific values go in `.env.development.local`, which Next.js loads ahead of `.env.local` in dev. `pre_spawn` generates it inside each worktree, so sibling worktrees can't clobber each other.
+
+The Prisma CLI only reads `.env`, so the hook exports `DATABASE_URL` before running `prisma migrate deploy` — otherwise the migration would run against whatever database `.env` points at.
 
 ## Usage
 

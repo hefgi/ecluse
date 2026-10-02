@@ -56,10 +56,9 @@ Each app reads its port from the matching env var. Example for `apps/web`:
 const port = process.env.ECLUSE_WEB_PORT ?? 3000;
 ```
 
-Cross-service URLs (`NEXT_PUBLIC_API_URL` for the web, `INTERNAL_API_URL` for the worker) are written into `.env.local` by the `pre_spawn` hook, **before** any app boots. Every Next.js service reads these at startup — using `post_up` would fire too late (the apps have already read the file). This is why `inherit_env` uses `mode = "copy"` for `.env.local`: without it, the hook would overwrite the single shared file and every other worktree would end up pointing at this slot's ports.
+Cross-service URLs (`NEXT_PUBLIC_API_URL` for the web, `INTERNAL_API_URL` for the worker) are written into `.env.development.local` by the `pre_spawn` hook, **before** any app boots. Every Next.js service reads these at startup — using `post_up` would fire too late (the apps have already read the file). The file is generated inside each worktree, so the symlinked `.env` / `.env.local` (and their secrets) are never overwritten and sibling worktrees can't clobber each other.
 
 ## Hooks
 
-- `pre_spawn`: writes `.env.local` with slot-derived `DATABASE_URL`, `REDIS_URL`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WEB_URL`, and `INTERNAL_API_URL`; waits for postgres to accept queries. Runs before any app service boots so every process reads the correct per-slot config at startup.
-- `post_up`: applies Prisma migrations. This is fine here (post-boot) because the api uses Prisma's default reconnect-on-first-query behavior and tolerates a brief window where the schema is still being applied. If your app fail-fasts on schema errors, move `prisma migrate deploy` into `pre_spawn` instead.
-- `pre_down`: wipes the slot's database on teardown (drop this if you want to keep data across down/up cycles).
+- `pre_spawn`: writes `.env.development.local` with slot-derived `DATABASE_URL`, `REDIS_URL`, `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WEB_URL`, and `INTERNAL_API_URL`; waits for postgres to accept queries; applies Prisma migrations. Everything runs before any app service boots, so every process reads the correct per-slot config and finds the schema in place. The Prisma CLI only reads `.env`, so the hook exports `DATABASE_URL` for it explicitly.
+- `pre_down`: wipes the slot's database on teardown (again passing `DATABASE_URL` explicitly) (drop this if you want to keep data across down/up cycles).
