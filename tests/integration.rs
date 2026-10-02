@@ -381,6 +381,61 @@ fn down_keep_worktree_marks_stopped_and_reserves_slot() {
 }
 
 #[test]
+fn up_from_kept_worktree_resumes_original_slot_not_lowest_free() {
+    // The bug this feature fixes: once a lower slot frees up, a kept worktree
+    // must not drift onto it (that would change every port). Before, down
+    // --keep-worktree dropped the entry, so `up` from the worktree re-registered
+    // it at the first free slot (1). It must resume at its own slot (3).
+    let repo = tmp_repo();
+    write_service_config(repo.path());
+    for slug in ["feat-a", "feat-b", "feat-c"] {
+        let up = ecluse(repo.path(), &["up", slug]);
+        assert!(up.status.success(), "up {slug} failed: {}", stderr(&up));
+    }
+    let slot_of = |state: &serde_json::Value, slug: &str| {
+        state["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["slug"] == slug)
+            .and_then(|s| s["slot"].as_u64())
+    };
+    let state = read_state(repo.path());
+    assert_eq!(slot_of(&state, "feat-a"), Some(1));
+    assert_eq!(slot_of(&state, "feat-c"), Some(3));
+
+    let down = ecluse(repo.path(), &["down", "feat-c", "--keep-worktree"]);
+    assert!(down.status.success(), "{}", stderr(&down));
+    let down = ecluse(repo.path(), &["down", "feat-a", "--delete-worktree"]);
+    assert!(down.status.success(), "{}", stderr(&down));
+    let state = read_state(repo.path());
+    assert_eq!(slot_of(&state, "feat-a"), None, "slot 1 must be free");
+
+    // Bare `ecluse up` from inside the kept worktree: slug auto-detected.
+    let worktree = repo.path().join(".ecluse/worktrees/feat-c");
+    let reup = ecluse(&worktree, &["up"]);
+    assert!(reup.status.success(), "resume failed: {}", stderr(&reup));
+
+    let state = read_state(repo.path());
+    assert_eq!(
+        slot_of(&state, "feat-c"),
+        Some(3),
+        "kept worktree must resume at its original slot, got: {}",
+        state["sessions"]
+    );
+    let sessions = state["sessions"].as_array().unwrap();
+    assert_eq!(
+        sessions.len(),
+        2,
+        "no duplicate entry: {}",
+        state["sessions"]
+    );
+    let c = sessions.iter().find(|s| s["slug"] == "feat-c").unwrap();
+    assert!(c["status"].is_null(), "resumed session must be active: {c}");
+    assert_eq!(c["port_overrides"]["api"].as_u64(), Some(4003));
+}
+
+#[test]
 fn down_delete_worktree_on_stopped_session_does_not_orphan() {
     // Regression: skipping bring_down for a Stopped session must still remove the
     // worktree when the user asks to delete it, or `down --delete-worktree` would
