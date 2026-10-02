@@ -84,15 +84,17 @@ If a session for the slug already exists in `state.json`, sync refreshes its por
 
 ## ecluse down
 
-Tears down services, frees the slot, and prompts before removing the worktree. Slug is auto-detected from cwd when omitted.
+Tears down services and prompts before removing the worktree. Slug is auto-detected from cwd when omitted.
 
 The worktree prompt always appears; if the worktree has uncommitted changes an extra warning is shown. Pass `--delete-worktree` to skip the prompt and delete, or `--keep-worktree` to skip the prompt and keep.
+
+Deleting the worktree frees the slot. Keeping it marks the session **stopped**: it shows as `<slug> (stopped)` in `ecluse ls` and keeps its slot, so the next `ecluse up <slug>` (or a bare `ecluse up` from inside the worktree) resumes at the same slot, re-probing ports. `env`, `shell`, `status`, and `sync` refuse a stopped session until it is brought back up. A stopped session holds its slot until its worktree is deleted. If `ecluse up` reports that all slots are in use, run `ecluse down <slug> --delete-worktree` on stopped sessions you no longer need.
 
 | Flag | Description |
 |---|---|
 | `--keep-volumes` | Preserve named Docker volumes |
 | `--keep-branch` | Keep the git branch (no-op — branches are never deleted by ecluse) |
-| `--keep-worktree` | Skip prompt, keep the worktree on disk |
+| `--keep-worktree` | Skip prompt, keep the worktree on disk; the session is marked stopped and keeps its slot |
 | `--delete-worktree` | Skip prompt, delete the worktree (for CI/agents) |
 | `--quiet` | Suppress step output |
 
@@ -103,7 +105,7 @@ Tears down all active sessions at once. Prompts before removing each worktree (s
 | Flag | Description |
 |---|---|
 | `--keep-volumes` | Preserve named Docker volumes |
-| `--keep-worktrees` | Skip prompt, keep all worktrees on disk |
+| `--keep-worktrees` | Skip prompt, keep all worktrees on disk; each session is marked stopped and keeps its slot |
 | `--delete-worktrees` | Skip prompt, delete all worktrees (for CI/agents) |
 | `--quiet` | Suppress step output |
 
