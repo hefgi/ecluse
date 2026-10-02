@@ -669,13 +669,21 @@ post_up = "sleep 3"
         .spawn()
         .unwrap();
 
-    // Wait for the pending reservation, then take the session over with down.
+    // Wait for the pending reservation AND the worktree to exist before taking
+    // the session over. `mark_pending` commits the state entry before the
+    // worktree is created; waiting only on the entry lets `down --delete-worktree`
+    // race ahead of worktree creation and fail teardown (flaky). The post_up
+    // sleep guarantees the session is still mid-provisioning once both appear.
     let state_path = repo.path().join(".ecluse/state.json");
+    let worktree = repo.path().join(".ecluse/worktrees/race-sess");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !std::fs::read_to_string(&state_path)
-        .unwrap_or_default()
-        .contains("race-sess")
-    {
+    loop {
+        let entry_present = std::fs::read_to_string(&state_path)
+            .unwrap_or_default()
+            .contains("race-sess");
+        if entry_present && worktree.exists() {
+            break;
+        }
         assert!(std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
