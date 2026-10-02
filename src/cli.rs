@@ -126,7 +126,8 @@ pub struct DownArgs {
     #[arg(long)]
     pub keep_branch: bool,
 
-    /// Tear down services but keep the git worktree on disk
+    /// Tear down services but keep the git worktree on disk; the session is
+    /// marked stopped and its slot stays reserved until the worktree is deleted
     #[arg(long)]
     pub keep_worktree: bool,
 
@@ -177,7 +178,8 @@ pub struct ShutdownArgs {
     #[arg(long)]
     pub keep_volumes: bool,
 
-    /// Tear down services but keep git worktrees on disk
+    /// Tear down services but keep git worktrees on disk; sessions are marked
+    /// stopped and their slots stay reserved until the worktrees are deleted
     #[arg(long)]
     pub keep_worktrees: bool,
 

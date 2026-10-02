@@ -76,6 +76,8 @@ Bash({"command": "ecluse down feat-foo --delete-worktree"})
 Bash({"command": "ecluse down feat-foo --keep-worktree"})
 ```
 
+`--keep-worktree` keeps the slot reserved: the session stays in state as stopped (`feat-foo (stopped)` in `ecluse ls`) so the next `ecluse up` resumes at the same slot and ports. Use it only for a soft restart. When you are done with a task, use `--delete-worktree`, which frees the slot.
+
 Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Use `ecluse up --json` or `ecluse env <slug>` to get the worktree path and env, then operate directly.
 
 ### What `ecluse up` does
@@ -115,7 +117,7 @@ ecluse up --force --skip db  # kill + restart all except db
 ### Common first-time failures
 
 - **"run `ecluse init` first"** — no `.ecluse.toml` found; run `ecluse init` from repo root
-- **"all N slots in use"** — `ecluse ls` then `ecluse down <slug>` to free one
+- **"all N slots in use"** — `ecluse ls` then `ecluse down <slug> --delete-worktree` to free one. Stopped sessions (`(stopped)` in `ecluse ls`) still hold their slots
 - **Docker not running** — `open -a OrbStack` or `open -a Docker`
 
 ---
@@ -264,7 +266,7 @@ The canonical fix for misbehaving services is `ecluse down` + `ecluse up`, not `
 
 ```bash
 ecluse down <your-slug> --keep-worktree
-ecluse up <your-slug> --reuse-worktree
+ecluse up <your-slug>                    # stopped session auto-detected; resumes at the same slot
 ```
 
 This tears down only **your** services and respawns them with the right env. Idempotent, safe under parallel sessions, never touches another agent's work. Reach for this 95% of the time.
@@ -573,7 +575,7 @@ Persistent conflict: change `base_port` in the relevant `[[services]]` block, or
 ecluse down <your-slug> --keep-worktree
 
 # 2. Restart with ecluse spawning the services directly
-ecluse up <your-slug> --reuse-worktree
+ecluse up <your-slug>                    # stopped session auto-detected; resumes at the same slot
 
 # 3. Verify ports are correct
 ecluse status <your-slug>
@@ -624,12 +626,14 @@ docker info           # verify
 
 ### Slot exhaustion
 
-**Error:** `all 8 slots are in use; run ecluse ls to see active sessions`
+**Error:** `all 8 slots are in use; run ecluse down <slug> --delete-worktree to free one (stopped sessions shown in ecluse ls keep their slot until their worktree is deleted)`
 
 ```bash
-ecluse ls
-ecluse down <stale-slug>
+ecluse ls                                  # look for stale slugs and `(stopped)` sessions
+ecluse down <stale-slug> --delete-worktree
 ```
+
+A session left by `ecluse down --keep-worktree` is stopped. It still holds its slot. Running `--keep-worktree` on it again does not free the slot. Run `ecluse down <slug> --delete-worktree` on each stopped session you no longer need.
 
 Or increase `max_slots` in `.ecluse.toml` directly.
 
@@ -706,7 +710,7 @@ RUST_LOG=debug ecluse up feat-foo
 | Error | Cause | Fix |
 |---|---|---|
 | `SlugInvalid` | Slug doesn't match `^[a-z0-9][a-z0-9-]{0,60}[a-z0-9]$` | Lowercase letters, numbers, hyphens; 2–62 chars |
-| `SlotsExhausted` | All slots in use | `ecluse ls` then `ecluse down <slug>` |
+| `SlotsExhausted` | All slots in use, including stopped sessions | `ecluse ls` then `ecluse down <slug> --delete-worktree` |
 | `SessionNotFound` | Slug not in state | Check `ecluse ls` |
 | `LockTimeout` | Another process holds lock | Check processes; remove stale lock |
 | `ConfigMissing` | No `.ecluse.toml` found | `ecluse init` |
@@ -766,7 +770,7 @@ inspect it with `ecluse whose-pid <pid>` and kill it manually if intended.
 
 What ecluse intentionally does not do in v0. These are design decisions, not bugs.
 
-- **Ports are checked, not reserved** — ecluse finds a free port at `up` time and writes it to `.env.ecluse`. There is a small window between that check and when your process actually binds. If another process takes the port in between, the value in `.env.ecluse` will be wrong. Fix: `ecluse down feat-foo --keep-worktree` then `ecluse up feat-foo --reuse-worktree`, or pin a specific port with `--port name=value`.
+- **Ports are checked, not reserved** — ecluse finds a free port at `up` time and writes it to `.env.ecluse`. There is a small window between that check and when your process actually binds. If another process takes the port in between, the value in `.env.ecluse` will be wrong. Fix: `ecluse down feat-foo --keep-worktree` then `ecluse up feat-foo` (stopped session auto-detected, re-probes for a free port), or pin a specific port with `--port name=value`.
 - **No process lifecycle management beyond spawn/kill** — ecluse can spawn native services on `up` (via `command` + `process_manager`) and kill them on `down`, but cannot auto-restart a crashed process. If a service dies, `ecluse up` (idempotent — slug auto-detected from cwd) starts only the downed services. `ecluse up --force` kills everything on allocated ports and restarts fresh. `ecluse ls` and `ecluse env` warn about dead nohup processes.
 - **`command` requires the app to expose a port entry point** — ecluse injects the full `.env.ecluse` contents (`PORT`, `ECLUSE_SLOT`, `ECLUSE_SLUG`, `ECLUSE_MODE`, all `ECLUSE_<NAME>_PORT` vars, and any `port_env` aliases) directly into the spawned process environment — no separate sourcing step needed. If the port is hardcoded or set in a config file, resolve it via `.ecluse.toml` first: pass it as a CLI flag (`command = "vite --port $ECLUSE_WEB_PORT"`), or use `port_env` to inject it under the var name the app already reads. Modifying app source code is the last resort — see [Port wiring](#port-wiring--exhaust-eclusetoml-options-before-touching-app-code) above.
 - **Mode is set at `init`, not re-detected on `up`** — to change: `ecluse init --mode <new>`
@@ -931,11 +935,11 @@ ecluse status --quiet            # exit-code only (0 = all up, 1 = any down)
 **Soft restart** — tear down services without losing the git worktree, then spin up fresh:
 
 ```bash
-ecluse down feat-foo --keep-worktree   # stops services, removes session from state, keeps worktree on disk
-ecluse up feat-foo --reuse-worktree    # allocates a new slot, skips worktree creation
+ecluse down feat-foo --keep-worktree   # stops services, marks the session Stopped (slot reserved), keeps worktree on disk
+ecluse up feat-foo                      # resumes at the same slot (stopped session auto-detected; --reuse-worktree not needed)
 ```
 
-Use this when a service failed to bind after `up` and you want a fresh start without losing changes in the worktree.
+Use this when a service failed to bind after `up` and you want a fresh start without losing changes in the worktree. While stopped, `ecluse env`, `ecluse shell`, and `ecluse status` on that session error with a hint to run `ecluse up` — they will not surface stale, no-longer-running ports.
 
 **Port override** — pin a service to a specific port for this session:
 

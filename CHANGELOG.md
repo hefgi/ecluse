@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- `ecluse down --keep-worktree` and `shutdown --keep-worktrees` now mark the session `Stopped` instead of dropping it from state. The slot stays reserved, so the next `ecluse up` resumes at the same slot and ports. (#32)
+- `ecluse up <slug>`, or a bare `ecluse up` from inside the kept worktree, detects a stopped session and resumes it, re-probing for free ports. `--reuse-worktree` is no longer needed.
+- `ecluse ls` shows stopped sessions as `<slug> (stopped)`.
+- `ecluse env`, `shell`, `status`, and `sync` reject a stopped session with a hint to run `ecluse up`, so they no longer report ports for services that aren't running.
+- Stopped sessions hold their slot until the worktree is deleted. The `SlotsExhausted` error now points to `ecluse down <slug> --delete-worktree`.
+- `state.json` files that contain stopped sessions can't be read by older ecluse versions.
+
 ### Fixed
 - `ecluse down` in tmux mode now kills the entire pane process group, not just the pane's foreground shell. Previously, multi-level child chains (`sh → pnpm → node → vite`, plus anything that calls `setsid()` like Cloudflare workerd) survived as orphans adopted by `launchd`/`init`, holding their ports indefinitely. Each orphan held 4-8 ports; after a few `up`/`down` cycles the next `ecluse up` would silently land on a port already held by a zombie, serving a different worktree's content. The same TERM→KILL grace pattern that was applied to the nohup path in PR #18 now applies to tmux. (#30)
 - `ecluse flush` now sweeps every process whose cwd is inside a worktree (`lsof +d <worktree>`) AND every listener on a configured port (`base_port + slot*slot_stride` and `extra_ports[].base_port + slot*slot_stride` across all `max_slots`), killing each with TERM→KILL grace. The flush confirmation prompt warns that editors/shells with files open in worktrees will be killed; `--yes` bypass for CI is unchanged. (#30)
