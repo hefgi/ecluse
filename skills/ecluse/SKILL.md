@@ -76,6 +76,8 @@ Bash({"command": "ecluse down feat-foo --delete-worktree"})
 Bash({"command": "ecluse down feat-foo --keep-worktree"})
 ```
 
+`--keep-worktree` keeps the slot reserved: the session stays in state as stopped (`feat-foo (stopped)` in `ecluse ls`) so the next `ecluse up` resumes at the same slot and ports. Use it only for a soft restart. When you are done with a task, use `--delete-worktree`, which frees the slot.
+
 Note: `ecluse shell` spawns an interactive subshell — agents cannot use it. Use `ecluse up --json` or `ecluse env <slug>` to get the worktree path and env, then operate directly.
 
 ### What `ecluse up` does
@@ -115,7 +117,7 @@ ecluse up --force --skip db  # kill + restart all except db
 ### Common first-time failures
 
 - **"run `ecluse init` first"** — no `.ecluse.toml` found; run `ecluse init` from repo root
-- **"all N slots in use"** — `ecluse ls` then `ecluse down <slug>` to free one
+- **"all N slots in use"** — `ecluse ls` then `ecluse down <slug> --delete-worktree` to free one. Stopped sessions (`(stopped)` in `ecluse ls`) still hold their slots
 - **Docker not running** — `open -a OrbStack` or `open -a Docker`
 
 ---
@@ -624,12 +626,14 @@ docker info           # verify
 
 ### Slot exhaustion
 
-**Error:** `all 8 slots are in use; run ecluse ls to see active sessions`
+**Error:** `all 8 slots are in use; run ecluse down <slug> --delete-worktree to free one (stopped sessions shown in ecluse ls keep their slot until their worktree is deleted)`
 
 ```bash
-ecluse ls
-ecluse down <stale-slug>
+ecluse ls                                  # look for stale slugs and `(stopped)` sessions
+ecluse down <stale-slug> --delete-worktree
 ```
+
+A session left by `ecluse down --keep-worktree` is stopped. It still holds its slot. Running `--keep-worktree` on it again does not free the slot. Run `ecluse down <slug> --delete-worktree` on each stopped session you no longer need.
 
 Or increase `max_slots` in `.ecluse.toml` directly.
 
@@ -706,7 +710,7 @@ RUST_LOG=debug ecluse up feat-foo
 | Error | Cause | Fix |
 |---|---|---|
 | `SlugInvalid` | Slug doesn't match `^[a-z0-9][a-z0-9-]{0,60}[a-z0-9]$` | Lowercase letters, numbers, hyphens; 2–62 chars |
-| `SlotsExhausted` | All slots in use | `ecluse ls` then `ecluse down <slug>` |
+| `SlotsExhausted` | All slots in use, including stopped sessions | `ecluse ls` then `ecluse down <slug> --delete-worktree` |
 | `SessionNotFound` | Slug not in state | Check `ecluse ls` |
 | `LockTimeout` | Another process holds lock | Check processes; remove stale lock |
 | `ConfigMissing` | No `.ecluse.toml` found | `ecluse init` |

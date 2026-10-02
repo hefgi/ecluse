@@ -176,6 +176,8 @@ ecluse down feat-foo --keep-worktree   # services torn down, worktree + branch k
 ecluse up feat-foo                      # resumes at the same slot; ports are re-probed (stopped session auto-detected)
 ```
 
+A stopped session keeps its slot until its worktree is deleted. Running `--keep-worktree` again does not free it. If you hit "all N slots are in use", check `ecluse ls` for `(stopped)` sessions and run `ecluse down <slug> --delete-worktree` on the ones you no longer need. When you are done with a branch, use `--delete-worktree` rather than `--keep-worktree`.
+
 **Port override** — pin a specific service to a port for this session (useful when the auto-assigned port conflicts with something ecluse can't detect):
 
 ```bash
