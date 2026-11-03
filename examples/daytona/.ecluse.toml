@@ -1,0 +1,60 @@
+mode = "hybrid"
+max_slots = 4
+prefix = "ecluse"
+
+# .env holds secrets that are NOT in git — copy it into the sandbox before
+# the first `ecluse up` (see README). Every worktree symlinks to it.
+inherit_env = [".env"]
+
+# Native services — spawned in tmux inside the sandbox.
+# Slot 1 → ECLUSE_API_PORT=3001, ECLUSE_WEB_PORT=5174
+[[services]]
+name = "api"
+base_port = 3000
+command = "npm run dev:api -- --port $ECLUSE_API_PORT"
+
+[[services]]
+name = "web"
+base_port = 5173
+command = "npm run dev:web -- --host 0.0.0.0 --port $ECLUSE_WEB_PORT"
+
+# Data services — run by the Docker daemon inside the sandbox.
+[[services]]
+name = "postgres"
+run = "docker"
+base_port = 5432
+
+[[services]]
+name = "redis"
+run = "docker"
+base_port = 6379
+
+[hooks]
+# Runs after .env.ecluse is written, before api/web start.
+#
+# PUBLIC_URL_TEMPLATE decides what URL the *browser* uses to reach the API.
+# Server-side code can always use localhost, but the browser runs on your
+# laptop, so localhost only works if you forward the ports over SSH.
+#   - SSH forwarding (default): "http://localhost:%s"
+#   - Daytona preview URLs:      "https://%s-<sandbox-id>.proxy.daytona.works"
+# Set it in the sandbox's ~/.bashrc (bootstrap.sh does this for you).
+pre_spawn = """
+set -e
+template="${PUBLIC_URL_TEMPLATE:-http://localhost:%s}"
+
+cat > .env.local <<EOF
+DATABASE_URL=postgresql://postgres:postgres@localhost:$ECLUSE_POSTGRES_PORT/myapp
+REDIS_URL=redis://localhost:$ECLUSE_REDIS_PORT
+VITE_API_URL=$(printf "$template" "$ECLUSE_API_PORT")
+EOF
+
+# `docker compose up` returns before Postgres accepts connections.
+for i in $(seq 1 30); do
+  pg_isready -h localhost -p "$ECLUSE_POSTGRES_PORT" -U postgres >/dev/null 2>&1 && break
+  sleep 1
+done
+pg_isready -h localhost -p "$ECLUSE_POSTGRES_PORT" -U postgres
+
+npm ci
+npm run db:migrate
+"""
